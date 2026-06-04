@@ -21,10 +21,12 @@ async def on_ready():
     print(f'✅  XnoMercy Bot online como {bot.user}')
     try:
         for guild in bot.guilds:
-            synced = await bot.tree.sync(guild=guild)
+            guild_obj = discord.Object(id=guild.id)
+            bot.tree.copy_global_to(guild=guild_obj)
+            synced = await bot.tree.sync(guild=guild_obj)
             print(f'✅  {len(synced)} comandos em: {guild.name}')
     except Exception as e:
-        print(f'❌  Erro: {e}')
+        print(f'❌  Erro ao sincronizar: {e}')
  
 async def main():
     async with bot:

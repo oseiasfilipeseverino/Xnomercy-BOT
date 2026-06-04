@@ -28,6 +28,19 @@ async def on_ready():
     except Exception as e:
         print(f'❌  Erro ao sincronizar: {e}')
  
+ 
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: Exception):
+    msg = f'❌ Erro inesperado: {str(error)}'
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.send_message(msg, ephemeral=True)
+        else:
+            await interaction.followup.send(msg, ephemeral=True)
+    except Exception:
+        pass
+    print(f'[ERRO] Comando: {interaction.command} | Erro: {error}')
+ 
 async def main():
     async with bot:
         for cog in COGS:

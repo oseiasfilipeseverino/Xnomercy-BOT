@@ -487,8 +487,8 @@ class EventsCog(commands.Cog):
                 pass
  
     # ── /simular_evento ────────────────────────────────────────────────────────
-    @app_commands.command(name='simular_evento', description='Simula a distribuição do loot neste canal de evento.')
-    @app_commands.describe(valor_total='Valor total do loot em prata', reparo='Custo de reparo em prata')
+    @app_commands.command(name='simular_evento', description='Simula a distribuição proporcional do loot. Informe o valor total e o reparo.')
+    @app_commands.describe(valor_total='Valor total do loot em prata (ex: 25000000)', reparo='Custo total de reparo em prata (ex: 2000000 | coloque 0 se não houver)')
     async def simular(self, interaction: discord.Interaction, valor_total: float, reparo: float = 0.0):
         if not (can_manage_events(interaction.user) or is_staff_up(interaction.user)):
             await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
@@ -538,9 +538,9 @@ class EventsCog(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
  
     # ── /depositar_evento ──────────────────────────────────────────────────────
-    @app_commands.command(name='depositar_evento', description='Envia o loot para aprovação no financeiro.')
-    @app_commands.describe(valor_total='Valor total do loot em prata', reparo='Custo de reparo em prata')
-    async def depositar(self, interaction: discord.Interaction, valor_total: float, reparo: float = 0.0):
+    @app_commands.command(name='depositar_evento', description='Envia o loot para aprovação. Informe o valor total e o custo de reparo.')
+    @app_commands.describe(valor_total='Valor total do loot em prata (ex: 25000000)', reparo='Custo total de reparo em prata (ex: 2000000 | coloque 0 se não houver)')
+    async def depositar(self, interaction: discord.Interaction, valor_total: float, reparo: float):
         if not (can_manage_events(interaction.user) or is_staff_up(interaction.user)):
             await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
             return

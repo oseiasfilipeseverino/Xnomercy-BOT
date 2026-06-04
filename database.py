@@ -214,6 +214,12 @@ def init_db():
                '• Use `/meu-saldo` para consultar seu saldo\n\n'
                '⚔️ *No Mercy, No Retreat — XnoMercy!*'))
  
+    # ── Migrations: adiciona colunas novas em bancos antigos ─────────────────
+    try:
+        c.execute("ALTER TABLE events ADD COLUMN voice_channel_id TEXT DEFAULT ''")
+    except Exception:
+        pass  # Coluna já existe
+ 
     conn.commit()
     conn.close()
  
@@ -497,3 +503,4 @@ def get_open_ticket(discord_id: str, ticket_type: str):
     ).fetchone()
     conn.close()
     return row
+ 

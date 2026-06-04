@@ -624,6 +624,3 @@ class EventsCog(commands.Cog):
  
 async def setup(bot):
     await bot.add_cog(EventsCog(bot))
- 
-async def setup(bot):
-    await bot.add_cog(EventsCog(bot))

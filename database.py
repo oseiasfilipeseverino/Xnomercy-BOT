@@ -1,3 +1,4 @@
+
 """
 database.py — Banco de dados SQLite do XnoMercy Bot
 Toda configuração é dinâmica e editável via comandos ou site.
@@ -208,10 +209,14 @@ def init_db():
     # Mensagem de boas-vindas padrão
     c.execute('''INSERT OR IGNORE INTO welcome_config (id, title, message) VALUES (1, ?, ?)''',
               ('⚔️ Bem-vindo à XnoMercy!',
-               'Olá {mention}! Seja bem-vindo ao servidor da guild **XnoMercy** no Albion Online!\n\n'
-               '📜 **Por onde começar:**\n'
-               '• Abra um ticket de **Recrutamento** para entrar na guild\n'
-               '• Use `/meu-saldo` para consultar seu saldo\n\n'
+               'Olá {nome}! Seja bem-vindo ao servidor da guild **XnoMercy** no Albion Online! 🎮\n\n'
+               '⚔️ **Sobre a XnoMercy:**\n'
+               'Somos uma guild competitiva focada em ZvZ, HCE e Raids.\n\n'
+               '📋 **Por onde começar:**\n'
+               '• Vá até o canal de **recrutamento** e abra um ticket\n'
+               '• Preencha as informações solicitadas\n'
+               '• Aguarde nosso contato!\n\n'
+               '🔗 Qualquer dúvida abra um ticket de **Suporte**.\n\n'
                '⚔️ *No Mercy, No Retreat — XnoMercy!*'))
  
     # ── Migrations: adiciona colunas novas em bancos antigos ─────────────────

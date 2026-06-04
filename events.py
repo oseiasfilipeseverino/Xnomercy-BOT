@@ -8,7 +8,7 @@ from discord import app_commands
 from discord.ext import commands
  
 import database
-from permissions import can_manage_events, is_member, is_financial
+from permissions import can_manage_events, is_member, is_financial, has_permission
  
  
 def fmt(v: float) -> str:
@@ -201,13 +201,19 @@ class EventControlView(discord.ui.View):
  
     @discord.ui.button(label='🏁 Finalizar Evento', style=discord.ButtonStyle.danger, custom_id='xnm:finalizar')
     async def finalizar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not can_manage_events(interaction.user):
-            await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
-            return
- 
         event = database.get_event(self.event_id)
         if not event or event['status'] != 'active':
             await interaction.response.send_message('❌ Evento não está ativo.', ephemeral=True)
+            return
+ 
+        # Só Staff+ ou o criador do evento podem finalizar
+        is_creator   = str(interaction.user.id) == str(event['creator_id'])
+        is_staff_up  = is_financial(interaction.user) or has_permission(interaction.user, 'support_tickets')
+        if not (is_creator or is_staff_up):
+            await interaction.response.send_message(
+                '❌ Apenas **Staff ou superior** ou o **criador do evento** podem finalizar.',
+                ephemeral=True
+            )
             return
  
         database.finish_event(self.event_id)
@@ -366,6 +372,14 @@ class EventsCog(commands.Cog):
         self.bot = bot
         bot.add_view(CreateEventView())
  
+    @commands.Cog.listener()
+    async def on_ready(self):
+        # Reregistra views dos eventos ativos após reinício
+        for guild in self.bot.guilds:
+            active = database.get_active_events(str(guild.id))
+            for ev in active:
+                self.bot.add_view(EventControlView(ev['id']))
+ 
     @app_commands.command(name='simular_evento', description='Simula a distribuição do loot de um evento.')
     @app_commands.describe(event_id='ID do evento')
     async def simular(self, interaction: discord.Interaction, event_id: int):
@@ -518,6 +532,63 @@ class ApproveDepositView(discord.ui.View):
  
         await interaction.message.edit(embed=embed, view=self)
         await interaction.response.send_message('❌ Depósito recusado.', ephemeral=True)
+ 
+ 
+    @app_commands.command(name='finalizar_evento', description='Finaliza um evento ativo.')
+    @app_commands.describe(event_id='ID do evento a finalizar')
+    async def finalizar_evento_cmd(self, interaction: discord.Interaction, event_id: int):
+        event = database.get_event(event_id)
+        if not event or event['status'] != 'active':
+            await interaction.response.send_message('❌ Evento não encontrado ou não está ativo.', ephemeral=True)
+            return
+ 
+        is_creator  = str(interaction.user.id) == str(event['creator_id'])
+        is_staff_up = is_financial(interaction.user) or has_permission(interaction.user, 'support_tickets')
+        if not (is_creator or is_staff_up):
+            await interaction.response.send_message(
+                '❌ Apenas **Staff ou superior** ou o **criador do evento** podem finalizar.',
+                ephemeral=True
+            )
+            return
+ 
+        await interaction.response.defer(ephemeral=True)
+        database.finish_event(event_id)
+        guild = interaction.guild
+ 
+        # Move todos da call do evento para AGUARDANDO-EVENTO
+        voice_ch_id = event['voice_channel_id']
+        if voice_ch_id:
+            voice_ch   = guild.get_channel(int(voice_ch_id))
+            aguardando = await _get_aguardando(guild)
+            if voice_ch and aguardando:
+                for member in list(voice_ch.members):
+                    try:
+                        await member.move_to(aguardando)
+                    except Exception:
+                        pass
+                await asyncio.sleep(2)
+            if voice_ch:
+                try:
+                    await voice_ch.delete(reason=f'Evento #{event_id} finalizado')
+                except Exception:
+                    pass
+ 
+        # Move canal de texto para Finalizados
+        cat_id = database.get_config('category_eventos_finalizados')
+        cat    = guild.get_channel(int(cat_id)) if cat_id else None
+        if event['channel_id']:
+            ev_ch = guild.get_channel(int(event['channel_id']))
+            if ev_ch and cat:
+                await ev_ch.edit(category=cat)
+ 
+        await _refresh_participar(guild)
+        await _log(guild,
+            f'🏁 **{interaction.user.display_name}** finalizou o evento **{event["title"]}** (#{event_id}) via comando.')
+ 
+        await interaction.followup.send(
+            f'✅ Evento **{event["title"]}** finalizado! Use `/simular_evento {event_id}` para distribuir o loot.',
+            ephemeral=True
+        )
  
  
 async def setup(bot):

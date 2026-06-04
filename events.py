@@ -552,7 +552,7 @@ class EventsCog(commands.Cog):
         embed.add_field(name='💰 Distribuição Proporcional', value='\n'.join(lines), inline=False)
         embed.set_footer(text='Use /depositar_evento para enviar para aprovação')
  
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed)
  
     # ── /depositar_evento ──────────────────────────────────────────────────────
     @app_commands.command(name='depositar_evento', description='Envia o loot para aprovação. Informe o valor total e o custo de reparo.')
@@ -621,6 +621,9 @@ class EventsCog(commands.Cog):
  
         await interaction.response.send_message('✅ Enviado para aprovação no canal financeiro!', ephemeral=True)
  
+ 
+async def setup(bot):
+    await bot.add_cog(EventsCog(bot))
  
 async def setup(bot):
     await bot.add_cog(EventsCog(bot))

@@ -1,4 +1,3 @@
-
 """
 cogs/events.py — Sistema de eventos avançado
 """
@@ -342,6 +341,7 @@ class EventsCog(commands.Cog):
         guild_cut  = valor_total * (guild_tax / 100)
         vendor_cut = valor_total * (vendor_tax / 100)
         net        = valor_total - guild_cut - vendor_cut - reparo
+        # Reparo é valor fixo informado pelo puxador
  
         if net <= 0:
             await interaction.response.send_message('❌ Valor líquido negativo após descontos.', ephemeral=True)

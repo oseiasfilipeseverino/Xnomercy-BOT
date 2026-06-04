@@ -1,3 +1,4 @@
+
 """
 welcome.py — Boas-vindas + configurar canais + configurar permissões
 """
@@ -16,30 +17,37 @@ class WelcomeCog(commands.Cog):
  
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        cfg = database.get_welcome_config()
-        if not cfg:
-            return
- 
-        title   = cfg['title']
-        message = cfg['message'].replace('{mention}', member.mention).replace('{nome}', member.display_name)
- 
-        embed = discord.Embed(title=title, description=message, color=discord.Color.gold())
-        embed.set_thumbnail(url=member.display_avatar.url)
-        embed.set_footer(text=f'XnoMercy Guild | {member.guild.member_count} membros')
- 
-        ch_id = cfg['channel_id'] or database.get_config('channel_boas_vindas')
-        if ch_id:
-            ch = member.guild.get_channel(int(ch_id))
-            if ch:
-                try:
-                    await ch.send(embed=embed)
-                except Exception:
-                    pass
- 
         try:
-            await member.send(embed=embed)
-        except Exception:
-            pass
+            cfg = database.get_welcome_config()
+            if not cfg:
+                return
+ 
+            title   = cfg['title']
+            message = cfg['message'].replace('{mention}', member.mention).replace('{nome}', member.display_name)
+ 
+            embed = discord.Embed(title=title, description=message, color=discord.Color.gold())
+            embed.set_thumbnail(url=member.display_avatar.url)
+            embed.set_footer(text=f'XnoMercy Guild | {member.guild.member_count} membros')
+ 
+            # Envia no canal de boas-vindas
+            ch_id = cfg['channel_id'] or database.get_config('channel_boas_vindas')
+            if ch_id:
+                ch = member.guild.get_channel(int(ch_id))
+                if ch:
+                    try: await ch.send(embed=embed)
+                    except Exception: pass
+ 
+            # Envia DM para o novo membro
+            try:
+                await member.send(embed=embed)
+                print(f'[welcome] DM enviado para {member.display_name}')
+            except discord.Forbidden:
+                print(f'[welcome] {member.display_name} bloqueou DMs')
+            except Exception as e:
+                print(f'[welcome] Erro ao enviar DM: {e}')
+ 
+        except Exception as e:
+            print(f'[welcome] Erro no on_member_join: {e}')
  
     @app_commands.command(name='configurar_canal', description='[LÍDER] Aponta uma função do bot para um canal existente.')
     @app_commands.describe(funcao='Função do bot', canal='Canal existente no servidor')
@@ -154,6 +162,84 @@ class WelcomeCog(commands.Cog):
             )
  
         await interaction.response.send_message(embed=embed, ephemeral=True)
+ 
+ 
+    @app_commands.command(name='configurar_canal', description='[LÍDER] Aponta uma função do bot para um canal existente.')
+    @app_commands.describe(
+        funcao='Nome da função (financeiro, logs, saidas_membros, consultar_saldo, criar_evento, participar, boas_vindas)',
+        canal ='Canal existente no servidor'
+    )
+    async def configurar_canal(self, interaction: discord.Interaction, funcao: str, canal: discord.TextChannel):
+        if not is_financial(interaction.user):
+            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            return
+ 
+        chaves = {
+            'financeiro':      'channel_financeiro',
+            'logs':            'channel_logs',
+            'saidas_membros':  'channel_saidas_membros',
+            'consultar_saldo': 'channel_consultar_saldo',
+            'criar_evento':    'channel_criar_evento',
+            'participar':      'channel_participar',
+            'boas_vindas':     'channel_boas_vindas',
+        }
+ 
+        chave = chaves.get(funcao.lower().replace(' ', '_').replace('-', '_'))
+        if not chave:
+            lista = ', '.join(chaves.keys())
+            await interaction.response.send_message(
+                f'❌ Função inválida. Use uma dessas: `{lista}`', ephemeral=True
+            )
+            return
+ 
+        database.set_config(chave, str(canal.id))
+        await interaction.response.send_message(
+            f'✅ **{funcao}** agora aponta para {canal.mention}!', ephemeral=True
+        )
+ 
+    @app_commands.command(name='atualizar_participar', description='[LÍDER] Força atualização do canal de participar.')
+    async def atualizar_participar(self, interaction: discord.Interaction):
+        if not is_financial(interaction.user):
+            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            return
+ 
+        await interaction.response.defer(ephemeral=True)
+ 
+        # Verifica config atual
+        ch_id  = database.get_config('channel_participar')
+        ch     = interaction.guild.get_channel(int(ch_id)) if ch_id else None
+        active = database.get_active_events(str(interaction.guild.id))
+ 
+        status = (
+            f'**Canal participar:** {ch.mention if ch else "❌ Não configurado"}
+'
+            f'**Eventos ativos:** {len(active)}
+'
+        )
+        if active:
+            for ev in active:
+                status += f'• #{ev["id"]:04d} — {ev["title"]}
+'
+ 
+        if not ch:
+            await interaction.followup.send(
+                f'❌ Canal participar não configurado!
+ 
+'
+                f'Use `/configurar_canal funcao:participar canal:#nome-do-canal` primeiro.',
+                ephemeral=True
+            )
+            return
+ 
+        # Importa e atualiza
+        from events import _refresh_participar
+        await _refresh_participar(interaction.guild)
+ 
+        await interaction.followup.send(
+            f'✅ Canal atualizado!
+ 
+{status}', ephemeral=True
+        )
  
  
 async def setup(bot):

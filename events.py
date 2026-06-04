@@ -97,7 +97,12 @@ class CreateEventModal(discord.ui.Modal, title='Criar Evento'):
         # Atualiza #participar
         await _refresh_participar(guild)
         await _log(guild, f'⚔️ **{interaction.user.display_name}** criou o **Evento #{event_id:04d} — {title}** | {text_ch.mention} | {voice_ch.mention}')
-        await interaction.followup.send(f'✅ **Evento #{event_id:04d} — {title}** criado!\n📝 {text_ch.mention}\n🔊 {voice_ch.mention}', ephemeral=True)
+        # Envia confirmação via DM para não poluir o canal
+        try:
+            await interaction.user.send(f'✅ **Evento #{event_id:04d} — {title}** criado!\n📝 {text_ch.mention}\n🔊 {voice_ch.mention}')
+        except Exception:
+            pass
+        await interaction.followup.send(f'✅ Evento criado! Verifique {text_ch.mention}', ephemeral=True)
  
  
 class CreateEventView(discord.ui.View):
@@ -360,8 +365,20 @@ async def _do_finalize(guild, event_id, by_name):
         if event['channel_id']:
             ev_ch = guild.get_channel(int(event['channel_id']))
             if ev_ch and cat:
-                try: await ev_ch.edit(category=cat)
-                except: pass
+                try:
+                    # Permissões: só Puxador de Conteúdo e acima podem ver
+                    event_roles = database.get_permission_roles('events')
+                    overwrites = {
+                        guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                        guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                    }
+                    for rn in event_roles:
+                        role = discord.utils.get(guild.roles, name=rn)
+                        if role:
+                            overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                    await ev_ch.edit(category=cat, overwrites=overwrites)
+                except Exception as e:
+                    print(f'[events] Erro ao mover canal: {e}')
  
         await _refresh_participar(guild)
         await _log(guild, f'🏁 **{by_name}** finalizou o **Evento #{event_id:04d} — {event["title"]}**.')

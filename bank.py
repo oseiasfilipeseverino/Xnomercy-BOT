@@ -70,8 +70,9 @@ class BankCog(commands.Cog):
     @app_commands.command(name='saldos', description='Ver todos os saldos da guild. (Staff e acima)')
     async def saldos(self, interaction: discord.Interaction):
         from permissions import has_permission
-        if not (is_financial(interaction.user) or has_permission(interaction.user, 'support_tickets')):
-            await interaction.response.send_message('❌ Apenas Staff ou superior.', ephemeral=True)
+        # Apenas cargo Staff (e acima: Officer, Sub Officer, Vice Líder, Líder)
+        if not has_permission(interaction.user, 'support_tickets'):
+            await interaction.response.send_message('❌ Apenas cargo **Staff** ou superior.', ephemeral=True)
             return
  
         balances = database.get_all_balances()
@@ -254,8 +255,9 @@ class BankCog(commands.Cog):
     )
     async def mover_todos(self, interaction: discord.Interaction, origem: discord.VoiceChannel, destino: discord.VoiceChannel):
         from permissions import has_permission
-        if not (is_financial(interaction.user) or has_permission(interaction.user, 'support_tickets')):
-            await interaction.response.send_message('❌ Apenas Staff ou superior.', ephemeral=True)
+        # Apenas cargo Staff (e acima: Officer, Sub Officer, Vice Líder, Líder)
+        if not has_permission(interaction.user, 'support_tickets'):
+            await interaction.response.send_message('❌ Apenas cargo **Staff** ou superior.', ephemeral=True)
             return
  
         members = list(origem.members)
@@ -284,3 +286,4 @@ class BankCog(commands.Cog):
  
 async def setup(bot):
     await bot.add_cog(BankCog(bot))
+ 

@@ -173,8 +173,8 @@ class BankCog(commands.Cog):
             pass
  
     @app_commands.command(name='configurar_taxa', description='[LÍDER] Configura as taxas de loot.')
-    @app_commands.describe(guild_tax='Taxa da guild %', vendor_tax='Taxa do vendedor %', repair_tax='Taxa de reparo %')
-    async def configurar_taxa(self, interaction: discord.Interaction, guild_tax: float = None, vendor_tax: float = None, repair_tax: float = None):
+    @app_commands.describe(guild_tax='Taxa da guild %', vendor_tax='Taxa do vendedor %')
+    async def configurar_taxa(self, interaction: discord.Interaction, guild_tax: float = None, vendor_tax: float = None):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
@@ -182,7 +182,6 @@ class BankCog(commands.Cog):
         changed = []
         if guild_tax  is not None: database.set_config('guild_tax',  str(guild_tax));  changed.append(f'🏛️ Guild: **{guild_tax}%**')
         if vendor_tax is not None: database.set_config('vendor_tax', str(vendor_tax)); changed.append(f'🛒 Vendedor: **{vendor_tax}%**')
-        if repair_tax is not None: database.set_config('repair_tax', str(repair_tax)); changed.append(f'🔧 Reparo: **{repair_tax}%**')
  
         if not changed:
             await interaction.response.send_message('⚠️ Informe ao menos uma taxa.', ephemeral=True)
@@ -198,9 +197,9 @@ class BankCog(commands.Cog):
             return
  
         embed = discord.Embed(title='⚙️ Taxas Configuradas', color=discord.Color.blurple())
-        embed.add_field(name='🏛️ Guild',    value=f'{database.get_config("guild_tax")}%',  inline=True)
-        embed.add_field(name='🛒 Vendedor', value=f'{database.get_config("vendor_tax")}%', inline=True)
-        embed.add_field(name='🔧 Reparo',   value=f'{database.get_config("repair_tax")}%', inline=True)
+        embed.add_field(name='🏛️ Taxa da Guild',    value=f'{database.get_config("guild_tax")}%',  inline=True)
+        embed.add_field(name='🛒 Taxa do Vendedor', value=f'{database.get_config("vendor_tax")}%', inline=True)
+        embed.add_field(name='🔧 Reparo',           value='Informado pelo Puxador por evento', inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
  
  

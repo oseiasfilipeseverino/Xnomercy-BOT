@@ -1,5 +1,5 @@
 """
-setup.py — Cria a categoria Banco da Guild com os canais corretos
+setup.py — Cria Banco da Guild + canais de voz para eventos
 """
  
 import discord
@@ -9,6 +9,7 @@ from discord.ext import commands
 import database
 from permissions import is_financial
  
+AGUARDANDO_CHANNEL_ID = '1442820573632663662'
  
 BANK_CHANNELS = [
     ('⚡│criar-evento',    'channel_criar_evento',    'Crie eventos aqui'),
@@ -20,7 +21,7 @@ BANK_CHANNELS = [
 ]
  
  
-async def _get_or_create(guild, name, category, overwrites, topic=''):
+async def _get_or_create_text(guild, name, category, overwrites, topic=''):
     existing = discord.utils.get(category.channels, name=name)
     if existing:
         return existing
@@ -38,12 +39,10 @@ class SetupCog(commands.Cog):
             return
  
         await interaction.response.defer(thinking=True)
- 
         guild  = interaction.guild
         nobody = guild.default_role
         bot_m  = guild.me
  
-        # Permissões de cada canal por cargo
         all_roles   = database.get_permission_roles('members')
         fin_roles   = database.get_permission_roles('financial')
         event_roles = database.get_permission_roles('events')
@@ -62,55 +61,98 @@ class SetupCog(commands.Cog):
         if not cat:
             cat = await guild.create_category('🏦 Banco da Guild', overwrites=cat_ow)
  
-        created = []
         config_updates = {}
+        created = []
  
         for ch_name, config_key, topic in BANK_CHANNELS:
-            # Permissões específicas por canal
             ch_ow = {nobody: discord.PermissionOverwrite(read_messages=False, send_messages=False),
                      bot_m:  discord.PermissionOverwrite(read_messages=True, send_messages=True)}
  
             if config_key in ('channel_financeiro', 'channel_logs', 'channel_saidas_membros'):
-                # Só financeiro vê
                 for rn in fin_roles:
                     r = find(rn)
                     if r: ch_ow[r] = discord.PermissionOverwrite(read_messages=True, send_messages=False)
             elif config_key == 'channel_criar_evento':
-                # Puxadores+
                 for rn in event_roles:
                     r = find(rn)
                     if r: ch_ow[r] = discord.PermissionOverwrite(read_messages=True, send_messages=False)
             else:
-                # Todos os membros
                 for rn in all_roles:
                     r = find(rn)
                     if r: ch_ow[r] = discord.PermissionOverwrite(read_messages=True, send_messages=False)
  
-            ch = await _get_or_create(guild, ch_name, cat, ch_ow, topic)
+            ch = await _get_or_create_text(guild, ch_name, cat, ch_ow, topic)
             config_updates[config_key] = str(ch.id)
             created.append(ch.mention)
  
-        database.save_guild_config(config_updates)
-        database.set_config('setup_done', '1')
+        # ── Canal de voz AGUARDANDO-EVENTO ────────────────────────────────────
+        # Tenta usar o canal existente pelo ID
+        aguardando = guild.get_channel(int(AGUARDANDO_CHANNEL_ID))
+        if not aguardando:
+            # Procura pelo nome
+            for vc in guild.voice_channels:
+                if 'aguardando' in vc.name.lower():
+                    aguardando = vc
+                    break
+        if not aguardando:
+            # Cria novo
+            aguardando = await guild.create_voice_channel('🕐│Aguardando-Evento')
  
+        config_updates['voice_aguardando'] = str(aguardando.id)
+ 
+        # ── Categorias de eventos ─────────────────────────────────────────────
+        ev_ow = {nobody: discord.PermissionOverwrite(read_messages=False),
+                 bot_m:  discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)}
+        for rn in all_roles:
+            r = find(rn)
+            if r: ev_ow[r] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+ 
+        cat_on  = discord.utils.get(guild.categories, name='⚔️ Eventos em Andamento')
+        if not cat_on:
+            cat_on = await guild.create_category('⚔️ Eventos em Andamento', overwrites=ev_ow)
+ 
+        cat_fin = discord.utils.get(guild.categories, name='🏁 Eventos Finalizados')
+        if not cat_fin:
+            cat_fin = await guild.create_category('🏁 Eventos Finalizados', overwrites=ev_ow)
+ 
+        config_updates['category_eventos_andamento']   = str(cat_on.id)
+        config_updates['category_eventos_finalizados'] = str(cat_fin.id)
+        config_updates['category_eventos_voice']       = str(cat_on.id)
+        config_updates['setup_done'] = '1'
+ 
+        database.save_guild_config(config_updates)
+ 
+        # ── Posta painel no #criar-evento ──────────────────────────────────────
+        from events import CreateEventView
+        criar_ch = guild.get_channel(int(config_updates['channel_criar_evento']))
+        if criar_ch:
+            embed = discord.Embed(
+                title='⚔️ Criar Evento | XnoMercy',
+                description=(
+                    '**Entre em uma call de voz** e clique no botão para criar um evento.\n\n'
+                    'Uma call exclusiva será criada para o evento automaticamente!'
+                ),
+                color=discord.Color.gold()
+            )
+            await criar_ch.send(embed=embed, view=CreateEventView())
+ 
+        # ── Resposta ───────────────────────────────────────────────────────────
         embed = discord.Embed(
-            title='✅ Banco da Guild Criado!',
-            description='\n'.join(created),
+            title='✅ Setup Concluído!',
             color=discord.Color.green()
         )
+        embed.add_field(name='📁 Canais criados', value='\n'.join(created), inline=False)
+        embed.add_field(name='🔊 Aguardando-Evento', value=aguardando.mention if hasattr(aguardando, 'mention') else aguardando.name, inline=False)
         embed.add_field(
             name='📋 Próximos passos',
             value=(
-                'Poste os painéis de ticket:\n'
-                '• No canal de recrutamento: `/postar_painel tipo:Recrutamento`\n'
-                '• No canal de suporte: `/postar_painel tipo:Suporte`\n'
-                '• No canal de saque: `/postar_painel tipo:Solicitar Saque`\n\n'
-                'Configure as taxas:\n'
-                '`/configurar_taxa guild_tax:10 vendor_tax:5`'
+                '• `/postar_painel tipo:Recrutamento` no canal de recrutamento\n'
+                '• `/postar_painel tipo:Suporte` no canal de suporte\n'
+                '• `/postar_painel tipo:Solicitar Saque` no #solicitar-saque\n'
+                '• `/configurar_taxa guild_tax:10 vendor_tax:5`'
             ),
             inline=False
         )
-        embed.set_footer(text='XnoMercy Guild')
         await interaction.followup.send(embed=embed)
  
  

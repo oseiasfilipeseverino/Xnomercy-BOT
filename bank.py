@@ -1,3 +1,4 @@
+
 """
 bank.py — Banco da guild: saldos, ranking, ajustes, bônus
 """
@@ -42,7 +43,7 @@ class BankCog(commands.Cog):
         embed.add_field(name='Ranking',     value=f'#{rank}' if rank else 'N/A', inline=True)
         embed.set_thumbnail(url=user.display_avatar.url)
         embed.set_footer(text='XnoMercy Guild')
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed)
  
     # ── /saldo_membro ──────────────────────────────────────────────────────────
     @app_commands.command(name='saldo_membro', description='[LÍDER] Ver o saldo de um membro específico.')
@@ -66,10 +67,11 @@ class BankCog(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
  
     # ── /saldos ────────────────────────────────────────────────────────────────
-    @app_commands.command(name='saldos', description='[LÍDER] Ver todos os saldos da guild.')
+    @app_commands.command(name='saldos', description='Ver todos os saldos da guild. (Staff e acima)')
     async def saldos(self, interaction: discord.Interaction):
-        if not is_financial(interaction.user):
-            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+        from permissions import has_permission
+        if not (is_financial(interaction.user) or has_permission(interaction.user, 'support_tickets')):
+            await interaction.response.send_message('❌ Apenas Staff ou superior.', ephemeral=True)
             return
  
         balances = database.get_all_balances()
@@ -92,7 +94,7 @@ class BankCog(commands.Cog):
         )
         embed.add_field(name='📊 Total em circulação', value=fmt(total), inline=False)
         embed.set_footer(text=f'XnoMercy Guild | {len(balances)} players com saldo')
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed)
  
     # ── /adicionar_saldo ───────────────────────────────────────────────────────
     @app_commands.command(name='adicionar_saldo', description='[LÍDER] Adiciona prata ao saldo de um player.')
@@ -246,4 +248,3 @@ class BankCog(commands.Cog):
  
 async def setup(bot):
     await bot.add_cog(BankCog(bot))
- 

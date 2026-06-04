@@ -489,7 +489,7 @@ class EventsCog(commands.Cog):
     # ── /simular_evento ────────────────────────────────────────────────────────
     @app_commands.command(name='simular_evento', description='Simula a distribuição proporcional do loot. Informe o valor total e o reparo.')
     @app_commands.describe(valor_total='Valor total do loot em prata (ex: 25000000)', reparo='Custo total de reparo em prata (ex: 2000000 | coloque 0 se não houver)')
-    async def simular(self, interaction: discord.Interaction, valor_total: float, reparo: float = 0.0):
+    async def simular(self, interaction: discord.Interaction, valor_total: float, reparo: float):
         if not (can_manage_events(interaction.user) or is_staff_up(interaction.user)):
             await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
             return

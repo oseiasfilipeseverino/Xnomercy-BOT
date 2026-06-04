@@ -82,6 +82,10 @@ class SetupCog(commands.Cog):
                     if r: ch_ow[r] = discord.PermissionOverwrite(read_messages=True, send_messages=False)
  
             ch = await _get_or_create_text(guild, ch_name, cat, ch_ow, topic)
+            # Slowmode para evitar mensagens desnecessárias
+            if config_key in ('channel_criar_evento', 'channel_participar'):
+                try: await ch.edit(slowmode_delay=21600)  # 6h
+                except: pass
             config_updates[config_key] = str(ch.id)
             created.append(ch.mention)
  
@@ -122,10 +126,16 @@ class SetupCog(commands.Cog):
  
         database.save_guild_config(config_updates)
  
-        # ── Posta painel no #criar-evento ──────────────────────────────────────
+        # ── Posta painel no #criar-evento (limpa histórico antes) ─────────────
         from events import CreateEventView
         criar_ch = guild.get_channel(int(config_updates['channel_criar_evento']))
         if criar_ch:
+            # Apaga mensagens antigas do bot
+            async for msg in criar_ch.history(limit=50):
+                if msg.author == guild.me:
+                    try: await msg.delete()
+                    except: pass
+ 
             embed = discord.Embed(
                 title='⚔️ Criar Evento | XnoMercy',
                 description=(

@@ -27,6 +27,7 @@ class BankCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
  
+    # ── /meu-saldo ─────────────────────────────────────────────────────────────
     @app_commands.command(name='meu-saldo', description='Veja seu saldo e ranking na guild.')
     async def meu_saldo(self, interaction: discord.Interaction):
         user = interaction.user
@@ -36,13 +37,35 @@ class BankCog(commands.Cog):
  
         embed = discord.Embed(title='💰 Saldo do Membro', color=discord.Color.gold())
         embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
-        embed.add_field(name='Membro',      value=user.mention,                    inline=True)
-        embed.add_field(name='Saldo Atual', value=fmt(balance),                    inline=True)
-        embed.add_field(name='Ranking',     value=f'#{rank}' if rank else 'N/A',   inline=True)
+        embed.add_field(name='Membro',      value=user.mention,                  inline=True)
+        embed.add_field(name='Saldo Atual', value=fmt(balance),                  inline=True)
+        embed.add_field(name='Ranking',     value=f'#{rank}' if rank else 'N/A', inline=True)
         embed.set_thumbnail(url=user.display_avatar.url)
         embed.set_footer(text='XnoMercy Guild')
         await interaction.response.send_message(embed=embed, ephemeral=True)
  
+    # ── /saldo_membro ──────────────────────────────────────────────────────────
+    @app_commands.command(name='saldo_membro', description='[LÍDER] Ver o saldo de um membro específico.')
+    @app_commands.describe(usuario='Membro que deseja consultar')
+    async def saldo_membro(self, interaction: discord.Interaction, usuario: discord.Member):
+        if not is_financial(interaction.user):
+            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            return
+ 
+        database.ensure_player(str(usuario.id), usuario.display_name)
+        balance = database.get_player_balance(str(usuario.id))
+        rank    = database.get_player_rank(str(usuario.id))
+ 
+        embed = discord.Embed(title='💰 Saldo do Membro', color=discord.Color.gold())
+        embed.set_author(name=usuario.display_name, icon_url=usuario.display_avatar.url)
+        embed.add_field(name='Membro',      value=usuario.mention,               inline=True)
+        embed.add_field(name='Saldo Atual', value=fmt(balance),                  inline=True)
+        embed.add_field(name='Ranking',     value=f'#{rank}' if rank else 'N/A', inline=True)
+        embed.set_thumbnail(url=usuario.display_avatar.url)
+        embed.set_footer(text=f'Consultado por {interaction.user.display_name}')
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+ 
+    # ── /saldos ────────────────────────────────────────────────────────────────
     @app_commands.command(name='saldos', description='[LÍDER] Ver todos os saldos da guild.')
     async def saldos(self, interaction: discord.Interaction):
         if not is_financial(interaction.user):
@@ -71,13 +94,14 @@ class BankCog(commands.Cog):
         embed.set_footer(text=f'XnoMercy Guild | {len(balances)} players com saldo')
         await interaction.response.send_message(embed=embed, ephemeral=True)
  
-    @app_commands.command(name='dar_saldo', description='[LÍDER] Dá prata ao saldo de um player como bônus.')
+    # ── /adicionar_saldo ───────────────────────────────────────────────────────
+    @app_commands.command(name='adicionar_saldo', description='[LÍDER] Adiciona prata ao saldo de um player.')
     @app_commands.describe(
         usuario='Player que vai receber',
         valor  ='Valor em prata a adicionar',
         motivo ='Motivo do bônus'
     )
-    async def dar_saldo(self, interaction: discord.Interaction, usuario: discord.Member, valor: float, motivo: str = 'Bônus da liderança'):
+    async def adicionar_saldo(self, interaction: discord.Interaction, usuario: discord.Member, valor: float, motivo: str = 'Bônus da liderança'):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
@@ -89,58 +113,73 @@ class BankCog(commands.Cog):
         database.add_transaction(str(usuario.id), valor, 'bonus', motivo, interaction.user.display_name)
         novo = database.get_player_balance(str(usuario.id))
  
-        embed = discord.Embed(title='💰 Bônus Adicionado!', color=discord.Color.green())
+        embed = discord.Embed(title='➕ Saldo Adicionado!', color=discord.Color.green())
         embed.set_author(name=usuario.display_name, icon_url=usuario.display_avatar.url)
-        embed.add_field(name='➕ Adicionado', value=fmt(valor), inline=True)
+        embed.add_field(name='➕ Adicionado',  value=fmt(valor), inline=True)
         embed.add_field(name='💎 Saldo Atual', value=fmt(novo),  inline=True)
         embed.add_field(name='📝 Motivo',      value=motivo,     inline=False)
-        embed.set_footer(text=f'Adicionado por {interaction.user.display_name}')
+        embed.set_footer(text=f'Por {interaction.user.display_name}')
         await interaction.response.send_message(embed=embed)
  
         await _log(interaction.guild,
-            f'💰 **{interaction.user.display_name}** deu **{fmt(valor)}** para **{usuario.display_name}**. Motivo: {motivo}')
+            f'➕ **{interaction.user.display_name}** adicionou **{fmt(valor)}** para **{usuario.display_name}**. Motivo: {motivo}')
         try:
             dm = discord.Embed(
-                title='💰 Você recebeu um bônus!',
-                description=f'**{fmt(valor)}** adicionados!\nMotivo: {motivo}\nSaldo atual: **{fmt(novo)}**',
+                title='💰 Você recebeu prata!',
+                description=f'**{fmt(valor)}** adicionados ao seu saldo!\nMotivo: {motivo}\nSaldo atual: **{fmt(novo)}**',
                 color=discord.Color.gold()
             )
             await usuario.send(embed=dm)
         except Exception:
             pass
  
-    @app_commands.command(name='ajustar_saldo', description='[LÍDER] Adiciona ou remove prata do saldo de um player.')
-    @app_commands.describe(usuario='Player', valor='Valor (+adiciona / -remove)', motivo='Motivo')
-    async def ajustar_saldo(self, interaction: discord.Interaction, usuario: discord.Member, valor: float, motivo: str = 'Ajuste manual'):
+    # ── /diminuir_saldo ────────────────────────────────────────────────────────
+    @app_commands.command(name='diminuir_saldo', description='[LÍDER] Remove prata do saldo de um player.')
+    @app_commands.describe(
+        usuario='Player que terá prata removida',
+        valor  ='Valor em prata a remover',
+        motivo ='Motivo da remoção'
+    )
+    async def diminuir_saldo(self, interaction: discord.Interaction, usuario: discord.Member, valor: float, motivo: str = 'Desconto manual'):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
+        if valor <= 0:
+            await interaction.response.send_message('❌ O valor precisa ser maior que zero.', ephemeral=True)
+            return
  
-        database.update_player_balance(str(usuario.id), usuario.display_name, valor)
-        database.add_transaction(str(usuario.id), valor, 'adjustment', motivo, interaction.user.display_name)
+        balance = database.get_player_balance(str(usuario.id))
+        if valor > balance:
+            await interaction.response.send_message(
+                f'❌ Saldo insuficiente. **{usuario.display_name}** tem apenas **{fmt(balance)}**.', ephemeral=True
+            )
+            return
+ 
+        database.update_player_balance(str(usuario.id), usuario.display_name, -valor)
+        database.add_transaction(str(usuario.id), -valor, 'deduction', motivo, interaction.user.display_name)
         novo = database.get_player_balance(str(usuario.id))
-        action = '➕ Adicionado' if valor >= 0 else '➖ Removido'
  
-        embed = discord.Embed(title='✅ Saldo Ajustado', color=discord.Color.green() if valor >= 0 else discord.Color.red())
-        embed.add_field(name='Player',      value=usuario.display_name, inline=True)
-        embed.add_field(name=action,        value=fmt(abs(valor)),      inline=True)
-        embed.add_field(name='Saldo Atual', value=fmt(novo),            inline=True)
-        embed.add_field(name='Motivo',      value=motivo,               inline=False)
+        embed = discord.Embed(title='➖ Saldo Removido!', color=discord.Color.red())
+        embed.set_author(name=usuario.display_name, icon_url=usuario.display_avatar.url)
+        embed.add_field(name='➖ Removido',    value=fmt(valor), inline=True)
+        embed.add_field(name='💎 Saldo Atual', value=fmt(novo),  inline=True)
+        embed.add_field(name='📝 Motivo',      value=motivo,     inline=False)
         embed.set_footer(text=f'Por {interaction.user.display_name}')
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed)
  
         await _log(interaction.guild,
-            f'{"➕" if valor >= 0 else "➖"} **{interaction.user.display_name}** ajustou **{fmt(abs(valor))}** de **{usuario.display_name}**. Motivo: {motivo}')
+            f'➖ **{interaction.user.display_name}** removeu **{fmt(valor)}** de **{usuario.display_name}**. Motivo: {motivo}')
         try:
             dm = discord.Embed(
-                title='💰 Seu saldo foi atualizado!',
-                description=f'{action}: **{fmt(abs(valor))}**\nMotivo: {motivo}\nSaldo atual: **{fmt(novo)}**',
-                color=discord.Color.gold()
+                title='💰 Seu saldo foi reduzido.',
+                description=f'**{fmt(valor)}** removidos do seu saldo.\nMotivo: {motivo}\nSaldo atual: **{fmt(novo)}**',
+                color=discord.Color.orange()
             )
             await usuario.send(embed=dm)
         except Exception:
             pass
  
+    # ── /zerar_saldo ───────────────────────────────────────────────────────────
     @app_commands.command(name='zerar_saldo', description='[LÍDER] Zera o saldo de um player após pagamento.')
     @app_commands.describe(usuario='Player que terá o saldo zerado')
     async def zerar_saldo(self, interaction: discord.Interaction, usuario: discord.Member):
@@ -172,6 +211,7 @@ class BankCog(commands.Cog):
         except Exception:
             pass
  
+    # ── /configurar_taxa ───────────────────────────────────────────────────────
     @app_commands.command(name='configurar_taxa', description='[LÍDER] Configura as taxas de loot.')
     @app_commands.describe(guild_tax='Taxa da guild %', vendor_tax='Taxa do vendedor %')
     async def configurar_taxa(self, interaction: discord.Interaction, guild_tax: float = None, vendor_tax: float = None):
@@ -190,6 +230,7 @@ class BankCog(commands.Cog):
         embed = discord.Embed(title='✅ Taxas Atualizadas', description='\n'.join(changed), color=discord.Color.green())
         await interaction.response.send_message(embed=embed, ephemeral=True)
  
+    # ── /ver_taxas ─────────────────────────────────────────────────────────────
     @app_commands.command(name='ver_taxas', description='[LÍDER] Ver as taxas configuradas.')
     async def ver_taxas(self, interaction: discord.Interaction):
         if not is_financial(interaction.user):
@@ -199,9 +240,10 @@ class BankCog(commands.Cog):
         embed = discord.Embed(title='⚙️ Taxas Configuradas', color=discord.Color.blurple())
         embed.add_field(name='🏛️ Taxa da Guild',    value=f'{database.get_config("guild_tax")}%',  inline=True)
         embed.add_field(name='🛒 Taxa do Vendedor', value=f'{database.get_config("vendor_tax")}%', inline=True)
-        embed.add_field(name='🔧 Reparo',           value='Informado pelo Puxador por evento', inline=True)
+        embed.add_field(name='🔧 Reparo',           value='Informado pelo Puxador por evento',      inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
  
  
 async def setup(bot):
     await bot.add_cog(BankCog(bot))
+ 

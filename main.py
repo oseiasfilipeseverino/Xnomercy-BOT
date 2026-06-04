@@ -20,10 +20,12 @@ async def on_ready():
     database.init_db()
     print(f'✅  XnoMercy Bot v2 online como {bot.user}')
     try:
-        synced = await bot.tree.sync()
-        print(f'✅  {len(synced)} comandos slash sincronizados.')
+        # Sincroniza em cada servidor imediatamente
+        for guild in bot.guilds:
+            await bot.tree.sync(guild=guild)
+            print(f'✅  Comandos sincronizados em: {guild.name}')
     except Exception as e:
-        print(f'❌  Erro: {e}')
+        print(f'❌  Erro ao sincronizar: {e}')
  
 async def main():
     async with bot:

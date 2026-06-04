@@ -80,7 +80,7 @@ class SetupCog(commands.Cog):
         ch_criar = await _get_or_create_text(guild, '⚡│criar-evento',    cat_banco, ow_read(event_roles), 'Crie eventos aqui')
         ch_part  = await _get_or_create_text(guild, '👊│participar',      cat_banco, ow_read(all_roles),   'Participe dos eventos')
         ch_fin   = await _get_or_create_text(guild, '🏛│financeiro',      cat_banco, ow_read(fin_roles),   'Canal financeiro')
-        ch_sal   = await _get_or_create_text(guild, '🌿│consultar-saldo', cat_banco, ow_read(all_roles),   'Consulte seu saldo')
+        ch_sal   = await _get_or_create_text(guild, '🌿│consultar-saldo', cat_banco, ow_rw(all_roles),    'Consulte seu saldo')
         ch_log   = await _get_or_create_text(guild, '📋│logs',            cat_banco, ow_read(fin_roles),   'Logs de ações')
         ch_sad   = await _get_or_create_text(guild, '✈️│saidas-membros',  cat_banco, ow_read(fin_roles),   'Saídas com saldo')
  

@@ -1,3 +1,4 @@
+
 """
 events.py — Sistema de eventos com participação proporcional (1-100%)
 """
@@ -172,10 +173,11 @@ class FinalizeEventButton(discord.ui.Button):
 class ParticipateView(discord.ui.View):
     def __init__(self, events: list):
         super().__init__(timeout=None)
-        for i, ev in enumerate(events[:12]):  # máx 12 eventos (2 botões por linha, 5 linhas)
-            row = i // 2  # agrupa 2 eventos por linha
-            self.add_item(JoinEventButton(ev['id'], ev['title'], ev['voice_channel_id'] or '', row))
-            self.add_item(FinalizeEventButton(ev['id'], ev['title'], ev['voice_channel_id'] or '', row))
+        for i, ev in enumerate(events[:12]):
+            row = i // 2
+            voice_id = dict(ev).get('voice_channel_id', '') or ''
+            self.add_item(JoinEventButton(ev['id'], ev['title'], voice_id, row))
+            self.add_item(FinalizeEventButton(ev['id'], ev['title'], voice_id, row))
  
  
 # ── Botões no canal de texto do evento ────────────────────────────────────────
@@ -279,33 +281,41 @@ async def _update_event_embed(guild, event_id):
  
  
 async def _refresh_participar(guild):
-    ch_id = database.get_config('channel_participar')
-    if not ch_id: return
-    ch = guild.get_channel(int(ch_id))
-    if not ch: return
+    try:
+        ch_id = database.get_config('channel_participar')
+        if not ch_id:
+            print(f'[participar] channel_participar não configurado!')
+            return
+        ch = guild.get_channel(int(ch_id))
+        if not ch:
+            print(f'[participar] Canal não encontrado: {ch_id}')
+            return
  
-    active = database.get_active_events(str(guild.id))
-    embed  = discord.Embed(title='⚔️ Eventos em Andamento | XnoMercy', color=discord.Color.gold())
+        active = database.get_active_events(str(guild.id))
+        embed  = discord.Embed(title='⚔️ Eventos em Andamento | XnoMercy', color=discord.Color.gold())
  
-    if active:
-        lines = [f'**#{ev["id"]:04d}** — {ev["title"]}  |  👑 {ev["creator_name"]}' for ev in active]
-        embed.description = 'Entre em uma **call de voz** e clique para participar ou finalizar.\n\n' + '\n'.join(lines)
-    else:
-        embed.description = 'Nenhum evento ativo no momento.'
+        if active:
+            lines = [f'**#{ev["id"]:04d}** — {ev["title"]}  |  👑 {ev["creator_name"]}' for ev in active]
+            embed.description = 'Entre em uma **call de voz** e clique para participar ou finalizar.\n\n' + '\n'.join(lines)
+        else:
+            embed.description = 'Nenhum evento ativo no momento.'
  
-    # Limpa canal mantendo apenas o painel atual
-    to_delete = []
-    async for msg in ch.history(limit=50):
-        if msg.author == guild.me:
-            to_delete.append(msg)
-    for msg in to_delete:
-        try: await msg.delete()
-        except: pass
+        # Limpa mensagens antigas do bot
+        to_delete = []
+        async for msg in ch.history(limit=50):
+            if msg.author == guild.me:
+                to_delete.append(msg)
+        for msg in to_delete:
+            try: await msg.delete()
+            except: pass
  
-    if active:
-        await ch.send(embed=embed, view=ParticipateView(active))
-    else:
-        await ch.send(embed=embed)
+        if active:
+            await ch.send(embed=embed, view=ParticipateView(active))
+        else:
+            await ch.send(embed=embed)
+ 
+    except Exception as e:
+        print(f'[participar] Erro ao atualizar: {e}')
  
  
 async def _do_finalize(guild, event_id, by_name):
@@ -402,9 +412,19 @@ class EventsCog(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         for guild in self.bot.guilds:
-            active = database.get_active_events(str(guild.id))
-            for ev in active:
-                self.bot.add_view(EventManageView(ev['id']))
+            try:
+                active = database.get_active_events(str(guild.id))
+                for ev in active:
+                    self.bot.add_view(EventManageView(ev['id']))
+                if active:
+                    self.bot.add_view(ParticipateView(active))
+                await _refresh_participar(guild)
+                print(f'[on_ready] {len(active)} evento(s) em {guild.name}')
+                # Restaura o painel de participar
+                await _refresh_participar(guild)
+                print(f'[events] Painel de participar restaurado em {guild.name}')
+            except Exception as e:
+                print(f'[events] Erro ao restaurar painel: {e}')
  
     # ── /alterar_participacao ──────────────────────────────────────────────────
     @app_commands.command(name='alterar_participacao', description='Define a participação de um player. Use 0 para excluí-lo da distribuição.')
@@ -562,3 +582,4 @@ class EventsCog(commands.Cog):
  
 async def setup(bot):
     await bot.add_cog(EventsCog(bot))
+ 

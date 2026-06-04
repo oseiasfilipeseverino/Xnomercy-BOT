@@ -103,8 +103,8 @@ def init_db():
     # ── Mensagem de boas-vindas (editável) ────────────────────────────────────
     c.execute('''CREATE TABLE IF NOT EXISTS welcome_config (
         id         INTEGER PRIMARY KEY CHECK (id = 1),
-        title      TEXT NOT NULL,
-        message    TEXT NOT NULL,
+        title      TEXT NOT NULL DEFAULT '⚔️ Bem-vindo!',
+        message    TEXT NOT NULL DEFAULT 'Olá {mention}!',
         channel_id TEXT DEFAULT ''
     )''')
  
@@ -218,7 +218,21 @@ def init_db():
     try:
         c.execute("ALTER TABLE events ADD COLUMN voice_channel_id TEXT DEFAULT ''")
     except Exception:
-        pass  # Coluna já existe
+        pass
+ 
+    # Garante que welcome_config tem as colunas corretas
+    try:
+        c.execute("ALTER TABLE welcome_config ADD COLUMN title TEXT NOT NULL DEFAULT '⚔️ Bem-vindo!'")
+    except Exception:
+        pass
+    try:
+        c.execute("ALTER TABLE welcome_config ADD COLUMN message TEXT NOT NULL DEFAULT 'Olá {mention}!'")
+    except Exception:
+        pass
+    try:
+        c.execute("ALTER TABLE welcome_config ADD COLUMN channel_id TEXT DEFAULT ''")
+    except Exception:
+        pass
  
     conn.commit()
     conn.close()
@@ -419,6 +433,15 @@ def update_event_voice(event_id: int, voice_channel_id: str):
     conn.commit()
     conn.close()
  
+def set_participant_weight(event_id: int, discord_id: str, weight: float):
+    conn = get_connection()
+    conn.execute(
+        'UPDATE event_participants SET share = ? WHERE event_id = ? AND discord_id = ?',
+        (weight, event_id, discord_id)
+    )
+    conn.commit()
+    conn.close()
+ 
 def finish_event(event_id: int):
     conn = get_connection()
     conn.execute("UPDATE events SET status='finished', finished_at=? WHERE id=?",
@@ -503,4 +526,3 @@ def get_open_ticket(discord_id: str, ticket_type: str):
     ).fetchone()
     conn.close()
     return row
- 

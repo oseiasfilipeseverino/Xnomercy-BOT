@@ -304,10 +304,14 @@ async def _refresh_participar(guild):
     else:
         embed.description = 'Nenhum evento ativo no momento.'
  
-    async for msg in ch.history(limit=10):
+    # Limpa canal mantendo apenas o painel atual
+    to_delete = []
+    async for msg in ch.history(limit=50):
         if msg.author == guild.me:
-            try: await msg.delete()
-            except: pass
+            to_delete.append(msg)
+    for msg in to_delete:
+        try: await msg.delete()
+        except: pass
  
     if active:
         await ch.send(embed=embed, view=ParticipateView(active))

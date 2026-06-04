@@ -1,4 +1,3 @@
-
 """
 welcome.py — Boas-vindas + configurações + permissões
 """
@@ -25,7 +24,11 @@ class WelcomeCog(commands.Cog):
                 return
  
             title   = cfg['title']
-            message = cfg['message'].replace('{mention}', member.mention).replace('{nome}', member.display_name)
+            site_url = database.get_config('site_url') or 'https://nome-xnomercy-site-production.up.railway.app'
+            message = (cfg['message']
+                       .replace('{mention}', member.mention)
+                       .replace('{nome}', member.display_name)
+                       .replace('{site}', f'[🌐 Acesse o site da guild]({site_url})'))
  
             embed = discord.Embed(title=title, description=message, color=discord.Color.gold())
             embed.set_thumbnail(url=member.display_avatar.url)
@@ -69,7 +72,11 @@ class WelcomeCog(commands.Cog):
             return
  
         title   = cfg['title']
-        message = cfg['message'].replace('{mention}', target.mention).replace('{nome}', target.display_name)
+        site_url = database.get_config('site_url') or 'https://nome-xnomercy-site-production.up.railway.app'
+        message = (cfg['message']
+                   .replace('{mention}', target.mention)
+                   .replace('{nome}', target.display_name)
+                   .replace('{site}', f'[🌐 Acesse o site da guild]({site_url})'))
  
         embed = discord.Embed(title=title, description=message, color=discord.Color.gold())
         embed.set_thumbnail(url=target.display_avatar.url)

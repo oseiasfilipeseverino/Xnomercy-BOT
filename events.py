@@ -1,4 +1,3 @@
-
 """
 events.py — Sistema de eventos com participação proporcional (1-100%)
 """
@@ -411,30 +410,36 @@ class EventsCog(commands.Cog):
     @app_commands.command(name='alterar_participacao', description='Define a participação de um player. Use 0 para excluí-lo da distribuição.')
     @app_commands.describe(usuario='Player', valor='Participação de 0 a 100 (0 = excluído da distribuição)')
     async def alterar_participacao(self, interaction: discord.Interaction, usuario: discord.Member, valor: int):
-        if not (can_manage_events(interaction.user) or is_staff_up(interaction.user)):
-            await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
-            return
+        try:
+            if not (can_manage_events(interaction.user) or is_staff_up(interaction.user)):
+                await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
+                return
  
-        event = database.get_event_by_channel(str(interaction.channel_id))
-        if not event:
-            await interaction.response.send_message('❌ Este canal não é um canal de evento.', ephemeral=True)
-            return
+            event = database.get_event_by_channel(str(interaction.channel_id))
+            if not event:
+                await interaction.response.send_message(
+                    '❌ Este canal não é um canal de evento. Use este comando dentro do canal do evento.',
+                    ephemeral=True
+                )
+                return
  
-        valor = max(0, min(100, valor))
+            valor = max(0, min(100, valor))
+            database.add_event_participant(event['id'], str(usuario.id), usuario.display_name, float(valor))
+            database.set_participant_weight(event['id'], str(usuario.id), float(valor))
+            await _update_event_embed(interaction.guild, event['id'])
  
-        # Adiciona o player se ainda não estiver no evento
-        database.add_event_participant(event['id'], str(usuario.id), usuario.display_name, float(valor))
-        # Garante que a participação está atualizada
-        database.set_participant_weight(event['id'], str(usuario.id), float(valor))
+            if valor == 0:
+                msg = f'⛔ **{usuario.display_name}** — participação zerada (excluído da distribuição).'
+            else:
+                msg = f'✅ **{usuario.display_name}** — participação definida para **{valor}%**!'
  
-        await _update_event_embed(interaction.guild, event['id'])
+            await interaction.response.send_message(msg, ephemeral=True)
  
-        if valor == 0:
-            msg = f'⛔ **{usuario.display_name}** foi definido com **0%** — excluído da distribuição de loot.'
-        else:
-            msg = f'✅ **{usuario.display_name}** — participação definida para **{valor}%**!'
- 
-        await interaction.response.send_message(msg, ephemeral=True)
+        except Exception as e:
+            try:
+                await interaction.response.send_message(f'❌ Erro: {str(e)}', ephemeral=True)
+            except Exception:
+                pass
  
     # ── /simular_evento ────────────────────────────────────────────────────────
     @app_commands.command(name='simular_evento', description='Simula a distribuição do loot neste canal de evento.')

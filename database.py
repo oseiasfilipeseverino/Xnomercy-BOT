@@ -466,15 +466,22 @@ def approve_event(event_id: int, approved_by: str):
  
 # ── Event participants ──────────────────────────────────────────────────────────
  
-def add_event_participant(event_id: int, discord_id: str, username: str) -> bool:
+def add_event_participant(event_id: int, discord_id: str, username: str, weight: float = 100.0) -> bool:
     conn = get_connection()
     try:
-        conn.execute('INSERT INTO event_participants (event_id, discord_id, username) VALUES (?, ?, ?)',
-                     (event_id, discord_id, username))
+        conn.execute(
+            'INSERT INTO event_participants (event_id, discord_id, username, share) VALUES (?, ?, ?, ?)',
+            (event_id, discord_id, username, weight)
+        )
         conn.commit()
         conn.close()
         return True
     except sqlite3.IntegrityError:
+        conn.execute(
+            'UPDATE event_participants SET username = ? WHERE event_id = ? AND discord_id = ?',
+            (username, event_id, discord_id)
+        )
+        conn.commit()
         conn.close()
         return False
  
@@ -526,3 +533,4 @@ def get_open_ticket(discord_id: str, ticket_type: str):
     ).fetchone()
     conn.close()
     return row
+ 

@@ -1,3 +1,4 @@
+
 """
 events.py — Sistema de eventos com participação proporcional (1-100%)
 """
@@ -34,14 +35,15 @@ async def _get_aguardando(guild):
     return None
  
 def _calc_distribution(participants, net: float) -> dict:
-    """Calcula distribuição proporcional. Retorna {discord_id: valor}"""
-    total_weight = sum(float(p['share'] or 100) for p in participants)
+    """Calcula distribuição proporcional. Players com 0% são excluídos."""
+    active = [p for p in participants if float(p['share'] or 0) > 0]
+    total_weight = sum(float(p['share']) for p in active)
     if total_weight == 0:
-        total_weight = len(participants) * 100
+        return {p['discord_id']: 0 for p in participants}
     result = {}
     for p in participants:
-        weight = float(p['share'] or 100)
-        result[p['discord_id']] = net * (weight / total_weight)
+        weight = float(p['share'] or 0)
+        result[p['discord_id']] = net * (weight / total_weight) if weight > 0 else 0
     return result
  
 # ── Modal: Criar Evento ────────────────────────────────────────────────────────
@@ -183,20 +185,7 @@ class EventManageView(discord.ui.View):
     def __init__(self, event_id: int):
         super().__init__(timeout=None)
         self.event_id = event_id
- 
-    @discord.ui.button(label='➕ Adicionar Player', style=discord.ButtonStyle.secondary, custom_id='xnm:ev_add')
-    async def add_player(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not (can_manage_events(interaction.user) or is_staff_up(interaction.user)):
-            await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
-            return
-        await interaction.response.send_modal(AddPlayerModal(self.event_id))
- 
-    @discord.ui.button(label='➖ Remover Player', style=discord.ButtonStyle.secondary, custom_id='xnm:ev_rem')
-    async def rem_player(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not (can_manage_events(interaction.user) or is_staff_up(interaction.user)):
-            await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
-            return
-        await interaction.response.send_modal(RemovePlayerModal(self.event_id))
+    # Sem botões — use /alterar_participacao para adicionar/remover players
  
  
 class AddPlayerModal(discord.ui.Modal, title='Adicionar Player'):
@@ -255,11 +244,12 @@ def _build_event_embed(event_id, title, creator, participants):
     embed.add_field(name='👥 Participantes', value=str(len(participants)), inline=True)
  
     if participants:
-        lines = []
-        for p in participants:
-            w = float(p['share'] or 100)
-            lines.append(f'• **{p["username"]}** — {w:.0f}%')
-        embed.add_field(name='📋 Lista de Participação', value='\n'.join(lines), inline=False)
+        ativos   = [p for p in participants if float(p['share'] or 0) > 0]
+        inativos = [p for p in participants if float(p['share'] or 0) == 0]
+        lines = [f'• **{p["username"]}** — {float(p["share"] or 0):.0f}%' for p in ativos]
+        if inativos:
+            lines += [f'• ~~{p["username"]}~~ — 0% (excluído)' for p in inativos]
+        embed.add_field(name='📋 Lista de Participação', value='\n'.join(lines) if lines else '_Nenhum_', inline=False)
     else:
         embed.add_field(name='📋 Lista', value='_Nenhum participante ainda_', inline=False)
  
@@ -418,8 +408,8 @@ class EventsCog(commands.Cog):
                 self.bot.add_view(EventManageView(ev['id']))
  
     # ── /alterar_participacao ──────────────────────────────────────────────────
-    @app_commands.command(name='alterar_participacao', description='Altera a participação de um player no evento deste canal.')
-    @app_commands.describe(usuario='Player', valor='Participação de 1 a 100')
+    @app_commands.command(name='alterar_participacao', description='Define a participação de um player. Use 0 para excluí-lo da distribuição.')
+    @app_commands.describe(usuario='Player', valor='Participação de 0 a 100 (0 = excluído da distribuição)')
     async def alterar_participacao(self, interaction: discord.Interaction, usuario: discord.Member, valor: int):
         if not (can_manage_events(interaction.user) or is_staff_up(interaction.user)):
             await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
@@ -427,15 +417,24 @@ class EventsCog(commands.Cog):
  
         event = database.get_event_by_channel(str(interaction.channel_id))
         if not event:
-            await interaction.response.send_message('❌ Este canal não corresponde a nenhum evento.', ephemeral=True)
+            await interaction.response.send_message('❌ Este canal não é um canal de evento.', ephemeral=True)
             return
  
-        valor = max(1, min(100, valor))
+        valor = max(0, min(100, valor))
+ 
+        # Adiciona o player se ainda não estiver no evento
+        database.add_event_participant(event['id'], str(usuario.id), usuario.display_name, float(valor))
+        # Garante que a participação está atualizada
         database.set_participant_weight(event['id'], str(usuario.id), float(valor))
+ 
         await _update_event_embed(interaction.guild, event['id'])
-        await interaction.response.send_message(
-            f'✅ Participação de **{usuario.display_name}** definida para **{valor}%**!', ephemeral=True
-        )
+ 
+        if valor == 0:
+            msg = f'⛔ **{usuario.display_name}** foi definido com **0%** — excluído da distribuição de loot.'
+        else:
+            msg = f'✅ **{usuario.display_name}** — participação definida para **{valor}%**!'
+ 
+        await interaction.response.send_message(msg, ephemeral=True)
  
     # ── /simular_evento ────────────────────────────────────────────────────────
     @app_commands.command(name='simular_evento', description='Simula a distribuição do loot neste canal de evento.')

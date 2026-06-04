@@ -124,6 +124,7 @@ def init_db():
         ('category_tickets_saque',''),('category_tickets_recrutamento_finalizado',''),
         ('category_tickets_suporte_finalizado',''),('category_tickets_saque_finalizado',''),
         ('category_eventos_voice',''),('voice_aguardando',''),
+        ('site_url','https://nome-xnomercy-site-production.up.railway.app'),
     ]
     for key, value in config_defaults:
         c.execute('INSERT INTO guild_config (key,value) VALUES (%s,%s) ON CONFLICT (key) DO NOTHING', (key, value))
@@ -477,4 +478,3 @@ def set_welcome_channel(channel_id: str):
     c.execute('UPDATE welcome_config SET channel_id=%s WHERE id=1', (channel_id,))
     conn.commit()
     conn.close()
- 

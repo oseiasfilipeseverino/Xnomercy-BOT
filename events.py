@@ -1,4 +1,3 @@
-
 """
 events.py — Sistema de eventos com participação proporcional (1-100%)
 """

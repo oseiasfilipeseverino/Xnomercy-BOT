@@ -1,3 +1,4 @@
+
 """
 events.py — Sistema de eventos com participação proporcional (1-100%)
 """
@@ -119,30 +120,37 @@ class JoinEventButton(discord.ui.Button):
         self.voice_ch_id = voice_ch_id
  
     async def callback(self, interaction: discord.Interaction):
-        if not is_member(interaction.user):
-            await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
-            return
-        if not interaction.user.voice or not interaction.user.voice.channel:
-            await interaction.response.send_message('❌ Entre em uma **call de voz** primeiro!', ephemeral=True)
-            return
+        try:
+            if not is_member(interaction.user):
+                await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
+                return
+            if not interaction.user.voice or not interaction.user.voice.channel:
+                await interaction.response.send_message('❌ Entre em uma **call de voz** primeiro!', ephemeral=True)
+                return
  
-        event = database.get_event(self.event_id)
-        if not event or event['status'] != 'active':
-            await interaction.response.send_message('❌ Evento não está mais ativo.', ephemeral=True)
-            return
+            event = database.get_event(self.event_id)
+            if not event or event['status'] != 'active':
+                await interaction.response.send_message('❌ Evento não está mais ativo.', ephemeral=True)
+                return
  
-        added = database.add_event_participant(self.event_id, str(interaction.user.id), interaction.user.display_name)
+            added = database.add_event_participant(self.event_id, str(interaction.user.id), interaction.user.display_name)
  
-        voice_ch = interaction.guild.get_channel(int(self.voice_ch_id)) if self.voice_ch_id else None
-        if voice_ch:
-            try: await interaction.user.move_to(voice_ch)
-            except: pass
+            voice_ch = interaction.guild.get_channel(int(self.voice_ch_id)) if self.voice_ch_id else None
+            if voice_ch:
+                try: await interaction.user.move_to(voice_ch)
+                except: pass
  
-        await _update_event_embed(interaction.guild, self.event_id)
-        await _log(interaction.guild, f'✅ **{interaction.user.display_name}** entrou no **Evento #{self.event_id:04d}**')
+            await _update_event_embed(interaction.guild, self.event_id)
+            await _log(interaction.guild, f'✅ **{interaction.user.display_name}** entrou no **Evento #{self.event_id:04d}**')
  
-        msg = '✅ Você entrou no evento! Movendo para a call...' if added else '🔄 Você já estava no evento. Movendo para a call...'
-        await interaction.response.send_message(msg, ephemeral=True)
+            msg = '✅ Você entrou no evento! Movendo para a call...' if added else '🔄 Você já estava no evento. Movendo para a call...'
+            await interaction.response.send_message(msg, ephemeral=True)
+        except Exception as e:
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(f'❌ Erro: {e}', ephemeral=True)
+            except Exception:
+                pass
  
  
 class FinalizeEventButton(discord.ui.Button):
@@ -154,22 +162,31 @@ class FinalizeEventButton(discord.ui.Button):
         self.voice_ch_id = voice_ch_id
  
     async def callback(self, interaction: discord.Interaction):
-        event = database.get_event(self.event_id)
-        if not event or event['status'] != 'active':
-            await interaction.response.send_message('❌ Evento não está mais ativo.', ephemeral=True)
-            return
+        try:
+            event = database.get_event(self.event_id)
+            if not event or event['status'] != 'active':
+                await interaction.response.send_message('❌ Evento não está mais ativo.', ephemeral=True)
+                return
  
-        is_creator = str(interaction.user.id) == str(event['creator_id'])
-        if not (is_creator or is_staff_up(interaction.user)):
-            await interaction.response.send_message('❌ Apenas **Staff+** ou o **criador** podem finalizar.', ephemeral=True)
-            return
+            is_creator = str(interaction.user.id) == str(event['creator_id'])
+            if not (is_creator or is_staff_up(interaction.user)):
+                await interaction.response.send_message('❌ Apenas **Staff+** ou o **criador** podem finalizar.', ephemeral=True)
+                return
  
-        await interaction.response.defer(ephemeral=True)
-        await _do_finalize(interaction.guild, self.event_id, interaction.user.display_name)
-        await interaction.followup.send(
-            f'✅ **Evento #{self.event_id:04d}** finalizado! Todos foram movidos para Aguardando-Evento.\n'
-            f'Use `/simular_evento` e `/depositar_evento` no canal do evento.', ephemeral=True
-        )
+            await interaction.response.defer(ephemeral=True)
+            await _do_finalize(interaction.guild, self.event_id, interaction.user.display_name)
+            await interaction.followup.send(
+                f'✅ **Evento #{self.event_id:04d}** finalizado!\n'
+                f'Use `/simular_evento` e `/depositar_evento` no canal do evento.', ephemeral=True
+            )
+        except Exception as e:
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(f'❌ Erro ao finalizar: {e}', ephemeral=True)
+                else:
+                    await interaction.followup.send(f'❌ Erro ao finalizar: {e}', ephemeral=True)
+            except Exception:
+                pass
  
  
 class ParticipateView(discord.ui.View):
@@ -321,31 +338,37 @@ async def _refresh_participar(guild):
  
  
 async def _do_finalize(guild, event_id, by_name):
-    event = database.get_event(event_id)
-    database.finish_event(event_id)
+    try:
+        event = database.get_event(event_id)
+        database.finish_event(event_id)
  
-    voice_ch_id = event['voice_channel_id']
-    if voice_ch_id:
-        voice_ch   = guild.get_channel(int(voice_ch_id))
-        aguardando = await _get_aguardando(guild)
-        if voice_ch and aguardando:
-            for member in list(voice_ch.members):
-                try: await member.move_to(aguardando)
+        voice_ch_id = event['voice_channel_id'] if event['voice_channel_id'] else ''
+        if voice_ch_id:
+            voice_ch   = guild.get_channel(int(voice_ch_id))
+            aguardando = await _get_aguardando(guild)
+            if voice_ch and aguardando:
+                for member in list(voice_ch.members):
+                    try: await member.move_to(aguardando)
+                    except: pass
+                await asyncio.sleep(1)
+            if voice_ch:
+                try: await voice_ch.delete()
                 except: pass
-            await asyncio.sleep(2)
-        if voice_ch:
-            try: await voice_ch.delete()
-            except: pass
  
-    cat_id = database.get_config('category_eventos_finalizados')
-    cat    = guild.get_channel(int(cat_id)) if cat_id else None
-    if event['channel_id']:
-        ev_ch = guild.get_channel(int(event['channel_id']))
-        if ev_ch and cat:
-            await ev_ch.edit(category=cat)
+        cat_id = database.get_config('category_eventos_finalizados')
+        cat    = guild.get_channel(int(cat_id)) if cat_id else None
+        if event['channel_id']:
+            ev_ch = guild.get_channel(int(event['channel_id']))
+            if ev_ch and cat:
+                try: await ev_ch.edit(category=cat)
+                except: pass
  
-    await _refresh_participar(guild)
-    await _log(guild, f'🏁 **{by_name}** finalizou o **Evento #{event_id:04d} — {event["title"]}**. Use `/depositar_evento` no canal do evento.')
+        await _refresh_participar(guild)
+        await _log(guild, f'🏁 **{by_name}** finalizou o **Evento #{event_id:04d} — {event["title"]}**.')
+        print(f'[events] Evento #{event_id} finalizado por {by_name}')
+    except Exception as e:
+        print(f'[events] Erro ao finalizar evento #{event_id}: {e}')
+        raise e
  
  
 # ── Aprovação no #financeiro ───────────────────────────────────────────────────

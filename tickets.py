@@ -1,3 +1,4 @@
+
 """
 tickets.py — Sistema de tickets com painéis separados por categoria
 """
@@ -32,13 +33,63 @@ class CloseTicketView(discord.ui.View):
  
     @discord.ui.button(label='🔒 Fechar Ticket', style=discord.ButtonStyle.danger, custom_id='xnm:fechar_ticket')
     async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message('🔒 Fechando em **5 segundos**...')
-        database.close_ticket_db(str(interaction.channel.id))
-        await asyncio.sleep(5)
         try:
-            await interaction.channel.delete()
-        except Exception:
-            pass
+            # Detecta o tipo do ticket pelo nome do canal
+            ch_name = interaction.channel.name.lower()
+            if 'recrutamento' in ch_name:
+                ticket_type = 'recrutamento'
+                archive_key = 'category_tickets_recrutamento_finalizado'
+                archive_name = '🎯 Tickets Recrutamento Finalizado'
+            elif 'suporte' in ch_name:
+                ticket_type = 'suporte'
+                archive_key = 'category_tickets_suporte_finalizado'
+                archive_name = '🆘 Tickets Suporte Finalizado'
+            else:
+                ticket_type = 'saque'
+                archive_key = 'category_tickets_saque_finalizado'
+                archive_name = '💰 Tickets Saldo Finalizado'
+ 
+            await interaction.response.send_message('🔒 Ticket encerrado! Movendo para o arquivo...')
+            database.close_ticket_db(str(interaction.channel.id))
+ 
+            # Busca ou cria categoria de arquivo
+            guild = interaction.guild
+            cat_id = database.get_config(archive_key)
+            category = guild.get_channel(int(cat_id)) if cat_id else None
+ 
+            if not category:
+                category = discord.utils.get(guild.categories, name=archive_name)
+            if not category:
+                category = await guild.create_category(archive_name)
+                database.set_config(archive_key, str(category.id))
+ 
+            # Remove botão de fechar e bloqueia envio de mensagens
+            for item in self.children:
+                item.disabled = True
+            await interaction.message.edit(view=self)
+ 
+            # Move para arquivo
+            overwrites = dict(interaction.channel.overwrites)
+            overwrites[guild.default_role] = discord.PermissionOverwrite(read_messages=False)
+            # Apenas quem já tinha acesso mantém, mas sem poder escrever
+            for target, ow in overwrites.items():
+                if target != guild.me:
+                    overwrites[target] = discord.PermissionOverwrite(
+                        read_messages=ow.read_messages,
+                        send_messages=False
+                    )
+ 
+            await interaction.channel.edit(
+                category=category,
+                overwrites=overwrites,
+                name=f'✅│{interaction.channel.name}'
+            )
+        except Exception as e:
+            print(f'[tickets] Erro ao arquivar ticket: {e}')
+            try:
+                await interaction.channel.delete()
+            except Exception:
+                pass
  
  
 class TicketButton(discord.ui.Button):

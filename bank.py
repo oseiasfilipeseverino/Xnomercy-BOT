@@ -246,5 +246,41 @@ class BankCog(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
  
  
+    # ── /mover_todos ───────────────────────────────────────────────────────────
+    @app_commands.command(name='mover_todos', description='Move todos os players de uma call para outra.')
+    @app_commands.describe(
+        origem ='Call de origem (onde estão os players)',
+        destino='Call de destino (para onde vão)'
+    )
+    async def mover_todos(self, interaction: discord.Interaction, origem: discord.VoiceChannel, destino: discord.VoiceChannel):
+        from permissions import has_permission
+        if not (is_financial(interaction.user) or has_permission(interaction.user, 'support_tickets')):
+            await interaction.response.send_message('❌ Apenas Staff ou superior.', ephemeral=True)
+            return
+ 
+        members = list(origem.members)
+        if not members:
+            await interaction.response.send_message(f'❌ Nenhum player em **{origem.name}**.', ephemeral=True)
+            return
+ 
+        await interaction.response.defer(ephemeral=True)
+        moved = 0
+        failed = 0
+        for member in members:
+            try:
+                await member.move_to(destino)
+                moved += 1
+            except Exception:
+                failed += 1
+ 
+        msg = f'✅ **{moved} player(s)** movidos de **{origem.name}** → **{destino.name}**!'
+        if failed:
+            msg += f'\n⚠️ {failed} player(s) não puderam ser movidos.'
+ 
+        await interaction.followup.send(msg, ephemeral=True)
+        await _log(interaction.guild,
+            f'🔀 **{interaction.user.display_name}** moveu **{moved} player(s)** de **{origem.name}** → **{destino.name}**')
+ 
+ 
 async def setup(bot):
     await bot.add_cog(BankCog(bot))

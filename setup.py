@@ -1,3 +1,4 @@
+
 """
 setup.py — Cria e configura TUDO automaticamente
 """

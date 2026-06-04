@@ -82,6 +82,35 @@ class WelcomeCog(commands.Cog):
             ephemeral=True
         )
  
+    @app_commands.command(name='testar_boas_vindas', description='[LÍDER] Testa o envio da mensagem de boas-vindas.')
+    @app_commands.describe(usuario='Usuário que vai receber o DM de teste')
+    async def testar_boas_vindas(self, interaction: discord.Interaction, usuario: discord.Member = None):
+        if not is_financial(interaction.user):
+            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            return
+ 
+        target = usuario or interaction.user
+        cfg = database.get_welcome_config()
+ 
+        if not cfg:
+            await interaction.response.send_message('❌ Configuração de boas-vindas não encontrada. Rode `/setup` primeiro.', ephemeral=True)
+            return
+ 
+        title   = cfg['title']
+        message = cfg['message'].replace('{mention}', target.mention).replace('{nome}', target.display_name)
+ 
+        embed = discord.Embed(title=title, description=message, color=discord.Color.gold())
+        embed.set_thumbnail(url=target.display_avatar.url)
+        embed.set_footer(text=f'XnoMercy Guild | Mensagem de boas-vindas')
+ 
+        try:
+            await target.send(embed=embed)
+            await interaction.response.send_message(f'✅ DM enviado para **{target.display_name}**!', ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(f'❌ **{target.display_name}** bloqueou DMs ou não permite mensagens de bots.', ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f'❌ Erro ao enviar: {str(e)}', ephemeral=True)
+ 
     @app_commands.command(name='configurar_boas_vindas', description='[LÍDER] Edita a mensagem de boas-vindas.')
     @app_commands.describe(
         titulo  ='Título da mensagem',
@@ -244,3 +273,4 @@ class WelcomeCog(commands.Cog):
  
 async def setup(bot):
     await bot.add_cog(WelcomeCog(bot))
+ 

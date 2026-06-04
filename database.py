@@ -1,44 +1,50 @@
 
 """
-database.py — PostgreSQL persistente (dados nunca são perdidos em atualizações)
+database.py — PostgreSQL com pg8000 (puro Python, sem dependências de sistema)
 """
  
 import os
-import psycopg2
-import psycopg2.extras
+import pg8000.dbapi
+from urllib.parse import urlparse
 from datetime import datetime
  
 DATABASE_URL = os.getenv('DATABASE_URL')
  
  
 def get_connection():
-    conn = psycopg2.connect(DATABASE_URL)
+    url = urlparse(DATABASE_URL)
+    conn = pg8000.dbapi.connect(
+        host=url.hostname,
+        port=url.port or 5432,
+        database=url.path[1:],
+        user=url.username,
+        password=url.password,
+        ssl_context=True
+    )
     return conn
  
  
-def fetchone(cursor):
-    row = cursor.fetchone()
-    return row
+def _row_to_dict(row, keys):
+    if not row:
+        return None
+    return dict(zip(keys, row))
  
  
 def init_db():
     conn = get_connection()
     c = conn.cursor()
  
-    # ── guild_config ───────────────────────────────────────────────────────────
     c.execute('''CREATE TABLE IF NOT EXISTS guild_config (
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL DEFAULT \'\'
     )''')
  
-    # ── permissions ────────────────────────────────────────────────────────────
     c.execute('''CREATE TABLE IF NOT EXISTS permissions (
         permission TEXT NOT NULL,
         role_name  TEXT NOT NULL,
         PRIMARY KEY (permission, role_name)
     )''')
  
-    # ── players ────────────────────────────────────────────────────────────────
     c.execute('''CREATE TABLE IF NOT EXISTS players (
         discord_id   TEXT PRIMARY KEY,
         username     TEXT NOT NULL,
@@ -47,7 +53,6 @@ def init_db():
         created_at   TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
  
-    # ── events ─────────────────────────────────────────────────────────────────
     c.execute('''CREATE TABLE IF NOT EXISTS events (
         id               SERIAL PRIMARY KEY,
         guild_id         TEXT NOT NULL,
@@ -66,7 +71,6 @@ def init_db():
         finished_at      TEXT DEFAULT \'\'
     )''')
  
-    # ── event_participants ─────────────────────────────────────────────────────
     c.execute('''CREATE TABLE IF NOT EXISTS event_participants (
         id         SERIAL PRIMARY KEY,
         event_id   INTEGER NOT NULL,
@@ -76,7 +80,6 @@ def init_db():
         UNIQUE(event_id, discord_id)
     )''')
  
-    # ── transactions ───────────────────────────────────────────────────────────
     c.execute('''CREATE TABLE IF NOT EXISTS transactions (
         id          SERIAL PRIMARY KEY,
         discord_id  TEXT NOT NULL,
@@ -87,7 +90,6 @@ def init_db():
         created_at  TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
  
-    # ── tickets ────────────────────────────────────────────────────────────────
     c.execute('''CREATE TABLE IF NOT EXISTS tickets (
         id          SERIAL PRIMARY KEY,
         channel_id  TEXT UNIQUE,
@@ -98,14 +100,12 @@ def init_db():
         created_at  TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
  
-    # ── ticket_messages ────────────────────────────────────────────────────────
     c.execute('''CREATE TABLE IF NOT EXISTS ticket_messages (
         ticket_type TEXT PRIMARY KEY,
         title       TEXT NOT NULL,
         message     TEXT NOT NULL
     )''')
  
-    # ── welcome_config ─────────────────────────────────────────────────────────
     c.execute('''CREATE TABLE IF NOT EXISTS welcome_config (
         id         INTEGER PRIMARY KEY,
         title      TEXT NOT NULL DEFAULT \'⚔️ Bem-vindo!\',
@@ -113,22 +113,22 @@ def init_db():
         channel_id TEXT DEFAULT \'\'
     )''')
  
-    # ── Defaults ───────────────────────────────────────────────────────────────
+    # Defaults
     config_defaults = [
-        ('guild_tax', '10'), ('vendor_tax', '5'), ('repair_tax', '3'),
-        ('setup_done', '0'), ('channel_criar_evento', ''), ('channel_participar', ''),
-        ('channel_financeiro', ''), ('channel_consultar_saldo', ''), ('channel_logs', ''),
-        ('channel_saidas_membros', ''), ('channel_tickets', ''), ('channel_boas_vindas', ''),
-        ('category_banco', ''), ('category_eventos_andamento', ''), ('category_eventos_finalizados', ''),
-        ('category_tickets_recrutamento', ''), ('category_tickets_suporte', ''), ('category_tickets_saque', ''),
-        ('category_tickets_recrutamento_finalizado', ''), ('category_tickets_suporte_finalizado', ''),
-        ('category_tickets_saque_finalizado', ''), ('category_eventos_voice', ''), ('voice_aguardando', ''),
+        ('guild_tax','10'),('vendor_tax','5'),('repair_tax','3'),('setup_done','0'),
+        ('channel_criar_evento',''),('channel_participar',''),('channel_financeiro',''),
+        ('channel_consultar_saldo',''),('channel_logs',''),('channel_saidas_membros',''),
+        ('channel_tickets',''),('channel_boas_vindas',''),('category_banco',''),
+        ('category_eventos_andamento',''),('category_eventos_finalizados',''),
+        ('category_tickets_recrutamento',''),('category_tickets_suporte',''),
+        ('category_tickets_saque',''),('category_tickets_recrutamento_finalizado',''),
+        ('category_tickets_suporte_finalizado',''),('category_tickets_saque_finalizado',''),
+        ('category_eventos_voice',''),('voice_aguardando',''),
     ]
     for key, value in config_defaults:
-        c.execute('INSERT INTO guild_config (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING', (key, value))
+        c.execute('INSERT INTO guild_config (key,value) VALUES (%s,%s) ON CONFLICT (key) DO NOTHING', (key, value))
  
-    # Permissões padrão
-    default_permissions = [
+    perm_defaults = [
         ('financial','Líder'),('financial','Vice Líder'),
         ('events','Líder'),('events','Vice Líder'),('events','Officer'),
         ('events','Sub Officer'),('events','Staff'),('events','Puxador de Conteúdo'),
@@ -142,34 +142,29 @@ def init_db():
         ('all','Líder'),('all','Vice Líder'),('all','Officer'),('all','Sub Officer'),
         ('all','Staff'),('all','Recrutador'),('all','Puxador de Conteúdo'),('all','Membro'),('all','Forasteiro'),
     ]
-    for perm, role in default_permissions:
-        c.execute('INSERT INTO permissions (permission, role_name) VALUES (%s, %s) ON CONFLICT DO NOTHING', (perm, role))
+    for perm, role in perm_defaults:
+        c.execute('INSERT INTO permissions (permission,role_name) VALUES (%s,%s) ON CONFLICT DO NOTHING', (perm, role))
  
-    # Mensagens padrão dos tickets
     ticket_defaults = [
-        ('recrutamento', '⚔️ Recrutamento XnoMercy',
-         'Bem-vindo ao processo de recrutamento!\n\n1. Seu nick no Albion\n2. Sua build principal\n3. Experiência com HCE/ZvZ/Raid\n4. Por que quer entrar na XnoMercy?'),
-        ('suporte', '🆘 Suporte XnoMercy',
-         'Ticket de suporte aberto!\n\nDescreva seu problema com detalhes. Um membro da liderança irá te ajudar!'),
-        ('saque', '💰 Solicitar Saque',
-         'Solicitação de saque!\n\n1. Seu nick no Albion\n2. Valor que deseja sacar\n3. Como prefere receber\n\nUse /meu-saldo para ver seu saldo atual.'),
+        ('recrutamento','⚔️ Recrutamento XnoMercy',
+         'Bem-vindo ao recrutamento!\n\n1. Nick no Albion\n2. Build principal\n3. Experiência com HCE/ZvZ/Raid\n4. Por que quer entrar na XnoMercy?'),
+        ('suporte','🆘 Suporte XnoMercy',
+         'Ticket de suporte aberto!\n\nDescreva seu problema. Um membro da liderança irá te ajudar!'),
+        ('saque','💰 Solicitar Saque',
+         'Solicitação de saque!\n\n1. Nick no Albion\n2. Valor que deseja sacar\n3. Como prefere receber\n\nUse /meu-saldo para ver seu saldo.'),
     ]
     for t, title, msg in ticket_defaults:
-        c.execute('INSERT INTO ticket_messages (ticket_type, title, message) VALUES (%s, %s, %s) ON CONFLICT (ticket_type) DO NOTHING', (t, title, msg))
+        c.execute('INSERT INTO ticket_messages (ticket_type,title,message) VALUES (%s,%s,%s) ON CONFLICT (ticket_type) DO NOTHING', (t, title, msg))
  
-    # Welcome config padrão
-    c.execute('''INSERT INTO welcome_config (id, title, message) VALUES (1, %s, %s)
-                 ON CONFLICT (id) DO NOTHING''',
+    c.execute('''INSERT INTO welcome_config (id,title,message) VALUES (1,%s,%s) ON CONFLICT (id) DO NOTHING''',
               ('⚔️ Bem-vindo à XnoMercy!',
-               'Olá {nome}! Seja bem-vindo ao servidor da guild **XnoMercy** no Albion Online! 🎮\n\n'
-               '⚔️ Somos uma guild competitiva focada em ZvZ, HCE e Raids.\n\n'
+               'Olá {nome}! Bem-vindo ao servidor da guild **XnoMercy** no Albion Online! 🎮\n\n'
                '📋 **Por onde começar:**\n• Abra um ticket de **Recrutamento** para entrar na guild\n'
-               '• Use `/meu-saldo` para consultar seu saldo\n\n'
-               '⚔️ *No Mercy, No Retreat — XnoMercy!*'))
+               '• Use `/meu-saldo` para consultar seu saldo\n\n⚔️ *No Mercy, No Retreat!*'))
  
     conn.commit()
     conn.close()
-    print('[DB] PostgreSQL inicializado com sucesso!')
+    print('[DB] PostgreSQL inicializado!')
  
  
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -185,7 +180,7 @@ def get_config(key: str) -> str:
 def set_config(key: str, value: str):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('INSERT INTO guild_config (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = %s', (key, value, value))
+    c.execute('INSERT INTO guild_config (key,value) VALUES (%s,%s) ON CONFLICT (key) DO UPDATE SET value=%s', (key, value, value))
     conn.commit()
     conn.close()
  
@@ -193,14 +188,14 @@ def save_guild_config(config_dict: dict):
     conn = get_connection()
     c = conn.cursor()
     for key, value in config_dict.items():
-        c.execute('INSERT INTO guild_config (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = %s', (key, value, value))
+        c.execute('INSERT INTO guild_config (key,value) VALUES (%s,%s) ON CONFLICT (key) DO UPDATE SET value=%s', (key, value, value))
     conn.commit()
     conn.close()
  
  
 # ── Permissions ────────────────────────────────────────────────────────────────
  
-def get_permission_roles(permission: str) -> list[str]:
+def get_permission_roles(permission: str) -> list:
     conn = get_connection()
     c = conn.cursor()
     c.execute('SELECT role_name FROM permissions WHERE permission = %s', (permission,))
@@ -211,14 +206,14 @@ def get_permission_roles(permission: str) -> list[str]:
 def add_permission_role(permission: str, role_name: str):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('INSERT INTO permissions (permission, role_name) VALUES (%s, %s) ON CONFLICT DO NOTHING', (permission, role_name))
+    c.execute('INSERT INTO permissions (permission,role_name) VALUES (%s,%s) ON CONFLICT DO NOTHING', (permission, role_name))
     conn.commit()
     conn.close()
  
 def remove_permission_role(permission: str, role_name: str):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('DELETE FROM permissions WHERE permission = %s AND role_name = %s', (permission, role_name))
+    c.execute('DELETE FROM permissions WHERE permission=%s AND role_name=%s', (permission, role_name))
     conn.commit()
     conn.close()
  
@@ -239,14 +234,14 @@ def get_all_permissions() -> dict:
 def ensure_player(discord_id: str, username: str):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('INSERT INTO players (discord_id, username) VALUES (%s, %s) ON CONFLICT (discord_id) DO UPDATE SET username = %s', (discord_id, username, username))
+    c.execute('INSERT INTO players (discord_id,username) VALUES (%s,%s) ON CONFLICT (discord_id) DO UPDATE SET username=%s', (discord_id, username, username))
     conn.commit()
     conn.close()
  
 def get_player_balance(discord_id: str) -> float:
     conn = get_connection()
     c = conn.cursor()
-    c.execute('SELECT balance FROM players WHERE discord_id = %s', (discord_id,))
+    c.execute('SELECT balance FROM players WHERE discord_id=%s', (discord_id,))
     row = c.fetchone()
     conn.close()
     return float(row[0]) if row else 0.0
@@ -266,9 +261,9 @@ def update_player_balance(discord_id: str, username: str, amount: float):
     ensure_player(discord_id, username)
     conn = get_connection()
     c = conn.cursor()
-    c.execute('UPDATE players SET balance = balance + %s WHERE discord_id = %s', (amount, discord_id))
+    c.execute('UPDATE players SET balance=balance+%s WHERE discord_id=%s', (amount, discord_id))
     if amount > 0:
-        c.execute('UPDATE players SET total_earned = total_earned + %s WHERE discord_id = %s', (amount, discord_id))
+        c.execute('UPDATE players SET total_earned=total_earned+%s WHERE discord_id=%s', (amount, discord_id))
     conn.commit()
     conn.close()
  
@@ -276,7 +271,7 @@ def set_player_balance(discord_id: str, username: str, amount: float):
     ensure_player(discord_id, username)
     conn = get_connection()
     c = conn.cursor()
-    c.execute('UPDATE players SET balance = %s WHERE discord_id = %s', (amount, discord_id))
+    c.execute('UPDATE players SET balance=%s WHERE discord_id=%s', (amount, discord_id))
     conn.commit()
     conn.close()
  
@@ -291,26 +286,24 @@ def get_all_balances():
  
 # ── Events ─────────────────────────────────────────────────────────────────────
  
+EVENT_KEYS = ['id','guild_id','channel_id','voice_channel_id','creator_id','creator_name',
+              'title','status','total_value','repair_value','net_value','approved_by',
+              'approved_at','created_at','finished_at']
+ 
 def create_event(guild_id: str, creator_id: str, creator_name: str, title: str) -> int:
     conn = get_connection()
     c = conn.cursor()
-    c.execute('INSERT INTO events (guild_id, creator_id, creator_name, title) VALUES (%s, %s, %s, %s) RETURNING id',
+    c.execute('INSERT INTO events (guild_id,creator_id,creator_name,title) VALUES (%s,%s,%s,%s) RETURNING id',
               (guild_id, creator_id, creator_name, title))
     event_id = c.fetchone()[0]
     conn.commit()
     conn.close()
     return event_id
  
-def _row_to_dict(row, keys):
-    if not row: return None
-    return dict(zip(keys, row))
- 
-EVENT_KEYS = ['id','guild_id','channel_id','voice_channel_id','creator_id','creator_name','title','status','total_value','repair_value','net_value','approved_by','approved_at','created_at','finished_at']
- 
 def get_event(event_id: int):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('SELECT * FROM events WHERE id = %s', (event_id,))
+    c.execute('SELECT * FROM events WHERE id=%s', (event_id,))
     row = c.fetchone()
     conn.close()
     return _row_to_dict(row, EVENT_KEYS)
@@ -318,7 +311,7 @@ def get_event(event_id: int):
 def get_event_by_channel(channel_id: str):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('SELECT * FROM events WHERE channel_id = %s ORDER BY id DESC LIMIT 1', (channel_id,))
+    c.execute('SELECT * FROM events WHERE channel_id=%s ORDER BY id DESC LIMIT 1', (channel_id,))
     row = c.fetchone()
     conn.close()
     return _row_to_dict(row, EVENT_KEYS)
@@ -326,15 +319,7 @@ def get_event_by_channel(channel_id: str):
 def get_active_events(guild_id: str):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT * FROM events WHERE guild_id = %s AND status = 'active' ORDER BY id DESC", (guild_id,))
-    rows = c.fetchall()
-    conn.close()
-    return [_row_to_dict(r, EVENT_KEYS) for r in rows]
- 
-def get_pending_events(guild_id: str):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT * FROM events WHERE guild_id = %s AND status = 'pending' ORDER BY id DESC", (guild_id,))
+    c.execute("SELECT * FROM events WHERE guild_id=%s AND status='active' ORDER BY id DESC", (guild_id,))
     rows = c.fetchall()
     conn.close()
     return [_row_to_dict(r, EVENT_KEYS) for r in rows]
@@ -342,40 +327,40 @@ def get_pending_events(guild_id: str):
 def update_event_channel(event_id: int, channel_id: str):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('UPDATE events SET channel_id = %s WHERE id = %s', (channel_id, event_id))
+    c.execute('UPDATE events SET channel_id=%s WHERE id=%s', (channel_id, event_id))
     conn.commit()
     conn.close()
  
 def update_event_voice(event_id: int, voice_channel_id: str):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('UPDATE events SET voice_channel_id = %s WHERE id = %s', (voice_channel_id, event_id))
+    c.execute('UPDATE events SET voice_channel_id=%s WHERE id=%s', (voice_channel_id, event_id))
     conn.commit()
     conn.close()
  
 def finish_event(event_id: int):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("UPDATE events SET status = 'finished', finished_at = %s WHERE id = %s", (datetime.now().isoformat(), event_id))
+    c.execute("UPDATE events SET status='finished', finished_at=%s WHERE id=%s", (datetime.now().isoformat(), event_id))
     conn.commit()
     conn.close()
  
 def deposit_event(event_id: int, total: float, repair: float, net: float):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("UPDATE events SET status = 'pending', total_value = %s, repair_value = %s, net_value = %s WHERE id = %s", (total, repair, net, event_id))
+    c.execute("UPDATE events SET status='pending', total_value=%s, repair_value=%s, net_value=%s WHERE id=%s", (total, repair, net, event_id))
     conn.commit()
     conn.close()
  
 def approve_event(event_id: int, approved_by: str):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("UPDATE events SET status = 'approved', approved_by = %s, approved_at = %s WHERE id = %s", (approved_by, datetime.now().isoformat(), event_id))
+    c.execute("UPDATE events SET status='approved', approved_by=%s, approved_at=%s WHERE id=%s", (approved_by, datetime.now().isoformat(), event_id))
     conn.commit()
     conn.close()
  
  
-# ── Event Participants ──────────────────────────────────────────────────────────
+# ── Participants ───────────────────────────────────────────────────────────────
  
 PART_KEYS = ['id','event_id','discord_id','username','share']
  
@@ -383,14 +368,13 @@ def add_event_participant(event_id: int, discord_id: str, username: str, weight:
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute('INSERT INTO event_participants (event_id, discord_id, username, share) VALUES (%s, %s, %s, %s)',
-                  (event_id, discord_id, username, weight))
+        c.execute('INSERT INTO event_participants (event_id,discord_id,username,share) VALUES (%s,%s,%s,%s)', (event_id, discord_id, username, weight))
         conn.commit()
         conn.close()
         return True
     except Exception:
         conn.rollback()
-        c.execute('UPDATE event_participants SET username = %s WHERE event_id = %s AND discord_id = %s', (username, event_id, discord_id))
+        c.execute('UPDATE event_participants SET username=%s WHERE event_id=%s AND discord_id=%s', (username, event_id, discord_id))
         conn.commit()
         conn.close()
         return False
@@ -398,7 +382,7 @@ def add_event_participant(event_id: int, discord_id: str, username: str, weight:
 def remove_event_participant(event_id: int, discord_id: str) -> bool:
     conn = get_connection()
     c = conn.cursor()
-    c.execute('DELETE FROM event_participants WHERE event_id = %s AND discord_id = %s', (event_id, discord_id))
+    c.execute('DELETE FROM event_participants WHERE event_id=%s AND discord_id=%s', (event_id, discord_id))
     changed = c.rowcount > 0
     conn.commit()
     conn.close()
@@ -407,7 +391,7 @@ def remove_event_participant(event_id: int, discord_id: str) -> bool:
 def get_event_participants(event_id: int):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('SELECT * FROM event_participants WHERE event_id = %s', (event_id,))
+    c.execute('SELECT * FROM event_participants WHERE event_id=%s', (event_id,))
     rows = c.fetchall()
     conn.close()
     return [_row_to_dict(r, PART_KEYS) for r in rows]
@@ -415,7 +399,7 @@ def get_event_participants(event_id: int):
 def set_participant_weight(event_id: int, discord_id: str, weight: float):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('UPDATE event_participants SET share = %s WHERE event_id = %s AND discord_id = %s', (weight, event_id, discord_id))
+    c.execute('UPDATE event_participants SET share=%s WHERE event_id=%s AND discord_id=%s', (weight, event_id, discord_id))
     conn.commit()
     conn.close()
  
@@ -425,8 +409,7 @@ def set_participant_weight(event_id: int, discord_id: str, weight: float):
 def add_transaction(discord_id: str, amount: float, type_: str, description: str, created_by: str = ''):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('INSERT INTO transactions (discord_id, amount, type, description, created_by) VALUES (%s, %s, %s, %s, %s)',
-              (discord_id, amount, type_, description, created_by))
+    c.execute('INSERT INTO transactions (discord_id,amount,type,description,created_by) VALUES (%s,%s,%s,%s,%s)', (discord_id, amount, type_, description, created_by))
     conn.commit()
     conn.close()
  
@@ -436,7 +419,7 @@ def add_transaction(discord_id: str, amount: float, type_: str, description: str
 def get_ticket_message(ticket_type: str):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('SELECT ticket_type, title, message FROM ticket_messages WHERE ticket_type = %s', (ticket_type,))
+    c.execute('SELECT ticket_type, title, message FROM ticket_messages WHERE ticket_type=%s', (ticket_type,))
     row = c.fetchone()
     conn.close()
     return {'ticket_type': row[0], 'title': row[1], 'message': row[2]} if row else None
@@ -444,30 +427,28 @@ def get_ticket_message(ticket_type: str):
 def set_ticket_message(ticket_type: str, title: str, message: str):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('INSERT INTO ticket_messages (ticket_type, title, message) VALUES (%s, %s, %s) ON CONFLICT (ticket_type) DO UPDATE SET title = %s, message = %s',
-              (ticket_type, title, message, title, message))
+    c.execute('INSERT INTO ticket_messages (ticket_type,title,message) VALUES (%s,%s,%s) ON CONFLICT (ticket_type) DO UPDATE SET title=%s, message=%s', (ticket_type, title, message, title, message))
     conn.commit()
     conn.close()
  
 def create_ticket(channel_id: str, discord_id: str, username: str, ticket_type: str):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('INSERT INTO tickets (channel_id, discord_id, username, ticket_type) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING',
-              (channel_id, discord_id, username, ticket_type))
+    c.execute('INSERT INTO tickets (channel_id,discord_id,username,ticket_type) VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING', (channel_id, discord_id, username, ticket_type))
     conn.commit()
     conn.close()
  
 def close_ticket_db(channel_id: str):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("UPDATE tickets SET status = 'closed' WHERE channel_id = %s", (channel_id,))
+    c.execute("UPDATE tickets SET status='closed' WHERE channel_id=%s", (channel_id,))
     conn.commit()
     conn.close()
  
 def get_open_ticket(discord_id: str, ticket_type: str):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT channel_id FROM tickets WHERE discord_id = %s AND ticket_type = %s AND status = 'open'", (discord_id, ticket_type))
+    c.execute("SELECT channel_id FROM tickets WHERE discord_id=%s AND ticket_type=%s AND status='open'", (discord_id, ticket_type))
     row = c.fetchone()
     conn.close()
     return {'channel_id': row[0]} if row else None
@@ -478,7 +459,7 @@ def get_open_ticket(discord_id: str, ticket_type: str):
 def get_welcome_config():
     conn = get_connection()
     c = conn.cursor()
-    c.execute('SELECT id, title, message, channel_id FROM welcome_config WHERE id = 1')
+    c.execute('SELECT id, title, message, channel_id FROM welcome_config WHERE id=1')
     row = c.fetchone()
     conn.close()
     return {'id': row[0], 'title': row[1], 'message': row[2], 'channel_id': row[3]} if row else None
@@ -486,14 +467,14 @@ def get_welcome_config():
 def set_welcome_config(title: str, message: str, channel_id: str = ''):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('INSERT INTO welcome_config (id, title, message, channel_id) VALUES (1, %s, %s, %s) ON CONFLICT (id) DO UPDATE SET title = %s, message = %s, channel_id = %s',
-              (title, message, channel_id, title, message, channel_id))
+    c.execute('INSERT INTO welcome_config (id,title,message,channel_id) VALUES (1,%s,%s,%s) ON CONFLICT (id) DO UPDATE SET title=%s, message=%s, channel_id=%s', (title, message, channel_id, title, message, channel_id))
     conn.commit()
     conn.close()
  
 def set_welcome_channel(channel_id: str):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('UPDATE welcome_config SET channel_id = %s WHERE id = 1', (channel_id,))
+    c.execute('UPDATE welcome_config SET channel_id=%s WHERE id=1', (channel_id,))
     conn.commit()
     conn.close()
+ 

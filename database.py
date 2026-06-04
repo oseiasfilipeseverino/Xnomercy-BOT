@@ -66,7 +66,7 @@ def init_db():
         event_id   INTEGER NOT NULL,
         discord_id TEXT NOT NULL,
         username   TEXT NOT NULL,
-        share      REAL DEFAULT 0.0,
+        share      REAL DEFAULT 100.0,
         FOREIGN KEY (event_id) REFERENCES events(id),
         UNIQUE(event_id, discord_id)
     )''')
@@ -369,6 +369,15 @@ def create_event(guild_id: str, creator_id: str, creator_name: str, title: str) 
     conn.commit()
     conn.close()
     return eid
+ 
+def get_event_by_channel(channel_id: str):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM events WHERE channel_id = ? ORDER BY id DESC LIMIT 1",
+        (channel_id,)
+    ).fetchone()
+    conn.close()
+    return row
  
 def get_event(event_id: int):
     conn = get_connection()

@@ -82,6 +82,9 @@ class CreateEventModal(discord.ui.Modal, title='Criar Evento'):
         )
         database.update_event_voice(event_id, str(voice_ch.id))
  
+        # Adiciona o puxador como participante com 100% por padrão
+        database.add_event_participant(event_id, str(interaction.user.id), interaction.user.display_name, 100.0)
+ 
         # Move criador para a call
         try: await interaction.user.move_to(voice_ch)
         except: pass
@@ -186,7 +189,7 @@ class EventManageView(discord.ui.View):
     def __init__(self, event_id: int):
         super().__init__(timeout=None)
         self.event_id = event_id
-    # Sem botões — use /alterar_participacao para adicionar/remover players
+    # Sem botões — use /atualizar_participacao para adicionar/remover players
  
  
 class AddPlayerModal(discord.ui.Modal, title='Adicionar Player'):
@@ -257,7 +260,7 @@ def _build_event_embed(event_id, title, creator, participants):
     embed.add_field(
         name='📌 Comandos disponíveis',
         value=(
-            '`/alterar_participacao @player valor` — alterar participação\n'
+            '`/atualizar_participacao @player valor` — alterar participação\n'
             '`/simular_evento valor reparo` — simular distribuição\n'
             '`/depositar_evento valor reparo` — enviar para aprovação'
         ),
@@ -426,10 +429,10 @@ class EventsCog(commands.Cog):
             except Exception as e:
                 print(f'[events] Erro ao restaurar painel: {e}')
  
-    # ── /alterar_participacao ──────────────────────────────────────────────────
-    @app_commands.command(name='alterar_participacao', description='Define a participação de um player. Use 0 para excluí-lo da distribuição.')
+    # ── /atualizar_participacao ──────────────────────────────────────────────────
+    @app_commands.command(name='atualizar_participacao', description='Define a participação de um player. Use 0 para excluí-lo da distribuição.')
     @app_commands.describe(usuario='Player', valor='Participação de 0 a 100 (0 = excluído da distribuição)')
-    async def alterar_participacao(self, interaction: discord.Interaction, usuario: discord.Member, valor: int):
+    async def atualizar_participacao(self, interaction: discord.Interaction, usuario: discord.Member, valor: int):
         try:
             if not (can_manage_events(interaction.user) or is_staff_up(interaction.user)):
                 await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
@@ -582,4 +585,3 @@ class EventsCog(commands.Cog):
  
 async def setup(bot):
     await bot.add_cog(EventsCog(bot))
- 

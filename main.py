@@ -1,3 +1,4 @@
+in · PY
 import asyncio
 import os
 import discord
@@ -20,19 +21,19 @@ async def on_ready():
     database.init_db()
     print(f'✅  XnoMercy Bot online como {bot.user}')
     try:
-        # Limpa TODOS os comandos globais antigos
+        # Remove comandos globais antigos
         bot.tree.clear_commands(guild=None)
         await bot.tree.sync()
         print('🧹  Comandos globais antigos removidos.')
  
-        # Sincroniza comandos novos em cada servidor
+        # Sincroniza em cada servidor imediatamente
         for guild in bot.guilds:
             bot.tree.clear_commands(guild=guild)
-            await bot.tree.copy_global_to(guild=guild)
+            bot.tree.copy_global_to(guild=guild)  # sem await
             synced = await bot.tree.sync(guild=guild)
-            print(f'✅  {len(synced)} comandos sincronizados em: {guild.name}')
+            print(f'✅  {len(synced)} comandos em: {guild.name}')
     except Exception as e:
-        print(f'❌  Erro ao sincronizar: {e}')
+        print(f'❌  Erro: {e}')
  
 async def main():
     async with bot:

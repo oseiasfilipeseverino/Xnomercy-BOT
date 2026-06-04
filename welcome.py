@@ -1,32 +1,32 @@
 """
 cogs/welcome.py — Boas-vindas automáticas + comando de configuração
 """
-
+ 
 import discord
 from discord import app_commands
 from discord.ext import commands
-
+ 
 import database
 from permissions import is_financial
-
-
+ 
+ 
 class WelcomeCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-
+ 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
         cfg = database.get_welcome_config()
         if not cfg:
             return
-
+ 
         title   = cfg['title']
         message = cfg['message'].replace('{mention}', member.mention).replace('{nome}', member.display_name)
-
+ 
         embed = discord.Embed(title=title, description=message, color=discord.Color.gold())
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.set_footer(text=f'XnoMercy Guild | {member.guild.member_count} membros')
-
+ 
         # Canal de boas-vindas
         ch_id = cfg['channel_id'] or database.get_config('channel_boas_vindas')
         if ch_id:
@@ -36,7 +36,7 @@ class WelcomeCog(commands.Cog):
                     await ch.send(embed=embed)
                 except Exception:
                     pass
-
+ 
         # DM para o novo membro
         try:
             dm = discord.Embed(
@@ -48,7 +48,7 @@ class WelcomeCog(commands.Cog):
             await member.send(embed=dm)
         except Exception:
             pass
-
+ 
     @app_commands.command(name='configurar_boas_vindas', description='[LÍDER] Edita a mensagem de boas-vindas.')
     @app_commands.describe(
         titulo  ='Título da mensagem',
@@ -65,10 +65,10 @@ class WelcomeCog(commands.Cog):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
-
+ 
         ch_id = str(canal.id) if canal else database.get_config('channel_boas_vindas')
         database.set_welcome_config(titulo, mensagem.replace('\\n', '\n'), ch_id)
-
+ 
         embed = discord.Embed(
             title='✅ Boas-vindas Atualizada',
             description=f'**Título:** {titulo}\n\n**Mensagem:**\n{mensagem.replace("{chr(10)}", chr(10))}',
@@ -77,7 +77,7 @@ class WelcomeCog(commands.Cog):
         if canal:
             embed.add_field(name='Canal', value=canal.mention, inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
+ 
     @app_commands.command(name='configurar_permissao', description='[LÍDER] Adiciona ou remove cargo de uma permissão.')
     @app_commands.describe(
         acao      ='Adicionar ou remover',
@@ -109,25 +109,25 @@ class WelcomeCog(commands.Cog):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
-
+ 
         if acao == 'add':
             database.add_permission_role(permissao, cargo.name)
             msg = f'✅ Cargo **{cargo.name}** adicionado à permissão **{permissao}**!'
         else:
             database.remove_permission_role(permissao, cargo.name)
             msg = f'✅ Cargo **{cargo.name}** removido da permissão **{permissao}**!'
-
+ 
         await interaction.response.send_message(msg, ephemeral=True)
-
+ 
     @app_commands.command(name='ver_permissoes', description='[LÍDER] Ver todas as permissões configuradas.')
     async def ver_permissoes(self, interaction: discord.Interaction):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
-
+ 
         all_perms = database.get_all_permissions()
         embed = discord.Embed(title='⚙️ Permissões Configuradas', color=discord.Color.blurple())
-
+ 
         labels = {
             'financial':      '💰 Financeiro',
             'events':         '⚔️ Eventos',
@@ -137,7 +137,7 @@ class WelcomeCog(commands.Cog):
             'members':        '👥 Membros',
             'all':            '🌐 Todos',
         }
-
+ 
         for key, label in labels.items():
             roles = all_perms.get(key, [])
             embed.add_field(
@@ -145,9 +145,44 @@ class WelcomeCog(commands.Cog):
                 value=', '.join(f'`{r}`' for r in roles) if roles else '_Nenhum_',
                 inline=False
             )
-
+ 
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
+ 
+ 
 async def setup(bot):
     await bot.add_cog(WelcomeCog(bot))
+ 
+ 
+    @app_commands.command(name='configurar_canal', description='[LÍDER] Aponta uma função do bot para um canal existente.')
+    @app_commands.describe(funcao='Função do bot', canal='Canal existente no servidor')
+    @app_commands.choices(funcao=[
+        app_commands.Choice(name='💰 Financeiro',        value='channel_financeiro'),
+        app_commands.Choice(name='📋 Logs',              value='channel_logs'),
+        app_commands.Choice(name='🚪 Saídas de Membros', value='channel_saidas_membros'),
+        app_commands.Choice(name='💎 Consultar Saldo',   value='channel_consultar_saldo'),
+        app_commands.Choice(name='⚔️ Criar Evento',      value='channel_criar_evento'),
+        app_commands.Choice(name='👥 Participar',        value='channel_participar'),
+        app_commands.Choice(name='👋 Boas-vindas',       value='channel_boas_vindas'),
+    ])
+    async def configurar_canal(self, interaction: discord.Interaction, funcao: str, canal: discord.TextChannel):
+        if not is_financial(interaction.user):
+            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            return
+ 
+        database.set_config(funcao, str(canal.id))
+ 
+        nomes = {
+            'channel_financeiro':       '💰 Financeiro',
+            'channel_logs':             '📋 Logs',
+            'channel_saidas_membros':   '🚪 Saídas de Membros',
+            'channel_consultar_saldo':  '💎 Consultar Saldo',
+            'channel_criar_evento':     '⚔️ Criar Evento',
+            'channel_participar':       '👥 Participar',
+            'channel_boas_vindas':      '👋 Boas-vindas',
+        }
+ 
+        await interaction.response.send_message(
+            f'✅ **{nomes[funcao]}** agora aponta para {canal.mention}!',
+            ephemeral=True
+        )
+ 

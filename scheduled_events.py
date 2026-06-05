@@ -1,6 +1,5 @@
 """
 scheduled_events.py — Eventos agendados com slots
-Player digita numero para entrar, numero negativo para sair
 """
 
 import asyncio
@@ -21,9 +20,11 @@ def parse_slots(slots_json):
         return []
 
 
-def build_event_embed(event, assignments):
+def build_embed(event, assignments):
     slots      = parse_slots(event['slots'])
     assign_map = {a['slot_number']: a['username'] for a in assignments}
+    filled     = len(assign_map)
+    total      = len(slots)
 
     try:
         dt = datetime.fromisoformat(event['scheduled_time'])
@@ -33,43 +34,39 @@ def build_event_embed(event, assignments):
     except Exception:
         time_str = str(event['scheduled_time'])
 
-    filled = len(assign_map)
-    total  = len(slots)
-
-    embed = discord.Embed(
-        title=f"⚔️ {event['title']}",
-        color=discord.Color.purple()
-    )
+    embed = discord.Embed(title='⚔️ ' + event['title'], color=discord.Color.purple())
 
     if event.get('description'):
-        embed.description = f"📍 {event['description']}"
+        embed.description = '📍 ' + event['description']
 
-    embed.add_field(name='🕐 Horário', value=time_str, inline=True)
-    embed.add_field(name='👥 Inscritos', value=f'{filled}/{total}', inline=True)
+    embed.add_field(name='🕐 Horario', value=time_str, inline=True)
+    embed.add_field(name='👥 Inscritos', value=str(filled) + '/' + str(total), inline=True)
     embed.add_field(name='\u200b', value='\u200b', inline=True)
     embed.add_field(
         name='📋 Como participar',
-        value='Digite o **número** do slot → entrar\nDigite **-número** → sair\nCada player pode ter apenas **1 slot**',
+        value='Digite o **numero** do slot para entrar\nDigite **-numero** para sair\nCada player pode ter apenas **1 slot**',
         inline=False
     )
 
-    # Lista de slots em formato limpo
     if slots:
         col1, col2, col3 = [], [], []
         for i, slot in enumerate(slots, 1):
-            player   = assign_map.get(i)
-            name_str = slot.get('name', f'Slot {i}') or f'Slot {i}'
-            status   = f'`{player}`' if player else '`Vazio`'
-            entry    = f'**{i}.** {name_str}\n{status}'
-            if i % 3 == 1:   col1.append(entry)
-            elif i % 3 == 2: col2.append(entry)
-            else:             col3.append(entry)
+            player    = assign_map.get(i)
+            slot_name = slot.get('name') or ('Slot ' + str(i))
+            status    = '`' + player + '`' if player else '`Vazio`'
+            entry     = '**' + str(i) + '.** ' + slot_name + '\n' + status
+            if i % 3 == 1:
+                col1.append(entry)
+            elif i % 3 == 2:
+                col2.append(entry)
+            else:
+                col3.append(entry)
 
         if col1: embed.add_field(name='\u200b', value='\n\n'.join(col1), inline=True)
         if col2: embed.add_field(name='\u200b', value='\n\n'.join(col2), inline=True)
         if col3: embed.add_field(name='\u200b', value='\n\n'.join(col3), inline=True)
 
-    embed.set_footer(text=f'ID: {event["id"]} | XnoMercy Guild')
+    embed.set_footer(text='ID: ' + str(event['id']) + ' | XnoMercy Guild')
     return embed
 
 
@@ -81,6 +78,7 @@ class ScheduledEventsCog(commands.Cog):
     def cog_unload(self):
         self.notification_task.cancel()
 
+    # ── Ouve mensagens nos topicos ─────────────────────────────────────────────
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author.bot:
@@ -89,16 +87,15 @@ class ScheduledEventsCog(commands.Cog):
             return
 
         content = message.content.strip()
-        print(f'[slots] Mensagem em thread {message.channel.id}: "{content}" de {message.author.display_name}')
+        print('[slots] Mensagem thread ' + str(message.channel.id) + ': "' + content + '" de ' + message.author.display_name)
 
         try:
             num = int(content)
         except ValueError:
-            return  # Não é número, ignora
+            return
 
-        # Busca evento pelo thread
         event = database.get_scheduled_event_by_thread(str(message.channel.id))
-        print(f'[slots] Evento encontrado: {bool(event)} para thread {message.channel.id}')
+        print('[slots] Evento encontrado: ' + str(bool(event)))
         if not event:
             return
 
@@ -106,7 +103,7 @@ class ScheduledEventsCog(commands.Cog):
         abs_num = abs(num)
 
         if abs_num < 1 or abs_num > len(slots):
-            reply = await message.reply(f'❌ Slot inválido. Escolha entre 1 e {len(slots)}.', mention_author=False)
+            reply = await message.reply('❌ Slot invalido. Escolha entre 1 e ' + str(len(slots)) + '.', mention_author=False)
             await asyncio.sleep(6)
             try: await reply.delete()
             except: pass
@@ -124,7 +121,7 @@ class ScheduledEventsCog(commands.Cog):
             elif result == 'has_slot':
                 current = database.get_player_slot(event['id'], discord_id)
                 reply = await message.reply(
-                    f'❌ Você já está no slot **{current}**. Digite **-{current}** para sair primeiro.',
+                    '❌ Voce ja esta no slot **' + str(current) + '**. Digite **-' + str(current) + '** para sair primeiro.',
                     mention_author=False
                 )
                 await asyncio.sleep(8)
@@ -134,7 +131,7 @@ class ScheduledEventsCog(commands.Cog):
                 except: pass
                 return
             else:
-                reply = await message.reply(f'❌ Slot **{num}** já está ocupado!', mention_author=False)
+                reply = await message.reply('❌ Slot **' + str(num) + '** ja esta ocupado!', mention_author=False)
                 await asyncio.sleep(6)
                 try: await reply.delete()
                 except: pass
@@ -146,7 +143,7 @@ class ScheduledEventsCog(commands.Cog):
             if removed:
                 await message.add_reaction('👋')
             else:
-                reply = await message.reply(f'❌ Você não está no slot **{abs_num}**.', mention_author=False)
+                reply = await message.reply('❌ Voce nao esta no slot **' + str(abs_num) + '**.', mention_author=False)
                 await asyncio.sleep(6)
                 try: await reply.delete()
                 except: pass
@@ -154,14 +151,13 @@ class ScheduledEventsCog(commands.Cog):
                 except: pass
                 return
 
-        # Atualiza embed
         await self._update_embed(event['id'])
 
     async def _update_embed(self, event_id):
         try:
             event       = database.get_scheduled_event(event_id)
             assignments = database.get_slot_assignments(event_id)
-            embed       = build_event_embed(event, assignments)
+            embed       = build_embed(event, assignments)
 
             if not event.get('message_id') or not event.get('channel_id'):
                 return
@@ -173,8 +169,9 @@ class ScheduledEventsCog(commands.Cog):
             msg = await channel.fetch_message(int(event['message_id']))
             await msg.edit(embed=embed)
         except Exception as e:
-            print(f'[scheduled_events] Erro ao atualizar embed: {e}')
+            print('[scheduled_events] Erro ao atualizar embed: ' + str(e))
 
+    # ── Notificacoes ───────────────────────────────────────────────────────────
     @tasks.loop(minutes=1)
     async def notification_task(self):
         try:
@@ -194,13 +191,12 @@ class ScheduledEventsCog(commands.Cog):
                 if 29 <= diff <= 31 and not event['notify_30']:
                     await self._notify(event, 30)
                     database.update_scheduled_event_notify(event['id'], notify_30=1)
-
                 elif 14 <= diff <= 16 and not event['notify_15']:
                     await self._notify(event, 15)
                     database.update_scheduled_event_notify(event['id'], notify_15=1)
 
         except Exception as e:
-            print(f'[scheduled_events] Erro na task: {e}')
+            print('[scheduled_events] Erro na task: ' + str(e))
 
     @notification_task.before_loop
     async def before_loop(self):
@@ -212,8 +208,8 @@ class ScheduledEventsCog(commands.Cog):
             if not channel:
                 return
 
-            color   = discord.Color.yellow() if minutes == 30 else discord.Color.red()
-            emoji   = '⏰' if minutes == 30 else '🚨'
+            color  = discord.Color.yellow() if minutes == 30 else discord.Color.red()
+            emoji  = '⏰' if minutes == 30 else '🚨'
 
             thread_mention = ''
             thread_link    = ''
@@ -221,113 +217,102 @@ class ScheduledEventsCog(commands.Cog):
                 thread = self.bot.get_channel(int(event['thread_id']))
                 if thread:
                     thread_mention = thread.mention
-                    thread_link    = f'https://discord.com/channels/{thread.guild.id}/{thread.id}'
+                    thread_link    = 'https://discord.com/channels/' + str(thread.guild.id) + '/' + str(thread.id)
 
-            # Link configurável do site
-            site_url  = database.get_config('site_url') or ''
-            extra_links = ''
+            site_url = database.get_config('site_url') or ''
+            desc     = 'Confirme seu slot antes de começar! ⚔️'
             if thread_link:
-                extra_links += f'
-🔗 [Acessar tópico de inscrição]({thread_link})'
+                desc += '\n🔗 [Acessar topico de inscricao](' + thread_link + ')'
             if site_url:
-                extra_links += f'
-🌐 [Acessar site da guild]({site_url})'
+                desc += '\n🌐 [Site da guild](' + site_url + ')'
 
             embed = discord.Embed(
-                title=f'{emoji} {event["title"]} — em {minutes} minutos!',
-                description=f'Confirme seu slot antes de começar! ⚔️{extra_links}',
+                title=emoji + ' ' + event['title'] + ' — em ' + str(minutes) + ' minutos!',
+                description=desc,
                 color=color
             )
 
-            # Monta o ping
             ping_type    = event.get('ping_type', 'none')
             ping_role_id = event.get('ping_role_id', '')
-            if ping_type == 'here':       ping_str = '@here'
-            elif ping_type == 'everyone': ping_str = '@everyone'
-            elif ping_type == 'role' and ping_role_id: ping_str = f'<@&{ping_role_id}>'
-            else:                         ping_str = '@here'
+            if ping_type == 'here':
+                ping_str = '@here'
+            elif ping_type == 'everyone':
+                ping_str = '@everyone'
+            elif ping_type == 'role' and ping_role_id:
+                ping_str = '<@&' + ping_role_id + '>'
+            else:
+                ping_str = '@here'
 
             await channel.send(
-                content=f'{ping_str} {emoji} **{event["title"]}** começa em **{minutes} minutos!** {thread_mention}',
+                content=ping_str + ' ' + emoji + ' **' + event['title'] + '** comeca em **' + str(minutes) + ' minutos!** ' + thread_mention,
                 embed=embed
             )
         except Exception as e:
-            print(f'[scheduled_events] Erro ao notificar: {e}')
+            print('[scheduled_events] Erro ao notificar: ' + str(e))
 
+    # ── Ao iniciar: entra nas threads ativas ───────────────────────────────────
     @commands.Cog.listener()
     async def on_ready(self):
         events = database.get_active_scheduled_events()
-        print(f'[scheduled_events] {len(events)} evento(s) ativo(s)')
+        print('[scheduled_events] ' + str(len(events)) + ' evento(s) ativo(s)')
 
-        # Entra em todas as threads de eventos ativos
         for event in events:
             if event.get('thread_id'):
                 try:
                     thread = self.bot.get_channel(int(event['thread_id']))
                     if thread and isinstance(thread, discord.Thread):
                         await thread.join()
-                        print(f'[scheduled_events] Entrei na thread {thread.name}')
+                        print('[scheduled_events] Entrei na thread: ' + thread.name)
                     else:
-                        # Thread não está no cache — busca via API
                         for guild in self.bot.guilds:
                             try:
                                 thread = await guild.fetch_channel(int(event['thread_id']))
                                 await thread.join()
-                                print(f'[scheduled_events] Thread buscada e entrei: {thread.name}')
+                                print('[scheduled_events] Thread buscada: ' + thread.name)
                             except Exception:
                                 pass
                 except Exception as e:
-                    print(f'[scheduled_events] Erro ao entrar na thread: {e}')
+                    print('[scheduled_events] Erro ao entrar na thread: ' + str(e))
 
-
-    # ── Debug ──────────────────────────────────────────────────────────────────
-    @discord.app_commands.command(name='debug_evento', description='[STAFF] Debug: verifica se thread está registrada.')
+    # ── Comandos ───────────────────────────────────────────────────────────────
+    @discord.app_commands.command(name='debug_evento', description='[STAFF] Debug: verifica thread do evento.')
     async def debug_evento(self, interaction: discord.Interaction):
-        ch = interaction.channel
+        ch        = interaction.channel
         is_thread = isinstance(ch, discord.Thread)
         thread_id = str(ch.id) if is_thread else 'NAO E THREAD'
+        event     = None
 
-        event = None
         if is_thread:
             event = database.get_scheduled_event_by_thread(thread_id)
-            # Entra na thread automaticamente
             try:
                 await ch.join()
-                print(f'[scheduled_events] Entrei na thread via debug: {ch.name}')
             except Exception as e:
-                print(f'[scheduled_events] Erro ao entrar: {e}')
+                print('[scheduled_events] Erro join: ' + str(e))
 
         active = database.get_active_scheduled_events()
-
-        msg = f'**Debug Evento**
-'
-        msg += f'Canal: `{ch.name}` (ID: `{thread_id}`)
-'
-        msg += f'É thread: `{is_thread}`
-'
-        msg += f'Evento encontrado: `{bool(event)}`
-
-'
-        msg += f'**Eventos ativos ({len(active)}):**
-'
+        lines  = ['**Debug Evento**']
+        lines.append('Canal: `' + ch.name + '` ID: `' + thread_id + '`')
+        lines.append('E thread: `' + str(is_thread) + '`')
+        lines.append('Evento encontrado: `' + str(bool(event)) + '`')
+        lines.append('')
+        lines.append('**Eventos ativos (' + str(len(active)) + '):**')
         for ev in active:
-            msg += f'• ID:{ev["id"]} | thread_id:`{ev.get("thread_id","?")}` | status:`{ev["status"]}`
-'
+            lines.append('ID:' + str(ev['id']) + ' thread:`' + str(ev.get('thread_id', '?')) + '` status:`' + ev['status'] + '`')
 
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.response.send_message('\n'.join(lines), ephemeral=True)
 
-    @discord.app_commands.command(name='entrar_thread', description='[STAFF] Faz o bot entrar neste tópico de evento.')
+    @discord.app_commands.command(name='entrar_thread', description='[STAFF] Faz o bot entrar neste topico de evento.')
     async def entrar_thread(self, interaction: discord.Interaction):
         ch = interaction.channel
         if not isinstance(ch, discord.Thread):
-            await interaction.response.send_message('❌ Use este comando dentro de um tópico de evento.', ephemeral=True)
+            await interaction.response.send_message('❌ Use dentro de um topico de evento.', ephemeral=True)
             return
         try:
             await ch.join()
-            await interaction.response.send_message('✅ Bot entrou no tópico! Agora pode receber inscrições.', ephemeral=True)
-            print(f'[scheduled_events] Entrei na thread via comando: {ch.name}')
+            await interaction.response.send_message('✅ Bot entrou no topico! Agora pode receber inscricoes.', ephemeral=True)
+            print('[scheduled_events] Entrei via /entrar_thread: ' + ch.name)
         except Exception as e:
-            await interaction.response.send_message(f'❌ Erro: {e}', ephemeral=True)
+            await interaction.response.send_message('❌ Erro: ' + str(e), ephemeral=True)
 
 
 async def setup(bot):

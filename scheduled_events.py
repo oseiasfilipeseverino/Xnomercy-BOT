@@ -265,7 +265,10 @@ class ScheduledEventsCog(commands.Cog):
                         print('[scheduled_events] Entrei na thread: ' + thread.name)
                         # Envia mensagem para ativar o gateway
                         try:
-                            pin_msg = await thread.send('⚔️ Bot ativo neste topico — inscricoes abertas!')
+                            pin_msg = await thread.send('📋 **Como participar:**
+> Digite o **número** do slot para entrar (ex: `3`)
+> Digite o número **negativo** para sair (ex: `-3`)
+> Cada player pode ter apenas **1 slot**')
                         except Exception:
                             pass
                     else:
@@ -275,7 +278,10 @@ class ScheduledEventsCog(commands.Cog):
                                 await thread.join()
                                 print('[scheduled_events] Thread buscada e entrei: ' + thread.name)
                                 try:
-                                    await thread.send('⚔️ Bot ativo neste topico — inscricoes abertas!')
+                                    await thread.send('📋 **Como participar:**
+> Digite o **número** do slot para entrar (ex: `3`)
+> Digite o número **negativo** para sair (ex: `-3`)
+> Cada player pode ter apenas **1 slot**')
                                 except Exception:
                                     pass
                             except Exception:
@@ -320,7 +326,10 @@ class ScheduledEventsCog(commands.Cog):
             await interaction.response.defer(ephemeral=True)
             await ch.join()
             # Envia mensagem para ativar gateway
-            await ch.send('⚔️ Bot ativo neste topico! Digite o numero do slot para se inscrever.')
+            await ch.send('📋 **Como participar:**
+> Digite o **número** do slot para entrar (ex: `3`)
+> Digite o número **negativo** para sair (ex: `-3`)
+> Cada player pode ter apenas **1 slot**')
             await interaction.followup.send('✅ Pronto! Bot inscrito e ativo no topico.', ephemeral=True)
             print('[scheduled_events] Entrei via /entrar_thread: ' + ch.name)
         except Exception as e:

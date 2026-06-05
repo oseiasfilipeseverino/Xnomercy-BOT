@@ -176,9 +176,23 @@ class ScheduledEventsCog(commands.Cog):
 
         print("[slots] Thread " + str(message.channel.id) + " num=" + str(num))
 
-        event = database.get_scheduled_event_by_thread(str(message.channel.id))
-        if not event:
+        try:
+            event = database.get_scheduled_event_by_thread(str(message.channel.id))
+        except Exception as db_err:
+            print("[slots] ERRO DB: " + str(db_err))
             return
+
+        if not event:
+            try:
+                all_ev = database.get_active_scheduled_events()
+                print("[slots] Thread " + str(message.channel.id) + " NAO encontrada no banco")
+                for ev in all_ev:
+                    print("[slots] Evento id=" + str(ev["id"]) + " thread=" + repr(ev.get("thread_id")) + " status=" + str(ev.get("status")))
+            except Exception as e:
+                print("[slots] Erro debug: " + str(e))
+            return
+
+        print("[slots] Evento OK id=" + str(event["id"]))
 
         slots   = parse_slots(event["slots"])
         abs_num = abs(num)

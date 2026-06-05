@@ -547,7 +547,7 @@ class EventsCog(commands.Cog):
         for p in participants:
             w     = float(p['share'] or 100)
             valor = distribution[p['discord_id']]
-            lines.append(f'• **{p["username"]}** ({w:.0f}%) → **{fmt(valor)} prata**')
+            lines.append(f'• <@{p["discord_id"]}> ({w:.0f}%) → **{fmt(valor)} prata**')
         embed.add_field(name='💰 Distribuição Proporcional', value='\n'.join(lines), inline=False)
         embed.set_footer(text='Use /depositar_evento para enviar para aprovação')
 
@@ -595,7 +595,7 @@ class EventsCog(commands.Cog):
         for p in participants:
             w     = float(p['share'] or 100)
             valor = distribution[p['discord_id']]
-            lines.append(f'• **{p["username"]}** ({w:.0f}%) → **{fmt(valor)} prata**')
+            lines.append(f'• <@{p["discord_id"]}> ({w:.0f}%) → **{fmt(valor)} prata**')
 
         embed = discord.Embed(
             title=f'⏳ Aprovação Pendente — Evento #{event["id"]:04d}',

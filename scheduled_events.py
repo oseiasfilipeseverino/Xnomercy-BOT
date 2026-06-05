@@ -211,20 +211,41 @@ class ScheduledEventsCog(commands.Cog):
 
             color   = discord.Color.yellow() if minutes == 30 else discord.Color.red()
             emoji   = '⏰' if minutes == 30 else '🚨'
-            embed   = discord.Embed(
-                title=f'{emoji} {event["title"]} — em {minutes} minutos!',
-                description=f'Confirme seu slot antes de começar! ⚔️',
-                color=color
-            )
 
             thread_mention = ''
+            thread_link    = ''
             if event.get('thread_id'):
                 thread = self.bot.get_channel(int(event['thread_id']))
                 if thread:
                     thread_mention = thread.mention
+                    thread_link    = f'https://discord.com/channels/{thread.guild.id}/{thread.id}'
+
+            # Link configurável do site
+            site_url  = database.get_config('site_url') or ''
+            extra_links = ''
+            if thread_link:
+                extra_links += f'
+🔗 [Acessar tópico de inscrição]({thread_link})'
+            if site_url:
+                extra_links += f'
+🌐 [Acessar site da guild]({site_url})'
+
+            embed = discord.Embed(
+                title=f'{emoji} {event["title"]} — em {minutes} minutos!',
+                description=f'Confirme seu slot antes de começar! ⚔️{extra_links}',
+                color=color
+            )
+
+            # Monta o ping
+            ping_type    = event.get('ping_type', 'none')
+            ping_role_id = event.get('ping_role_id', '')
+            if ping_type == 'here':       ping_str = '@here'
+            elif ping_type == 'everyone': ping_str = '@everyone'
+            elif ping_type == 'role' and ping_role_id: ping_str = f'<@&{ping_role_id}>'
+            else:                         ping_str = '@here'
 
             await channel.send(
-                content=f'@here {emoji} **{event["title"]}** começa em **{minutes} minutos!** {thread_mention}',
+                content=f'{ping_str} {emoji} **{event["title"]}** começa em **{minutes} minutos!** {thread_mention}',
                 embed=embed
             )
         except Exception as e:

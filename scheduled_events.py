@@ -59,10 +59,16 @@ def build_embed(event, assignments):
 
     if slots:
         col1, col2, col3 = [], [], []
+        # Map slot_number -> discord_id for mentions
+        id_map = {a["slot_number"]: a["discord_id"] for a in assignments}
         for i, slot in enumerate(slots, 1):
             player    = assign_map.get(i)
+            discord_id = id_map.get(i)
             slot_name = (slot.get("name") or "Slot " + str(i))
-            status    = "`" + player + "`" if player else "`Vazio`"
+            if player and discord_id:
+                status = "<@" + str(discord_id) + ">"
+            else:
+                status = "`Vazio`"
             entry     = "**" + str(i) + ".** " + slot_name + "\n" + status
             if i % 3 == 1:
                 col1.append(entry)
@@ -196,8 +202,6 @@ class ScheduledEventsCog(commands.Cog):
 
         slots   = parse_slots(event["slots"])
         abs_num = abs(num)
-
-        print("[slots] Total slots=" + str(len(slots)) + " abs_num=" + str(abs_num) + " slots_raw=" + repr(event.get("slots",""))[:80])
 
         if abs_num < 1 or abs_num > len(slots):
             reply = await message.reply("Slot invalido. Escolha entre 1 e " + str(len(slots)) + ".", mention_author=False)

@@ -509,7 +509,7 @@ def delete_event_template(template_id: int):
 # ── Scheduled Events ───────────────────────────────────────────────────────────
 
 SCHED_KEYS = ['id','title','description','channel_id','thread_id','message_id',
-              'slots','scheduled_time','status','notify_30','notify_15','created_by','created_at']
+              'slots','scheduled_time','status','notify_30','notify_15','ping_type','ping_role_id','created_by','created_at']
 
 def create_scheduled_event(title, description, channel_id, slots, scheduled_time, created_by):
     conn = get_connection()

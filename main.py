@@ -22,9 +22,7 @@ async def on_message(message):
     # Processa comandos normais
     await bot.process_commands(message)
 
-    # Loga TODAS as mensagens em threads para debug
-    if isinstance(message.channel, discord.Thread) and not message.author.bot:
-        print('[main] Thread msg: ch=' + str(message.channel.id) + ' autor=' + message.author.display_name + ' content=' + repr(message.content))
+
 
 
 @bot.event

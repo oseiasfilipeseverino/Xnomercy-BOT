@@ -89,6 +89,8 @@ class ScheduledEventsCog(commands.Cog):
             return
 
         content = message.content.strip()
+        print(f'[slots] Mensagem em thread {message.channel.id}: "{content}" de {message.author.display_name}')
+
         try:
             num = int(content)
         except ValueError:
@@ -96,6 +98,7 @@ class ScheduledEventsCog(commands.Cog):
 
         # Busca evento pelo thread
         event = database.get_scheduled_event_by_thread(str(message.channel.id))
+        print(f'[slots] Evento encontrado: {bool(event)} para thread {message.channel.id}')
         if not event:
             return
 
@@ -255,6 +258,38 @@ class ScheduledEventsCog(commands.Cog):
     async def on_ready(self):
         events = database.get_active_scheduled_events()
         print(f'[scheduled_events] {len(events)} evento(s) ativo(s)')
+
+
+    # ── Debug ──────────────────────────────────────────────────────────────────
+    @discord.app_commands.command(name='debug_evento', description='[STAFF] Debug: verifica se thread está registrada.')
+    async def debug_evento(self, interaction: discord.Interaction):
+        ch = interaction.channel
+        is_thread = isinstance(ch, discord.Thread)
+        thread_id = str(ch.id) if is_thread else 'NAO E THREAD'
+
+        event = None
+        if is_thread:
+            event = database.get_scheduled_event_by_thread(thread_id)
+
+        # Lista todos eventos ativos
+        active = database.get_active_scheduled_events()
+
+        msg = f'**Debug Evento**
+'
+        msg += f'Canal atual: `{ch.name}` (ID: `{thread_id}`)
+'
+        msg += f'É thread: `{is_thread}`
+'
+        msg += f'Evento encontrado: `{bool(event)}`
+
+'
+        msg += f'**Eventos ativos no banco ({len(active)}):**
+'
+        for ev in active:
+            msg += f'• ID:{ev["id"]} | thread_id:`{ev["thread_id"]}` | status:`{ev["status"]}`
+'
+
+        await interaction.response.send_message(msg, ephemeral=True)
 
 
 async def setup(bot):

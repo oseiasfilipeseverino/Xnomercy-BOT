@@ -259,6 +259,26 @@ class ScheduledEventsCog(commands.Cog):
         events = database.get_active_scheduled_events()
         print(f'[scheduled_events] {len(events)} evento(s) ativo(s)')
 
+        # Entra em todas as threads de eventos ativos
+        for event in events:
+            if event.get('thread_id'):
+                try:
+                    thread = self.bot.get_channel(int(event['thread_id']))
+                    if thread and isinstance(thread, discord.Thread):
+                        await thread.join()
+                        print(f'[scheduled_events] Entrei na thread {thread.name}')
+                    else:
+                        # Thread não está no cache — busca via API
+                        for guild in self.bot.guilds:
+                            try:
+                                thread = await guild.fetch_channel(int(event['thread_id']))
+                                await thread.join()
+                                print(f'[scheduled_events] Thread buscada e entrei: {thread.name}')
+                            except Exception:
+                                pass
+                except Exception as e:
+                    print(f'[scheduled_events] Erro ao entrar na thread: {e}')
+
 
     # ── Debug ──────────────────────────────────────────────────────────────────
     @discord.app_commands.command(name='debug_evento', description='[STAFF] Debug: verifica se thread está registrada.')
@@ -270,26 +290,44 @@ class ScheduledEventsCog(commands.Cog):
         event = None
         if is_thread:
             event = database.get_scheduled_event_by_thread(thread_id)
+            # Entra na thread automaticamente
+            try:
+                await ch.join()
+                print(f'[scheduled_events] Entrei na thread via debug: {ch.name}')
+            except Exception as e:
+                print(f'[scheduled_events] Erro ao entrar: {e}')
 
-        # Lista todos eventos ativos
         active = database.get_active_scheduled_events()
 
         msg = f'**Debug Evento**
 '
-        msg += f'Canal atual: `{ch.name}` (ID: `{thread_id}`)
+        msg += f'Canal: `{ch.name}` (ID: `{thread_id}`)
 '
         msg += f'É thread: `{is_thread}`
 '
         msg += f'Evento encontrado: `{bool(event)}`
 
 '
-        msg += f'**Eventos ativos no banco ({len(active)}):**
+        msg += f'**Eventos ativos ({len(active)}):**
 '
         for ev in active:
-            msg += f'• ID:{ev["id"]} | thread_id:`{ev["thread_id"]}` | status:`{ev["status"]}`
+            msg += f'• ID:{ev["id"]} | thread_id:`{ev.get("thread_id","?")}` | status:`{ev["status"]}`
 '
 
         await interaction.response.send_message(msg, ephemeral=True)
+
+    @discord.app_commands.command(name='entrar_thread', description='[STAFF] Faz o bot entrar neste tópico de evento.')
+    async def entrar_thread(self, interaction: discord.Interaction):
+        ch = interaction.channel
+        if not isinstance(ch, discord.Thread):
+            await interaction.response.send_message('❌ Use este comando dentro de um tópico de evento.', ephemeral=True)
+            return
+        try:
+            await ch.join()
+            await interaction.response.send_message('✅ Bot entrou no tópico! Agora pode receber inscrições.', ephemeral=True)
+            print(f'[scheduled_events] Entrei na thread via comando: {ch.name}')
+        except Exception as e:
+            await interaction.response.send_message(f'❌ Erro: {e}', ephemeral=True)
 
 
 async def setup(bot):

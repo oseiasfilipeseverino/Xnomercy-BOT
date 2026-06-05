@@ -534,7 +534,7 @@ def get_scheduled_event(event_id: int):
 def get_active_scheduled_events():
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT * FROM scheduled_events WHERE status IN ('waiting','active') ORDER BY scheduled_time")
+    c.execute("SELECT * FROM scheduled_events WHERE status NOT IN ('finished','cancelled') ORDER BY scheduled_time")
     rows = c.fetchall()
     conn.close()
     return [_row_to_dict(r, SCHED_KEYS) for r in rows]
@@ -566,7 +566,7 @@ def finish_scheduled_event(event_id: int):
 def get_scheduled_event_by_thread(thread_id: str):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT * FROM scheduled_events WHERE thread_id=%s AND status IN ('waiting','active')", (thread_id,))
+    c.execute("SELECT * FROM scheduled_events WHERE thread_id=%s AND status NOT IN ('finished','cancelled')", (thread_id,))
     row = c.fetchone()
     conn.close()
     return _row_to_dict(row, SCHED_KEYS)

@@ -263,12 +263,21 @@ class ScheduledEventsCog(commands.Cog):
                     if thread and isinstance(thread, discord.Thread):
                         await thread.join()
                         print('[scheduled_events] Entrei na thread: ' + thread.name)
+                        # Envia mensagem para ativar o gateway
+                        try:
+                            pin_msg = await thread.send('⚔️ Bot ativo neste topico — inscricoes abertas!')
+                        except Exception:
+                            pass
                     else:
                         for guild in self.bot.guilds:
                             try:
                                 thread = await guild.fetch_channel(int(event['thread_id']))
                                 await thread.join()
-                                print('[scheduled_events] Thread buscada: ' + thread.name)
+                                print('[scheduled_events] Thread buscada e entrei: ' + thread.name)
+                                try:
+                                    await thread.send('⚔️ Bot ativo neste topico — inscricoes abertas!')
+                                except Exception:
+                                    pass
                             except Exception:
                                 pass
                 except Exception as e:
@@ -303,16 +312,22 @@ class ScheduledEventsCog(commands.Cog):
 
     @discord.app_commands.command(name='entrar_thread', description='[STAFF] Faz o bot entrar neste topico de evento.')
     async def entrar_thread(self, interaction: discord.Interaction):
-        ch = interaction.channel
-        if not isinstance(ch, discord.Thread):
-            await interaction.response.send_message('❌ Use dentro de um topico de evento.', ephemeral=True)
-            return
         try:
+            ch = interaction.channel
+            if not isinstance(ch, discord.Thread):
+                await interaction.response.send_message('❌ Use dentro de um topico de evento.', ephemeral=True)
+                return
+            await interaction.response.defer(ephemeral=True)
             await ch.join()
-            await interaction.response.send_message('✅ Bot entrou no topico! Agora pode receber inscricoes.', ephemeral=True)
+            # Envia mensagem para ativar gateway
+            await ch.send('⚔️ Bot ativo neste topico! Digite o numero do slot para se inscrever.')
+            await interaction.followup.send('✅ Pronto! Bot inscrito e ativo no topico.', ephemeral=True)
             print('[scheduled_events] Entrei via /entrar_thread: ' + ch.name)
         except Exception as e:
-            await interaction.response.send_message('❌ Erro: ' + str(e), ephemeral=True)
+            try:
+                await interaction.followup.send('❌ Erro: ' + str(e), ephemeral=True)
+            except Exception:
+                pass
 
 
 async def setup(bot):

@@ -197,6 +197,8 @@ class ScheduledEventsCog(commands.Cog):
         slots   = parse_slots(event["slots"])
         abs_num = abs(num)
 
+        print("[slots] Total slots=" + str(len(slots)) + " abs_num=" + str(abs_num) + " slots_raw=" + repr(event.get("slots",""))[:80])
+
         if abs_num < 1 or abs_num > len(slots):
             reply = await message.reply("Slot invalido. Escolha entre 1 e " + str(len(slots)) + ".", mention_author=False)
             await asyncio.sleep(6)

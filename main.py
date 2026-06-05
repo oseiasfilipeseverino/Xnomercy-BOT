@@ -4,6 +4,7 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 import database
+from price_updater import start_price_updater   # ← LINHA ADICIONADA
 
 load_dotenv()
 
@@ -16,14 +17,9 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 COGS = ['tickets', 'events', 'bank', 'members', 'welcome', 'setup', 'scheduled_events']
 
-
 @bot.event
 async def on_message(message):
-    # Processa comandos normais
     await bot.process_commands(message)
-
-
-
 
 @bot.event
 async def on_ready():
@@ -38,6 +34,8 @@ async def on_ready():
     except Exception as e:
         print('❌  Erro ao sincronizar: ' + str(e))
 
+    asyncio.create_task(start_price_updater())  # ← LINHA ADICIONADA
+    print('✅  Price updater iniciado (atualiza a cada 30min)')
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: Exception):
@@ -51,7 +49,6 @@ async def on_app_command_error(interaction: discord.Interaction, error: Exceptio
         pass
     print('[ERRO] Comando: ' + str(interaction.command) + ' | Erro: ' + str(error))
 
-
 async def main():
     async with bot:
         for cog in COGS:
@@ -61,7 +58,6 @@ async def main():
             except Exception as e:
                 print('❌  Erro em ' + cog + ': ' + str(e))
         await bot.start(os.getenv('TOKEN'))
-
 
 if __name__ == '__main__':
     asyncio.run(main())

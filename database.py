@@ -622,3 +622,18 @@ def get_player_slot(event_id: int, discord_id: str):
     row = c.fetchone()
     conn.close()
     return row[0] if row else None
+
+def get_pending_post_events():
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM scheduled_events WHERE status='pending_post' ORDER BY id")
+    rows = c.fetchall()
+    conn.close()
+    return [_row_to_dict(r, SCHED_KEYS) for r in rows]
+
+def set_event_status(event_id, status):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("UPDATE scheduled_events SET status=%s WHERE id=%s", (status, event_id))
+    conn.commit()
+    conn.close()

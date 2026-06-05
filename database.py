@@ -162,6 +162,45 @@ def init_db():
                '📋 **Por onde começar:**\n• Abra um ticket de **Recrutamento** para entrar na guild\n'
                '• Use `/meu-saldo` para consultar seu saldo\n\n⚔️ *No Mercy, No Retreat!*'))
 
+
+    c.execute('''CREATE TABLE IF NOT EXISTS event_templates (
+        id          SERIAL PRIMARY KEY,
+        name        TEXT NOT NULL,
+        title       TEXT NOT NULL,
+        description TEXT DEFAULT '',
+        slots       TEXT NOT NULL,
+        created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS scheduled_events (
+        id              SERIAL PRIMARY KEY,
+        title           TEXT NOT NULL,
+        description     TEXT DEFAULT '',
+        channel_id      TEXT NOT NULL,
+        thread_id       TEXT DEFAULT '',
+        message_id      TEXT DEFAULT '',
+        slots           TEXT NOT NULL,
+        scheduled_time  TEXT NOT NULL,
+        status          TEXT DEFAULT 'pending_post',
+        notify_30       INTEGER DEFAULT 0,
+        notify_15       INTEGER DEFAULT 0,
+        ping_type       TEXT DEFAULT 'none',
+        ping_role_id    TEXT DEFAULT '',
+        created_by      TEXT NOT NULL,
+        created_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS slot_assignments (
+        id                 SERIAL PRIMARY KEY,
+        scheduled_event_id INTEGER NOT NULL,
+        slot_number        INTEGER NOT NULL,
+        discord_id         TEXT NOT NULL,
+        username           TEXT NOT NULL,
+        assigned_at        TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(scheduled_event_id, slot_number),
+        UNIQUE(scheduled_event_id, discord_id)
+    )''')
+
     conn.commit()
     conn.close()
     print('[DB] PostgreSQL inicializado!')

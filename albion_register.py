@@ -29,21 +29,39 @@ STAFF_ROLES = {'Líder', 'Vice Líder', 'Officer', 'Sub Officer', 'Staff', 'Recr
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def _search_player(nick):
     # type: (str) -> Optional[dict]
-    """Busca jogador na API do Albion (Americas). Retorna dict ou None."""
-    try:
-        url = ALBION_API + '/search?q=' + requests.utils.quote(nick)
-        r = requests.get(url, timeout=12, headers={'User-Agent': 'XnoMercy-Bot/2.0'})
-        if not r.ok:
-            return None
-        data = r.json()
-        players = data.get('players', [])
-        for p in players:
-            if p.get('Name', '').lower() == nick.lower():
-                return p
-        return None
-    except Exception as e:
-        print('[albion_register] Erro API: ' + str(e))
-        return None
+    """
+    Busca jogador na API do Albion (Americas).
+    Tenta múltiplas variações de capitalização para contornar
+    a API que é case-sensitive na busca.
+    """
+    # Variações únicas de capitalização
+    variations = []
+    for v in [nick, nick.capitalize(), nick.lower(), nick.title(), nick.upper()]:
+        if v not in variations:
+            variations.append(v)
+
+    for term in variations:
+        try:
+            url = ALBION_API + '/search?q=' + requests.utils.quote(term)
+            r = requests.get(url, timeout=20, headers={'User-Agent': 'XnoMercy-Bot/2.0'})
+            if not r.ok:
+                continue
+            players = r.json().get('players', [])
+            # Match case-insensitive no resultado
+            match = None
+            for p in players:
+                if p.get('Name', '').lower() == nick.lower():
+                    match = p
+                    break
+            if match:
+                return match
+        except requests.exceptions.Timeout:
+            print('[albion_register] Timeout na API (tentativa: ' + term + ')')
+            continue
+        except Exception as e:
+            print('[albion_register] Erro API: ' + str(e))
+            continue
+    return None
 
 
 def _in_guild(player):

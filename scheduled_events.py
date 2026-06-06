@@ -59,17 +59,16 @@ def build_embed(event, assignments):
 
     if slots:
         col1, col2, col3 = [], [], []
-        # Map slot_number -> discord_id for mentions
         id_map = {a["slot_number"]: a["discord_id"] for a in assignments}
         for i, slot in enumerate(slots, 1):
-            player    = assign_map.get(i)
+            player     = assign_map.get(i)
             discord_id = id_map.get(i)
-            slot_name = (slot.get("name") or "Slot " + str(i))
+            slot_name  = (slot.get("name") or "Slot " + str(i))
             if player and discord_id:
                 status = "<@" + str(discord_id) + ">"
             else:
                 status = "`Vazio`"
-            entry     = "**" + str(i) + ".** " + slot_name + "\n" + status
+            entry = "**" + str(i) + ".** " + slot_name + "\n" + status
             if i % 3 == 1:
                 col1.append(entry)
             elif i % 3 == 2:
@@ -98,12 +97,17 @@ class ScheduledEventsCog(commands.Cog):
         self.post_pending_task.cancel()
         self.notification_task.cancel()
 
-    # ── Task: posta eventos pendentes pelo bot ─────────────────────────────────
+    # ── Task: posta eventos pendentes ─────────────────────────────────────────
     @tasks.loop(seconds=10)
     async def post_pending_task(self):
         try:
             pending = database.get_pending_post_events()
             for event in pending:
+                # ╔══════════════════════════════════════════════════════════╗
+                # ║  FIX: Atualiza status ANTES de qualquer chamada Discord  ║
+                # ║  Evita duplo-post quando o loop roda antes de terminar   ║
+                # ╚══════════════════════════════════════════════════════════╝
+                database.set_event_status(event["id"], "posting")
                 await self._post_event(event)
         except Exception as e:
             print("[scheduled_events] Erro post_pending_task: " + str(e))
@@ -113,14 +117,21 @@ class ScheduledEventsCog(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def _post_event(self, event):
+        """
+        Posta o evento no canal e cria o tópico de inscrição.
+        Status já deve ser "posting" quando esta função é chamada.
+        Em caso de erro, reverte para "pending_post" para nova tentativa.
+        """
         try:
             channel = self.bot.get_channel(int(event["channel_id"]))
             if not channel:
+                # Canal não encontrado — reverte para tentar depois
+                database.set_event_status(event["id"], "pending_post")
+                print("[scheduled_events] Canal nao encontrado: " + str(event["channel_id"]))
                 return
 
-            slots    = parse_slots(event["slots"])
             assignments = []
-            embed    = build_embed(event, assignments)
+            embed = build_embed(event, assignments)
 
             try:
                 dt = datetime.fromisoformat(event["scheduled_time"])
@@ -130,7 +141,7 @@ class ScheduledEventsCog(commands.Cog):
             except Exception:
                 time_str = str(event["scheduled_time"])
 
-            # Monta ping
+            # Monta o ping
             ping_type    = event.get("ping_type", "none")
             ping_role_id = event.get("ping_role_id", "")
             if ping_type == "here":
@@ -144,28 +155,30 @@ class ScheduledEventsCog(commands.Cog):
 
             content = (ping_str + " " + event["title"] + " -- " + time_str).strip()
 
-            # Envia mensagem no canal (bot envia = on_message funciona)
+            # Envia a mensagem no canal (único ping)
             msg = await channel.send(content=content, embed=embed)
 
-            # Cria thread a partir da mensagem
+            # Cria tópico para inscrições
             thread = await msg.create_thread(
                 name=event["title"] + " -- Inscricoes",
                 auto_archive_duration=1440
             )
 
-            # Envia instrucoes no topico
+            # Instrucoes no tópico
             await thread.send(INSTRUCTIONS)
 
-            # Salva IDs
+            # Salva IDs e atualiza status para "waiting"
             database.update_scheduled_event_thread(event["id"], str(thread.id), str(msg.id))
             database.set_event_status(event["id"], "waiting")
 
-            print("[scheduled_events] Evento postado: " + event["title"] + " thread=" + str(thread.id))
+            print("[scheduled_events] Evento postado: " + event["title"] + " | thread=" + str(thread.id))
 
         except Exception as e:
-            print("[scheduled_events] Erro ao postar evento: " + str(e))
+            # Reverte para pending_post para nova tentativa no próximo ciclo
+            database.set_event_status(event["id"], "pending_post")
+            print("[scheduled_events] Erro ao postar evento '" + str(event.get("title","?")) + "': " + str(e))
 
-    # ── Ouve mensagens nos topicos ─────────────────────────────────────────────
+    # ── Ouve mensagens nos tópicos ─────────────────────────────────────────────
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author.bot:
@@ -174,7 +187,6 @@ class ScheduledEventsCog(commands.Cog):
             return
 
         content = message.content.strip()
-
         try:
             num = int(content)
         except ValueError:
@@ -189,13 +201,6 @@ class ScheduledEventsCog(commands.Cog):
             return
 
         if not event:
-            try:
-                all_ev = database.get_active_scheduled_events()
-                print("[slots] Thread " + str(message.channel.id) + " NAO encontrada no banco")
-                for ev in all_ev:
-                    print("[slots] Evento id=" + str(ev["id"]) + " thread=" + repr(ev.get("thread_id")) + " status=" + str(ev.get("status")))
-            except Exception as e:
-                print("[slots] Erro debug: " + str(e))
             return
 
         print("[slots] Evento OK id=" + str(event["id"]))
@@ -272,7 +277,7 @@ class ScheduledEventsCog(commands.Cog):
         except Exception as e:
             print("[scheduled_events] Erro update embed: " + str(e))
 
-    # ── Notificacoes via DM ────────────────────────────────────────────────────
+    # ── Notificações via DM ────────────────────────────────────────────────────
     @tasks.loop(minutes=1)
     async def notification_task(self):
         try:
@@ -280,6 +285,10 @@ class ScheduledEventsCog(commands.Cog):
             now    = datetime.now(tz=BRT)
 
             for event in events:
+                # Ignora eventos que ainda estão sendo postados
+                if event.get("status") == "posting":
+                    continue
+
                 try:
                     dt = datetime.fromisoformat(event["scheduled_time"])
                     if dt.tzinfo is None:
@@ -331,7 +340,6 @@ class ScheduledEventsCog(commands.Cog):
                 color=color
             )
 
-            # Envia DM para todos os players inscritos
             assignments = database.get_slot_assignments(event["id"])
             dm_count = 0
             for assignment in assignments:

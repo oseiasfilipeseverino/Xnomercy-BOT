@@ -7,12 +7,18 @@ import discord
 from discord.ext import commands, tasks
 import datetime
 import os
-import psycopg2
-
-DATABASE_URL = os.environ.get('DATABASE_URL', '')
+import pg8000
+from urllib.parse import urlparse
 
 def _db_conn():
-    return psycopg2.connect(DATABASE_URL)
+    url = urlparse(os.environ.get('DATABASE_URL', ''))
+    return pg8000.connect(
+        host=url.hostname,
+        port=url.port or 5432,
+        user=url.username,
+        password=url.password,
+        database=url.path.lstrip('/')
+    )
 
 EXCLUDE = ['gayzaoviadao']
 

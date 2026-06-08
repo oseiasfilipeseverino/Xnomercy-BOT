@@ -4,7 +4,7 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 import database
-from price_updater import start_price_updater   # ← atualiza preços a cada 30min
+from price_updater import start_price_updater   # ← LINHA ADICIONADA
 
 load_dotenv()
 
@@ -15,11 +15,7 @@ intents.guild_messages  = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-COGS = [
-    'tickets', 'events', 'bank', 'members', 'welcome',
-    'setup', 'scheduled_events',
-    'albion_register',  # ← NOVO: registro via Albion Online API
-]
+COGS = ['tickets', 'events', 'bank', 'members', 'welcome', 'setup', 'scheduled_events', 'energy_notifications']
 
 @bot.event
 async def on_message(message):
@@ -38,7 +34,7 @@ async def on_ready():
     except Exception as e:
         print('❌  Erro ao sincronizar: ' + str(e))
 
-    asyncio.create_task(start_price_updater())
+    asyncio.create_task(start_price_updater())  # ← LINHA ADICIONADA
     print('✅  Price updater iniciado (atualiza a cada 30min)')
 
 @bot.tree.error

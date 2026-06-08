@@ -26,11 +26,13 @@ class EnergyNotifications(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.check_pending.start()
+        self.check_logs.start()
         self.weekly_check.start()
 
     def cog_unload(self):
         self.check_pending.cancel()
         self.weekly_check.cancel()
+        self.check_logs.cancel()
 
     def _get_guild(self):
         for g in self.bot.guilds:
@@ -175,6 +177,57 @@ class EnergyNotifications(commands.Cog):
 
     @weekly_check.before_loop
     async def before_weekly_check(self):
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(seconds=15)
+    async def check_logs(self):
+        """Verifica logs pendentes e posta no canal de logs do Discord."""
+        try:
+            conn = _db_conn()
+            c = conn.cursor()
+            c.execute('SELECT id, message FROM pending_logs ORDER BY id LIMIT 5')
+            rows = c.fetchall()
+            if not rows:
+                conn.close()
+                return
+
+            # Buscar canal de logs
+            c.execute("SELECT value FROM guild_config WHERE key='channel_logs'")
+            ch_row = c.fetchone()
+            log_channel_id = ch_row[0] if ch_row else ''
+
+            # Deletar logs processados
+            ids = [r[0] for r in rows]
+            for lid in ids:
+                c.execute('DELETE FROM pending_logs WHERE id=%s', (lid,))
+            conn.commit()
+            conn.close()
+
+            if not log_channel_id:
+                print('[logs] Canal de logs não configurado')
+                return
+
+            guild = self._get_guild()
+            if not guild:
+                return
+
+            channel = guild.get_channel(int(log_channel_id))
+            if not channel:
+                print(f'[logs] Canal {log_channel_id} não encontrado')
+                return
+
+            for row in rows:
+                try:
+                    await channel.send(row[1])
+                    print(f'[logs] Log postado: {row[1][:50]}...')
+                except Exception as e:
+                    print(f'[logs] Erro ao postar: {e}')
+
+        except Exception as e:
+            print(f'[logs] Erro check_logs: {e}')
+
+    @check_logs.before_loop
+    async def before_check_logs(self):
         await self.bot.wait_until_ready()
 
 async def setup(bot):

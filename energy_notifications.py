@@ -1,7 +1,9 @@
 """
-Cog de notificações de energia.
-- Verifica a cada 30s se tem notificação pendente (instantânea)
-- Toda segunda-feira 12h BRT envia DM semanal se ativado
+Cog de notificações de energia + logs + broadcast.
+- check_pending (30s): notificação instantânea de energia para devedores
+- check_logs (15s): posta logs pendentes no canal de logs do Discord
+- check_broadcast (30s): envia DM em massa para TODOS os membros
+- weekly_check (1h): cobrança semanal de energia (segunda 12h BRT)
 """
 import discord
 from discord.ext import commands, tasks
@@ -26,13 +28,15 @@ class EnergyNotifications(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.check_pending.start()
-        self.check_logs.start()
         self.weekly_check.start()
+        self.check_logs.start()
+        self.check_broadcast.start()
 
     def cog_unload(self):
         self.check_pending.cancel()
         self.weekly_check.cancel()
         self.check_logs.cancel()
+        self.check_broadcast.cancel()
 
     def _get_guild(self):
         for g in self.bot.guilds:
@@ -116,6 +120,7 @@ class EnergyNotifications(commands.Cog):
 
         return sent
 
+    # ── Notificação instantânea de energia (30s) ──────────────────────────────
     @tasks.loop(seconds=30)
     async def check_pending(self):
         """Verifica se tem notificação instantânea pendente."""
@@ -146,39 +151,7 @@ class EnergyNotifications(commands.Cog):
     async def before_check_pending(self):
         await self.bot.wait_until_ready()
 
-    @tasks.loop(hours=1)
-    async def weekly_check(self):
-        """Toda segunda-feira 12h BRT envia cobrança semanal."""
-        try:
-            now = datetime.datetime.utcnow() - datetime.timedelta(hours=3)  # BRT
-            # Segunda-feira (0) às 12h
-            if now.weekday() != 0 or now.hour != 12:
-                return
-
-            conn = _db_conn()
-            c = conn.cursor()
-            c.execute("SELECT value FROM site_config WHERE key='energy_weekly_enabled'")
-            r = c.fetchone()
-            conn.close()
-
-            if not r or r[0] != '1':
-                return
-
-            msg = (
-                "⚡ **Cobrança Semanal de Energia — XnoMercy**\n\n"
-                "Olá {player}, você tem uma dívida de **{divida} energia** com a guild.\n"
-                "Por favor, regularize sua situação o mais breve possível.\n\n"
-                "— Liderança XnoMercy"
-            )
-            sent = await self._send_notifications(msg)
-            print(f'[energy] Cobrança semanal enviada para {sent} devedores')
-        except Exception as e:
-            print(f'[energy] Erro weekly_check: {e}')
-
-    @weekly_check.before_loop
-    async def before_weekly_check(self):
-        await self.bot.wait_until_ready()
-
+    # ── Logs pendentes → canal do Discord (15s) ──────────────────────────────
     @tasks.loop(seconds=15)
     async def check_logs(self):
         """Verifica logs pendentes e posta no canal de logs do Discord."""
@@ -197,9 +170,8 @@ class EnergyNotifications(commands.Cog):
             log_channel_id = ch_row[0] if ch_row else ''
 
             # Deletar logs processados
-            ids = [r[0] for r in rows]
-            for lid in ids:
-                c.execute('DELETE FROM pending_logs WHERE id=%s', (lid,))
+            for row in rows:
+                c.execute('DELETE FROM pending_logs WHERE id=%s', (row[0],))
             conn.commit()
             conn.close()
 
@@ -228,6 +200,108 @@ class EnergyNotifications(commands.Cog):
 
     @check_logs.before_loop
     async def before_check_logs(self):
+        await self.bot.wait_until_ready()
+
+    # ── Broadcast: DM em massa para TODOS (30s) ──────────────────────────────
+    @tasks.loop(seconds=30)
+    async def check_broadcast(self):
+        """Verifica se tem mensagem broadcast pendente e envia DM para TODOS."""
+        try:
+            conn = _db_conn()
+            c = conn.cursor()
+            c.execute("SELECT value FROM site_config WHERE key='broadcast_pending'")
+            r = c.fetchone()
+            conn.close()
+
+            if not r or not r[0]:
+                return
+
+            msg = r[0]
+            print(f'[broadcast] Mensagem pendente encontrada: {msg[:50]}...')
+
+            # Limpar pendente ANTES de enviar
+            conn2 = _db_conn()
+            c2 = conn2.cursor()
+            c2.execute("UPDATE site_config SET value='' WHERE key='broadcast_pending'")
+            conn2.commit()
+            conn2.close()
+
+            # Enviar DM para TODOS os membros do servidor
+            guild = self._get_guild()
+            if not guild:
+                print('[broadcast] Guild não encontrada')
+                return
+
+            sent = 0
+            failed = 0
+            for member in guild.members:
+                if member.bot:
+                    continue
+                try:
+                    await member.send(msg)
+                    sent += 1
+                    print(f'[broadcast] DM enviada: {member.display_name}')
+                except discord.Forbidden:
+                    failed += 1
+                except Exception as e:
+                    failed += 1
+                    print(f'[broadcast] Erro DM {member.display_name}: {e}')
+
+            print(f'[broadcast] Concluído: {sent} enviadas, {failed} falharam')
+
+            # Posta resultado no canal de logs
+            try:
+                conn3 = _db_conn()
+                c3 = conn3.cursor()
+                c3.execute("SELECT value FROM guild_config WHERE key='channel_logs'")
+                ch = c3.fetchone()
+                conn3.close()
+                if ch and ch[0]:
+                    channel = guild.get_channel(int(ch[0]))
+                    if channel:
+                        await channel.send(f'**Broadcast enviado**\nMensagem: {msg[:200]}\nEnviadas: {sent} | Falharam: {failed}')
+            except Exception:
+                pass
+
+        except Exception as e:
+            print(f'[broadcast] Erro check_broadcast: {e}')
+
+    @check_broadcast.before_loop
+    async def before_check_broadcast(self):
+        await self.bot.wait_until_ready()
+
+    # ── Cobrança semanal (segunda 12h BRT) ────────────────────────────────────
+    @tasks.loop(hours=1)
+    async def weekly_check(self):
+        """Toda segunda-feira 12h BRT envia cobrança semanal."""
+        try:
+            now = datetime.datetime.utcnow() - datetime.timedelta(hours=3)  # BRT
+            # Segunda-feira (0) às 12h
+            if now.weekday() != 0 or now.hour != 12:
+                return
+
+            conn = _db_conn()
+            c = conn.cursor()
+            c.execute("SELECT value FROM site_config WHERE key='energy_weekly_enabled'")
+            r = c.fetchone()
+            conn.close()
+
+            if not r or r[0] != '1':
+                return
+
+            msg = (
+                "**Cobranca Semanal de Energia -- XnoMercy**\n\n"
+                "Ola {player}, voce tem uma divida de **{divida} energia** com a guild.\n"
+                "Por favor, regularize sua situacao o mais breve possivel.\n\n"
+                "-- Lideranca XnoMercy"
+            )
+            sent = await self._send_notifications(msg)
+            print(f'[energy] Cobrança semanal enviada para {sent} devedores')
+        except Exception as e:
+            print(f'[energy] Erro weekly_check: {e}')
+
+    @weekly_check.before_loop
+    async def before_weekly_check(self):
         await self.bot.wait_until_ready()
 
 async def setup(bot):

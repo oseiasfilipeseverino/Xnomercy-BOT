@@ -19,7 +19,7 @@ def _get_conn():
     return pg8000.dbapi.connect(
         host=url.hostname, port=url.port or 5432,
         database=url.path[1:], user=url.username,
-        password=url.password, ssl_context=True
+        password=url.password, ssl_context=True, timeout=15
     )
 
 def _init_table():
@@ -41,17 +41,19 @@ def _init_table():
         c.execute('CREATE INDEX IF NOT EXISTS idx_pc_item ON prices_cache (item_id)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_pc_upd  ON prices_cache (updated_at)')
         conn.commit()
-        conn.close()
         print('[price_updater] Tabela prices_cache pronta.')
     except Exception as e:
         print(f'[price_updater] Erro ao criar tabela: {e}')
+    finally:
+        try: conn.close()
+        except: pass
 
 def _save_prices(prices_data):
-    """Salva lista de preços no banco. Retorna quantos registros foram salvos."""
+    """Salva lista de precos no banco. Preserva precos antigos quando novo=0."""
     if not prices_data:
         return 0
+    conn = _get_conn()
     try:
-        conn = _get_conn()
         c = conn.cursor()
         count = 0
         for r in prices_data:
@@ -64,11 +66,11 @@ def _save_prices(prices_data):
                    (item_id, city, quality, sell_min, sell_max, buy_max, date_sell, updated_at)
                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
                    ON CONFLICT (item_id, city, quality) DO UPDATE SET
-                   sell_min   = EXCLUDED.sell_min,
-                   sell_max   = EXCLUDED.sell_max,
-                   buy_max    = EXCLUDED.buy_max,
-                   date_sell  = EXCLUDED.date_sell,
-                   updated_at = NOW()''',
+                   sell_min=CASE WHEN EXCLUDED.sell_min>0 THEN EXCLUDED.sell_min ELSE prices_cache.sell_min END,
+                   sell_max=CASE WHEN EXCLUDED.sell_max>0 THEN EXCLUDED.sell_max ELSE prices_cache.sell_max END,
+                   buy_max=CASE WHEN EXCLUDED.buy_max>0 THEN EXCLUDED.buy_max ELSE prices_cache.buy_max END,
+                   date_sell=CASE WHEN EXCLUDED.sell_min>0 THEN EXCLUDED.date_sell ELSE prices_cache.date_sell END,
+                   updated_at=NOW()''',
                 (iid, city,
                  r.get('quality', 1),
                  r.get('sell_price_min', 0),
@@ -78,11 +80,13 @@ def _save_prices(prices_data):
             )
             count += 1
         conn.commit()
-        conn.close()
         return count
     except Exception as e:
         print(f'[price_updater] Erro ao salvar: {e}')
         return 0
+    finally:
+        try: conn.close()
+        except: pass
 
 # ── Configuração AODP Americas ─────────────────────────────────────────────────
 AODP      = 'https://west.albion-online-data.com/api/v2/stats/prices/'

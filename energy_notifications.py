@@ -19,7 +19,8 @@ def _db_conn():
         port=url.port or 5432,
         user=url.username,
         password=url.password,
-        database=url.path.lstrip('/')
+        database=url.path.lstrip('/'),
+        timeout=15
     )
 
 EXCLUDE = ['gayzaoviadao']
@@ -40,7 +41,7 @@ class EnergyNotifications(commands.Cog):
 
     def _get_guild(self):
         for g in self.bot.guilds:
-            if 'xnomercy' in g.name.lower() or 'xnomercy' in g.name.lower():
+            if 'xnomercy' in g.name.lower():
                 return g
         return self.bot.guilds[0] if self.bot.guilds else None
 
@@ -81,11 +82,13 @@ class EnergyNotifications(commands.Cog):
                     ORDER BY SUM(amount) ASC
                 ''')
             rows = c.fetchall()
-            conn.close()
             return [{'player': r[0], 'debt': abs(r[1])} for r in rows]
         except Exception as e:
             print(f'[energy] Erro ao buscar devedores: {e}')
             return []
+        finally:
+            try: conn.close()
+            except: pass
 
     async def _send_notifications(self, message_template):
         """Envia DM para cada devedor com a mensagem customizada."""

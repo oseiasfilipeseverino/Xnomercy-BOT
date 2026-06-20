@@ -149,7 +149,8 @@ class ScheduledEventsCog(commands.Cog):
             elif ping_type == "everyone":
                 ping_str = "@everyone"
             elif ping_type == "role" and ping_role_id:
-                ping_str = "<@&" + ping_role_id + ">"
+                role_ids = [rid.strip() for rid in ping_role_id.split(",") if rid.strip()]
+                ping_str = " ".join("<@&" + rid + ">" for rid in role_ids)
             else:
                 ping_str = ""
 

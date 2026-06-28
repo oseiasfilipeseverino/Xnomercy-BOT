@@ -39,7 +39,10 @@ async def on_ready():
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: Exception):
-    msg = '❌ Erro inesperado: ' + str(error)
+    # Mensagem genérica pro usuário — o erro completo (que pode conter detalhe
+    # interno tipo string de conexão dentro de uma exception encadeada) só vai
+    # pro log do servidor, nunca pro Discord.
+    msg = '❌ Erro inesperado ao executar o comando. A liderança já foi notificada nos logs.'
     try:
         if not interaction.response.is_done():
             await interaction.response.send_message(msg, ephemeral=True)

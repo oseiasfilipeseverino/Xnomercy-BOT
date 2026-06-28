@@ -52,35 +52,40 @@ def _save_prices(prices_data):
     """Salva lista de precos no banco. Preserva precos antigos quando novo=0."""
     if not prices_data:
         return 0
+    rows = []
+    for r in prices_data:
+        iid  = r.get('item_id', '')
+        city = r.get('city', '')
+        if not iid or not city:
+            continue
+        rows.append((iid, city,
+                     r.get('quality', 1),
+                     r.get('sell_price_min', 0),
+                     r.get('sell_price_max', 0),
+                     r.get('buy_price_max', 0),
+                     r.get('sell_price_min_date', '')))
+    if not rows:
+        return 0
     conn = _get_conn()
     try:
         c = conn.cursor()
-        count = 0
-        for r in prices_data:
-            iid  = r.get('item_id', '')
-            city = r.get('city', '')
-            if not iid or not city:
-                continue
-            c.execute(
-                '''INSERT INTO prices_cache
-                   (item_id, city, quality, sell_min, sell_max, buy_max, date_sell, updated_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-                   ON CONFLICT (item_id, city, quality) DO UPDATE SET
-                   sell_min=CASE WHEN EXCLUDED.sell_min>0 THEN EXCLUDED.sell_min ELSE prices_cache.sell_min END,
-                   sell_max=CASE WHEN EXCLUDED.sell_max>0 THEN EXCLUDED.sell_max ELSE prices_cache.sell_max END,
-                   buy_max=CASE WHEN EXCLUDED.buy_max>0 THEN EXCLUDED.buy_max ELSE prices_cache.buy_max END,
-                   date_sell=CASE WHEN EXCLUDED.sell_min>0 THEN EXCLUDED.date_sell ELSE prices_cache.date_sell END,
-                   updated_at=NOW()''',
-                (iid, city,
-                 r.get('quality', 1),
-                 r.get('sell_price_min', 0),
-                 r.get('sell_price_max', 0),
-                 r.get('buy_price_max', 0),
-                 r.get('sell_price_min_date', ''))
-            )
-            count += 1
+        # executemany em vez de 1 execute() por linha — até ~800 linhas por chunk,
+        # isso era 1 round-trip ao Postgres por item antes (lento, mas roda em
+        # background no executor a cada 30min, então nunca travou usuário).
+        c.executemany(
+            '''INSERT INTO prices_cache
+               (item_id, city, quality, sell_min, sell_max, buy_max, date_sell, updated_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+               ON CONFLICT (item_id, city, quality) DO UPDATE SET
+               sell_min=CASE WHEN EXCLUDED.sell_min>0 THEN EXCLUDED.sell_min ELSE prices_cache.sell_min END,
+               sell_max=CASE WHEN EXCLUDED.sell_max>0 THEN EXCLUDED.sell_max ELSE prices_cache.sell_max END,
+               buy_max=CASE WHEN EXCLUDED.buy_max>0 THEN EXCLUDED.buy_max ELSE prices_cache.buy_max END,
+               date_sell=CASE WHEN EXCLUDED.sell_min>0 THEN EXCLUDED.date_sell ELSE prices_cache.date_sell END,
+               updated_at=NOW()''',
+            rows
+        )
         conn.commit()
-        return count
+        return len(rows)
     except Exception as e:
         print(f'[price_updater] Erro ao salvar: {e}')
         return 0

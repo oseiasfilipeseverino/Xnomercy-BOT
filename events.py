@@ -403,11 +403,13 @@ class ApproveDepositView(discord.ui.View):
             return
 
         event = database.get_event(self.event_id)
-        if event['status'] != 'pending':
+        # approve_event agora é um UPDATE condicional atômico (WHERE status='pending')
+        # — a checagem antiga (ler status, depois decidir) deixava uma janela onde 2
+        # cliques quase simultâneos passavam os dois e creditavam a prata em dobro.
+        # Só segue se ESTE clique venceu a corrida.
+        if not database.approve_event(self.event_id, interaction.user.display_name):
             await interaction.response.send_message('❌ Já processado.', ephemeral=True)
             return
-
-        database.approve_event(self.event_id, interaction.user.display_name)
 
         for p in self.participants:
             valor = self.distribution.get(p['discord_id'], 0)
@@ -431,6 +433,12 @@ class ApproveDepositView(discord.ui.View):
     async def recusar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            return
+
+        # Antes só editava o embed — o evento continuava 'pending' no banco, então
+        # dava pra clicar "Aprovar" depois de "Recusar" e creditar a prata mesmo assim.
+        if not database.reject_event(self.event_id, interaction.user.display_name):
+            await interaction.response.send_message('❌ Já processado.', ephemeral=True)
             return
 
         embed = interaction.message.embeds[0]

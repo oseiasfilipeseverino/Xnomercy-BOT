@@ -390,11 +390,33 @@ def deposit_event(event_id, total, repair, net):
         release(conn)
 
 def approve_event(event_id, approved_by):
+    """
+    UPDATE condicional (WHERE status='pending') — atômico no Postgres, fecha a
+    janela de corrida onde 2 cliques quase simultâneos no botão "Aprovar" passavam
+    os dois pela checagem de status antes de qualquer um gravar, dobrando a prata
+    creditada. Retorna True só se ESTE chamador venceu a corrida (rowcount==1).
+    """
     conn = get_connection()
     try:
         c = conn.cursor()
-        c.execute("UPDATE events SET status='approved', approved_by=%s, approved_at=%s WHERE id=%s", (approved_by, datetime.now().isoformat(), event_id))
+        c.execute("UPDATE events SET status='approved', approved_by=%s, approved_at=%s "
+                   "WHERE id=%s AND status='pending'", (approved_by, datetime.now().isoformat(), event_id))
+        won = c.rowcount > 0
         conn.commit()
+        return won
+    finally:
+        release(conn)
+
+def reject_event(event_id, rejected_by):
+    """Mesmo padrão condicional do approve_event, pra não reaprovar depois de recusado."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE events SET status='rejected', approved_by=%s, approved_at=%s "
+                   "WHERE id=%s AND status='pending'", (rejected_by, datetime.now().isoformat(), event_id))
+        won = c.rowcount > 0
+        conn.commit()
+        return won
     finally:
         release(conn)
 

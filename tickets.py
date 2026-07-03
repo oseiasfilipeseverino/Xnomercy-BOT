@@ -34,8 +34,12 @@ class CloseTicketView(discord.ui.View):
     @discord.ui.button(label='🔒 Fechar Ticket', style=discord.ButtonStyle.danger, custom_id='xnm:fechar_ticket')
     async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            # Detecta o tipo do ticket pelo nome do canal
-            ch_name = interaction.channel.name.lower()
+            # Tipo real vem do banco (registrado na criação do ticket) — só cai pro
+            # nome do canal se por algum motivo não achar o registro (canal antigo,
+            # criado antes dessa coluna existir). Antes dependia só do nome, que
+            # quebrava se alguém renomeasse o canal manualmente.
+            ch_name = (database.get_ticket_type_by_channel(str(interaction.channel.id))
+                       or interaction.channel.name).lower()
             if 'recrutamento' in ch_name:
                 ticket_type = 'recrutamento'
                 archive_key = 'category_tickets_recrutamento_finalizado'

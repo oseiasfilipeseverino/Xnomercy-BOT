@@ -43,9 +43,29 @@ class EnergyNotifications(commands.Cog):
         self.check_broadcast.cancel()
 
     _alerted_errors = set()  # nível de classe: um aviso por tipo de erro, não por instância
+    _consecutive_failures = {}  # key -> contagem de falhas seguidas
+    _backoff_until = {}         # key -> datetime até quando pular a tentativa
 
     def _get_guild(self):
         return config.get_home_guild(self.bot)
+
+    def _in_backoff(self, key):
+        """True se essa rotina falhou repetidamente e ainda está no período de
+        espera — sem isso, uma queda persistente do Postgres fazia o bot tentar
+        reconectar do zero a cada 15-30s pra sempre, sem nenhum recuo."""
+        until = self._backoff_until.get(key)
+        return until is not None and datetime.datetime.utcnow() < until
+
+    def _record_failure(self, key):
+        n = self._consecutive_failures.get(key, 0) + 1
+        self._consecutive_failures[key] = n
+        if n >= 3:
+            cooldown = min(600, 30 * (2 ** (n - 3)))  # exponencial, teto de 10min
+            self._backoff_until[key] = datetime.datetime.utcnow() + datetime.timedelta(seconds=cooldown)
+
+    def _record_success(self, key):
+        self._consecutive_failures.pop(key, None)
+        self._backoff_until.pop(key, None)
 
     async def _alert_once(self, key, detail):
         """Manda UM aviso pro canal de logs quando check_pending/check_logs/
@@ -156,6 +176,8 @@ class EnergyNotifications(commands.Cog):
     @tasks.loop(seconds=30)
     async def check_pending(self):
         """Verifica se tem notificação instantânea pendente."""
+        if self._in_backoff('check_pending'):
+            return
         try:
             conn = _db_conn()
             c = conn.cursor()
@@ -176,8 +198,10 @@ class EnergyNotifications(commands.Cog):
 
                 sent = await self._send_notifications(msg)
                 print(f'[energy] Notificação enviada para {sent} devedores')
+            self._record_success('check_pending')
         except Exception as e:
             print(f'[energy] Erro check_pending: {e}')
+            self._record_failure('check_pending')
             await self._alert_once('check_pending', str(e))
 
     @check_pending.before_loop
@@ -188,11 +212,14 @@ class EnergyNotifications(commands.Cog):
     @tasks.loop(seconds=15)
     async def check_logs(self):
         """Verifica logs pendentes e posta no canal de logs do Discord."""
+        if self._in_backoff('check_logs'):
+            return
         try:
             conn = _db_conn()
             c = conn.cursor()
             c.execute('SELECT id, message FROM pending_logs ORDER BY id LIMIT 5')
             rows = c.fetchall()
+            self._record_success('check_logs')  # query funcionou — tabela existe e DB está OK
             if not rows:
                 conn.close()
                 return
@@ -230,6 +257,7 @@ class EnergyNotifications(commands.Cog):
 
         except Exception as e:
             print(f'[logs] Erro check_logs: {e}')
+            self._record_failure('check_logs')
             await self._alert_once('check_logs', str(e))
 
     @check_logs.before_loop
@@ -240,12 +268,15 @@ class EnergyNotifications(commands.Cog):
     @tasks.loop(seconds=30)
     async def check_broadcast(self):
         """Verifica se tem mensagem broadcast pendente e envia DM para TODOS."""
+        if self._in_backoff('check_broadcast'):
+            return
         try:
             conn = _db_conn()
             c = conn.cursor()
             c.execute("SELECT value FROM site_config WHERE key='broadcast_pending'")
             r = c.fetchone()
             conn.close()
+            self._record_success('check_broadcast')
 
             if not r or not r[0]:
                 return
@@ -303,6 +334,7 @@ class EnergyNotifications(commands.Cog):
 
         except Exception as e:
             print(f'[broadcast] Erro check_broadcast: {e}')
+            self._record_failure('check_broadcast')
             await self._alert_once('check_broadcast', str(e))
 
     @check_broadcast.before_loop
@@ -318,6 +350,8 @@ class EnergyNotifications(commands.Cog):
         nessa janela pulava a cobrança da semana inteira sem recuperação. Agora
         dispara assim que "now" passar do alvo (segunda 12h desta semana) e
         marca via site_config pra não duplicar — cobre atraso de horas/dias."""
+        if self._in_backoff('weekly_check'):
+            return
         try:
             now = datetime.datetime.utcnow() - datetime.timedelta(hours=3)  # BRT
             week_monday = now - datetime.timedelta(days=now.weekday())
@@ -333,6 +367,7 @@ class EnergyNotifications(commands.Cog):
             c.execute("SELECT value FROM site_config WHERE key='energy_weekly_last_sent'")
             last_sent = c.fetchone()
             conn.close()
+            self._record_success('weekly_check')
 
             if not r or r[0] != '1':
                 return
@@ -357,6 +392,7 @@ class EnergyNotifications(commands.Cog):
             print(f'[energy] Cobrança semanal enviada para {sent} devedores')
         except Exception as e:
             print(f'[energy] Erro weekly_check: {e}')
+            self._record_failure('weekly_check')
             await self._alert_once('weekly_check', str(e))
 
     @weekly_check.before_loop

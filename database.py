@@ -436,6 +436,9 @@ def reject_event(event_id, rejected_by):
 PART_KEYS = ['id','event_id','discord_id','username','share']
 
 def add_event_participant(event_id, discord_id, username, weight=100.0):
+    """Retorna True (inserido), False (já existia, username atualizado) ou None
+    (falha real — conexão caiu, dado inválido etc). Antes qualquer exceção virava
+    silenciosamente um UPDATE como se fosse "já existia", mascarando erro de verdade."""
     conn = get_connection()
     try:
         c = conn.cursor()
@@ -443,11 +446,15 @@ def add_event_participant(event_id, discord_id, username, weight=100.0):
             c.execute('INSERT INTO event_participants (event_id,discord_id,username,share) VALUES (%s,%s,%s,%s)', (event_id, discord_id, username, weight))
             conn.commit()
             return True
-        except Exception:
+        except pg8000.dbapi.IntegrityError:
             conn.rollback()
             c.execute('UPDATE event_participants SET username=%s WHERE event_id=%s AND discord_id=%s', (username, event_id, discord_id))
             conn.commit()
             return False
+        except Exception as e:
+            conn.rollback()
+            print(f'[add_event_participant] erro real (não é duplicata): {e}')
+            return None
     finally:
         release(conn)
 
@@ -531,6 +538,20 @@ def close_ticket_db(channel_id):
         c = conn.cursor()
         c.execute("UPDATE tickets SET status='closed' WHERE channel_id=%s", (channel_id,))
         conn.commit()
+    finally:
+        release(conn)
+
+def get_ticket_type_by_channel(channel_id):
+    """Tipo real do ticket, registrado no banco na criação — usado no fechamento
+    em vez de adivinhar pelo nome do canal (que quebra se alguém renomear)."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('SELECT ticket_type FROM tickets WHERE channel_id=%s', (channel_id,))
+        row = c.fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
     finally:
         release(conn)
 

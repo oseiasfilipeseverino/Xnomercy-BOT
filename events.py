@@ -237,7 +237,13 @@ class AddPlayerModal(discord.ui.Modal, title='Adicionar Player'):
             weight = 100.0
 
         added = database.add_event_participant(self.event_id, str(member.id), member.display_name, weight)
-        if not added:
+        if added is None:
+            # Falha real (conexão caiu etc) — distinto de "já existia" (False).
+            # Antes os dois casos eram indistinguíveis e isso tentava um UPDATE
+            # mesmo sem o INSERT ter funcionado por outro motivo.
+            await interaction.response.send_message('❌ Erro ao adicionar participante. Tente novamente.', ephemeral=True)
+            return
+        if added is False:
             database.set_participant_weight(self.event_id, str(member.id), weight)
 
         await _update_event_embed(interaction.guild, self.event_id)

@@ -8,6 +8,7 @@ from discord.ext import commands, tasks
 import datetime
 
 import database
+import config
 
 BRT_OFFSET = datetime.timedelta(hours=-3)
 
@@ -25,10 +26,7 @@ class WeeklyReportCog(commands.Cog):
         self.weekly_report_task.cancel()
 
     def _get_guild(self):
-        for g in self.bot.guilds:
-            if 'xnomercy' in g.name.lower():
-                return g
-        return self.bot.guilds[0] if self.bot.guilds else None
+        return config.get_home_guild(self.bot)
 
     def _get_stats(self):
         """Coleta estatísticas da semana."""

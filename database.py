@@ -381,11 +381,22 @@ def finish_event(event_id):
         release(conn)
 
 def deposit_event(event_id, total, repair, net):
+    """UPDATE condicional (WHERE status IN ('active','finished')) — mesmo padrão
+    atômico do approve_event/reject_event. Sem isso, /depositar_evento chamado duas
+    vezes quase simultâneas (retry do Discord, ou dois puxadores no mesmo canal)
+    lia o status 'active' nos dois antes de qualquer um gravar, e ambos passavam a
+    checagem e postavam sua PRÓPRIA mensagem de aprovação (valores podendo divergir
+    se o valor digitado mudou entre as duas chamadas) — confuso pra quem aprova, e
+    arriscava aprovar o valor errado por engano. Retorna True só pra quem venceu a
+    corrida."""
     conn = get_connection()
     try:
         c = conn.cursor()
-        c.execute("UPDATE events SET status='pending', total_value=%s, repair_value=%s, net_value=%s WHERE id=%s", (total, repair, net, event_id))
+        c.execute("UPDATE events SET status='pending', total_value=%s, repair_value=%s, net_value=%s "
+                   "WHERE id=%s AND status IN ('active','finished')", (total, repair, net, event_id))
+        won = c.rowcount > 0
         conn.commit()
+        return won
     finally:
         release(conn)
 

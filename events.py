@@ -150,9 +150,12 @@ class JoinEventButton(discord.ui.Button):
             msg = '✅ Você entrou no evento! Movendo para a call...' if added else '🔄 Você já estava no evento. Movendo para a call...'
             await interaction.response.send_message(msg, ephemeral=True)
         except Exception as e:
+            # Detalhe interno (str(e) pode carregar mensagem de driver de banco) só no
+            # log — pro usuário vai a mensagem genérica, mesma política do handler global.
+            print(f'[JoinEventButton] {e}')
             try:
                 if not interaction.response.is_done():
-                    await interaction.response.send_message(f'❌ Erro: {e}', ephemeral=True)
+                    await interaction.response.send_message('❌ Erro ao entrar no evento. Tente novamente.', ephemeral=True)
             except Exception:
                 pass
 
@@ -184,11 +187,12 @@ class FinalizeEventButton(discord.ui.Button):
                 f'Use `/simular_evento` e `/depositar_evento` no canal do evento.', ephemeral=True
             )
         except Exception as e:
+            print(f'[FinalizeEventButton] {e}')
             try:
                 if not interaction.response.is_done():
-                    await interaction.response.send_message(f'❌ Erro ao finalizar: {e}', ephemeral=True)
+                    await interaction.response.send_message('❌ Erro ao finalizar o evento. Tente novamente.', ephemeral=True)
                 else:
-                    await interaction.followup.send(f'❌ Erro ao finalizar: {e}', ephemeral=True)
+                    await interaction.followup.send('❌ Erro ao finalizar o evento. Tente novamente.', ephemeral=True)
             except Exception:
                 pass
 
@@ -467,11 +471,10 @@ class EventsCog(commands.Cog):
                     self.bot.add_view(EventManageView(ev['id']))
                 if active:
                     self.bot.add_view(ParticipateView(active))
+                # Restaura o painel de participar (uma vez só — antes chamava duas
+                # vezes seguidas, apagando/repostando o painel em dobro a cada reconexão)
                 await _refresh_participar(guild)
-                print(f'[on_ready] {len(active)} evento(s) em {guild.name}')
-                # Restaura o painel de participar
-                await _refresh_participar(guild)
-                print(f'[events] Painel de participar restaurado em {guild.name}')
+                print(f'[on_ready] {len(active)} evento(s) em {guild.name} — painel restaurado')
             except Exception as e:
                 print(f'[events] Erro ao restaurar painel: {e}')
 
@@ -505,8 +508,9 @@ class EventsCog(commands.Cog):
             await interaction.response.send_message(msg, ephemeral=True)
 
         except Exception as e:
+            print(f'[atualizar_participacao] {e}')
             try:
-                await interaction.response.send_message(f'❌ Erro: {str(e)}', ephemeral=True)
+                await interaction.response.send_message('❌ Erro ao atualizar participação. Tente novamente.', ephemeral=True)
             except Exception:
                 pass
 
@@ -549,7 +553,12 @@ class EventsCog(commands.Cog):
         embed.add_field(name='🛒 Taxa Vendedor', value=f'-{fmt(vendor_cut)} ({vendor_tax}%)', inline=True)
         embed.add_field(name='🔧 Reparo',        value=f'-{fmt(reparo)} prata',               inline=True)
         embed.add_field(name='✅ Valor Líquido', value=f'{fmt(net)} prata',                   inline=True)
-        embed.add_field(name='👥 Participantes', value=str(len(participants)),                 inline=True)
+        # Conta só quem tem share>0 — mostrar o total bruto (incluindo quem foi
+        # excluído da divisão) confundia quem aprova, fazendo parecer que a divisão
+        # é entre mais gente do que realmente recebe prata.
+        ativos = [p for p in participants if float(p['share'] or 0) > 0]
+        qtd_txt = str(len(ativos)) if len(ativos) == len(participants) else f'{len(ativos)} (+{len(participants)-len(ativos)} sem %)'
+        embed.add_field(name='👥 Participantes', value=qtd_txt, inline=True)
 
         lines = []
         for p in participants:
@@ -593,7 +602,13 @@ class EventsCog(commands.Cog):
             await interaction.response.send_message('❌ Valor líquido negativo!', ephemeral=True)
             return
 
-        database.deposit_event(event['id'], valor_total, reparo, net)
+        # Reivindica o evento atomicamente ANTES de montar a mensagem de aprovação —
+        # se perder a corrida (já reivindicado por outra chamada quase simultânea),
+        # aborta sem postar uma 2ª mensagem de aprovação divergente pro mesmo evento.
+        if not database.deposit_event(event['id'], valor_total, reparo, net):
+            await interaction.response.send_message(
+                '❌ Este evento já foi processado ou está aguardando aprovação.', ephemeral=True)
+            return
         distribution = _calc_distribution(participants, net)
 
         ch_id  = database.get_config('channel_financeiro')
@@ -615,7 +630,9 @@ class EventsCog(commands.Cog):
         embed.add_field(name='🛒 Taxa Vendedor', value=f'-{fmt(vendor_cut)} ({vendor_tax}%)', inline=True)
         embed.add_field(name='🔧 Reparo',        value=f'-{fmt(reparo)} prata',               inline=True)
         embed.add_field(name='✅ Valor Líquido', value=f'{fmt(net)} prata',                   inline=True)
-        embed.add_field(name='👥 Participantes', value=str(len(participants)),                 inline=True)
+        ativos = [p for p in participants if float(p['share'] or 0) > 0]
+        qtd_txt = str(len(ativos)) if len(ativos) == len(participants) else f'{len(ativos)} (+{len(participants)-len(ativos)} sem %)'
+        embed.add_field(name='👥 Participantes', value=qtd_txt, inline=True)
         embed.add_field(name='💰 Distribuição',  value='\n'.join(lines),                      inline=False)
 
         view = ApproveDepositView(event['id'], distribution, [dict(p) for p in participants])

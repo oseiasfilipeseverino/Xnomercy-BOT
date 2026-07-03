@@ -3,7 +3,33 @@ config.py — Configuração central do XnoMercy Bot
 Edite aqui os nomes dos cargos do seu servidor Discord.
 """
 
+import os
 import discord
+
+# ID do servidor principal da guild — usado pra restringir sincronização de
+# comandos administrativos e pra achar o servidor certo em auto_purge/
+# energy_notifications/weekly_report. Antes essas rotinas achavam o servidor
+# procurando "xnomercy" no nome (bot.guilds[0] como fallback) — se o bot fosse
+# adicionado a outro servidor (teste, guild aliada) com cargos de mesmo nome
+# ("Líder", "Staff" etc.), os comandos administrativos ficavam disponíveis lá
+# também, dando controle total do banco de dados compartilhado pra quem tivesse
+# esses cargos no servidor errado. Setar GUILD_ID no ambiente fecha essa brecha.
+GUILD_ID = int(os.getenv('GUILD_ID')) if os.getenv('GUILD_ID', '').strip().isdigit() else None
+
+
+def get_home_guild(bot):
+    """Servidor principal da guild. Usa GUILD_ID se configurado (seguro); sem
+    isso, cai no fallback antigo por nome (mantido só por compatibilidade —
+    configure GUILD_ID assim que possível)."""
+    if GUILD_ID:
+        guild = bot.get_guild(GUILD_ID)
+        if guild:
+            return guild
+        print(f'⚠️  GUILD_ID={GUILD_ID} configurado mas o bot não está nesse servidor.')
+    for g in bot.guilds:
+        if 'xnomercy' in g.name.lower():
+            return g
+    return bot.guilds[0] if bot.guilds else None
 
 # ── Cargos (exatamente como aparecem no Discord) ───────────────────────────────
 ROLES = {

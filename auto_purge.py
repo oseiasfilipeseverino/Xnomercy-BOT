@@ -9,6 +9,7 @@ from discord.ext import commands, tasks
 import requests
 
 import database
+import config
 
 ALBION_API = 'https://gameinfo.albiononline.com/api/gameinfo'
 GUILD_NAME = 'XnoMercy'
@@ -26,10 +27,7 @@ class AutoPurgeCog(commands.Cog):
         self.purge_check_task.cancel()
 
     def _get_guild(self):
-        for g in self.bot.guilds:
-            if 'xnomercy' in g.name.lower():
-                return g
-        return self.bot.guilds[0] if self.bot.guilds else None
+        return config.get_home_guild(self.bot)
 
     def _get_albion_guild_id(self):
         try:

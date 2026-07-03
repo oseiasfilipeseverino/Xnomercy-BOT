@@ -4,6 +4,7 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 import database
+import config
 from price_updater import start_price_updater   # ← LINHA ADICIONADA
 
 load_dotenv()
@@ -21,21 +22,37 @@ COGS = ['tickets', 'events', 'bank', 'members', 'welcome', 'setup', 'scheduled_e
 async def on_message(message):
     await bot.process_commands(message)
 
+# discord.py chama on_ready de novo a cada reconexão (não só na 1ª conexão) — sem essa
+# trava, cada reconexão criava outra task de start_price_updater() rodando em paralelo
+# (loop de 30min duplicado, dobrando as chamadas à API do Albion e ao banco).
+_price_updater_started = False
+
 @bot.event
 async def on_ready():
+    global _price_updater_started
     database.init_db()
     print('✅  XnoMercy Bot online como ' + str(bot.user))
     try:
-        for guild in bot.guilds:
-            guild_obj = discord.Object(id=guild.id)
+        # Sincroniza comandos administrativos SÓ no servidor autorizado (config.GUILD_ID) —
+        # sem isso, o bot sincronizava (e liberava) comandos admin em QUALQUER servidor
+        # que estivesse, incluindo servidores de teste com cargos de mesmo nome.
+        home_guild = config.get_home_guild(bot)
+        if home_guild:
+            guild_obj = discord.Object(id=home_guild.id)
             bot.tree.copy_global_to(guild=guild_obj)
             synced = await bot.tree.sync(guild=guild_obj)
-            print('✅  ' + str(len(synced)) + ' comandos em: ' + guild.name)
+            print('✅  ' + str(len(synced)) + ' comandos em: ' + home_guild.name)
+        else:
+            print('❌  Nenhum servidor encontrado pra sincronizar comandos.')
+        if not config.GUILD_ID:
+            print('⚠️  GUILD_ID não configurado no ambiente — usando fallback por nome (menos seguro).')
     except Exception as e:
         print('❌  Erro ao sincronizar: ' + str(e))
 
-    asyncio.create_task(start_price_updater())  # ← LINHA ADICIONADA
-    print('✅  Price updater iniciado (atualiza a cada 30min)')
+    if not _price_updater_started:
+        _price_updater_started = True
+        asyncio.create_task(start_price_updater())  # ← LINHA ADICIONADA
+        print('✅  Price updater iniciado (atualiza a cada 30min)')
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: Exception):

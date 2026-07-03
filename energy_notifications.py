@@ -5,12 +5,14 @@ Cog de notificações de energia + logs + broadcast.
 - check_broadcast (30s): envia DM em massa para TODOS os membros
 - weekly_check (1h): cobrança semanal de energia (segunda 12h BRT)
 """
+import asyncio
 import discord
 from discord.ext import commands, tasks
 import datetime
 import os
 import pg8000
 from urllib.parse import urlparse
+import config
 
 def _db_conn():
     url = urlparse(os.environ.get('DATABASE_URL', ''))
@@ -40,10 +42,7 @@ class EnergyNotifications(commands.Cog):
         self.check_broadcast.cancel()
 
     def _get_guild(self):
-        for g in self.bot.guilds:
-            if 'xnomercy' in g.name.lower():
-                return g
-        return self.bot.guilds[0] if self.bot.guilds else None
+        return config.get_home_guild(self.bot)
 
     def _find_member(self, guild, player_name):
         """Encontra membro do Discord pelo nome Albion (busca no nick do servidor)."""
@@ -249,6 +248,10 @@ class EnergyNotifications(commands.Cog):
                 except Exception as e:
                     failed += 1
                     print(f'[broadcast] Erro DM {member.display_name}: {e}')
+                # Pausa entre DMs — sem isso, num servidor grande o loop estourava o
+                # rate limit global do Discord e travava os outros comandos do bot
+                # enquanto o broadcast rodava.
+                await asyncio.sleep(1.5)
 
             print(f'[broadcast] Concluído: {sent} enviadas, {failed} falharam')
 

@@ -92,7 +92,8 @@ class WelcomeCog(commands.Cog):
                 f'❌ **{target.display_name}** bloqueou DMs ou não aceita mensagens de bots.', ephemeral=True
             )
         except Exception as e:
-            await interaction.response.send_message(f'❌ Erro: {str(e)}', ephemeral=True)
+            print(f'[welcome] {e}')
+            await interaction.response.send_message('❌ Erro ao enviar a DM. Tente novamente.', ephemeral=True)
  
     # ── /configurar_boas_vindas ────────────────────────────────────────────────
     @app_commands.command(name='configurar_boas_vindas', description='[LÍDER] Edita a mensagem de boas-vindas.')

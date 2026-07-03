@@ -15,6 +15,7 @@ import requests
 import asyncio
 from typing import Optional
 import database as db
+import permissions
 
 # ── Configuração ───────────────────────────────────────────────────────────────
 ALBION_API      = 'https://gameinfo.albiononline.com/api/gameinfo'
@@ -22,8 +23,6 @@ GUILD_NAME      = 'XnoMercy'
 ROLE_MEMBRO     = 'Membro'
 ROLE_FORASTEIRO = 'Forasteiro'
 NICK_PREFIX     = '[NM] '          # Prefixo do nick no Discord
-
-STAFF_ROLES = {'Líder', 'Vice Líder', 'Officer', 'Sub Officer', 'Staff', 'Recrutador'}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -191,11 +190,14 @@ class AlbionRegister(commands.Cog):
     )
     async def registrar(self, interaction: discord.Interaction,
                         usuario: discord.Member, nick: str):
-        # Verifica permissão do executor
-        user_roles = {r.name for r in interaction.user.roles}
-        if not (user_roles & STAFF_ROLES):
+        # Verifica permissão do executor via sistema dinâmico (tabela `permissions`),
+        # não mais um set de cargos fixo no código — antes, se a liderança reconfigurasse
+        # quem vê tickets de recrutamento via /configurar_permissao, esse comando
+        # continuava liberado pra quem tivesse o cargo com o nome antigo, ignorando a
+        # mudança.
+        if not permissions.can_see_recruit_tickets(interaction.user):
             await interaction.response.send_message(
-                '❌ Sem permissão. Apenas Staff, Recrutadores e Líderes podem usar `/registrar`.',
+                '❌ Sem permissão. Apenas quem tem acesso a tickets de recrutamento pode usar `/registrar`.',
                 ephemeral=True)
             return
 

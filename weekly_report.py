@@ -149,12 +149,23 @@ class WeeklyReportCog(commands.Cog):
 
     @tasks.loop(hours=1)
     async def weekly_report_task(self):
-        """Posta relatório todo domingo às 20h BRT."""
+        """Posta relatório todo domingo às 20h BRT.
+
+        Antes checava só `weekday()==6 and hour==20` — se o bot reiniciasse
+        (deploy, crash) bem durante essa janela de 1h, a semana inteira era
+        pulada sem nenhuma recuperação. Agora calcula o alvo (domingo 20h desta
+        semana) e dispara assim que "now" passar dele, marcando a semana como
+        enviada via site_config — cobre atraso de horas ou dias sem duplicar."""
         try:
             now = datetime.datetime.utcnow() + BRT_OFFSET
-            # Domingo (6) às 20h
-            if now.weekday() != 6 or now.hour != 20:
+            week_monday = now - datetime.timedelta(days=now.weekday())
+            target = week_monday.replace(hour=20, minute=0, second=0, microsecond=0) + datetime.timedelta(days=6)
+            if now < target:
                 return
+
+            week_key = target.strftime('%Y-%m-%d')
+            if database.get_config('weekly_report_last_sent') == week_key:
+                return  # já enviado essa semana
 
             discord_guild = self._get_guild()
             if not discord_guild:
@@ -171,6 +182,7 @@ class WeeklyReportCog(commands.Cog):
             stats = self._get_stats()
             embed = self._build_report(stats)
             await channel.send(embed=embed)
+            database.set_config('weekly_report_last_sent', week_key)
             print('[weekly_report] Relatorio semanal postado!')
 
         except Exception as e:

@@ -13,6 +13,7 @@ import os
 import pg8000
 from urllib.parse import urlparse
 import config
+import database
 
 def _db_conn():
     url = urlparse(os.environ.get('DATABASE_URL', ''))
@@ -41,8 +42,37 @@ class EnergyNotifications(commands.Cog):
         self.check_logs.cancel()
         self.check_broadcast.cancel()
 
+    _alerted_errors = set()  # nível de classe: um aviso por tipo de erro, não por instância
+
     def _get_guild(self):
         return config.get_home_guild(self.bot)
+
+    async def _alert_once(self, key, detail):
+        """Manda UM aviso pro canal de logs quando check_pending/check_logs/
+        check_broadcast/weekly_check falham — essas rotinas dependem de tabelas
+        (energy_records/site_config/pending_logs) que pertencem ao site, não a
+        este bot. Se o schema lá mudar ou o site nunca tiver rodado, a rotina
+        morria silenciosamente pra sempre (só um print perdido nos logs do
+        Railway). Um aviso só (não a cada 15-30s) já dá visibilidade suficiente
+        sem virar spam."""
+        if key in self._alerted_errors:
+            return
+        self._alerted_errors.add(key)
+        try:
+            guild = self._get_guild()
+            if not guild:
+                return
+            ch_id = database.get_config('channel_logs')
+            if not ch_id:
+                return
+            ch = guild.get_channel(int(ch_id))
+            if ch:
+                await ch.send(
+                    f'⚠️ **[energy_notifications]** `{key}` falhando: {detail}\n'
+                    f'Verifique se as tabelas do site (energy_records/site_config/pending_logs) existem.'
+                )
+        except Exception:
+            pass
 
     def _find_member(self, guild, player_name):
         """Encontra membro do Discord pelo nome Albion (busca no nick do servidor)."""
@@ -148,6 +178,7 @@ class EnergyNotifications(commands.Cog):
                 print(f'[energy] Notificação enviada para {sent} devedores')
         except Exception as e:
             print(f'[energy] Erro check_pending: {e}')
+            await self._alert_once('check_pending', str(e))
 
     @check_pending.before_loop
     async def before_check_pending(self):
@@ -199,6 +230,7 @@ class EnergyNotifications(commands.Cog):
 
         except Exception as e:
             print(f'[logs] Erro check_logs: {e}')
+            await self._alert_once('check_logs', str(e))
 
     @check_logs.before_loop
     async def before_check_logs(self):
@@ -271,29 +303,41 @@ class EnergyNotifications(commands.Cog):
 
         except Exception as e:
             print(f'[broadcast] Erro check_broadcast: {e}')
+            await self._alert_once('check_broadcast', str(e))
 
     @check_broadcast.before_loop
     async def before_check_broadcast(self):
         await self.bot.wait_until_ready()
 
-    # ── Cobrança semanal (segunda 12h BRT) ────────────────────────────────────
+    # ── Cobrança semanal (segunda 12h BRT) ─────────────────────────────────────
     @tasks.loop(hours=1)
     async def weekly_check(self):
-        """Toda segunda-feira 12h BRT envia cobrança semanal."""
+        """Toda segunda-feira 12h BRT envia cobrança semanal.
+
+        Antes checava só `weekday()==0 and hour==12` — reinício do bot bem
+        nessa janela pulava a cobrança da semana inteira sem recuperação. Agora
+        dispara assim que "now" passar do alvo (segunda 12h desta semana) e
+        marca via site_config pra não duplicar — cobre atraso de horas/dias."""
         try:
             now = datetime.datetime.utcnow() - datetime.timedelta(hours=3)  # BRT
-            # Segunda-feira (0) às 12h
-            if now.weekday() != 0 or now.hour != 12:
+            week_monday = now - datetime.timedelta(days=now.weekday())
+            target = week_monday.replace(hour=12, minute=0, second=0, microsecond=0)
+            if now < target:
                 return
+            week_key = target.strftime('%Y-%m-%d')
 
             conn = _db_conn()
             c = conn.cursor()
             c.execute("SELECT value FROM site_config WHERE key='energy_weekly_enabled'")
             r = c.fetchone()
+            c.execute("SELECT value FROM site_config WHERE key='energy_weekly_last_sent'")
+            last_sent = c.fetchone()
             conn.close()
 
             if not r or r[0] != '1':
                 return
+            if last_sent and last_sent[0] == week_key:
+                return  # já enviado essa semana
 
             msg = (
                 "**Cobranca Semanal de Energia -- XnoMercy**\n\n"
@@ -302,9 +346,18 @@ class EnergyNotifications(commands.Cog):
                 "-- Lideranca XnoMercy"
             )
             sent = await self._send_notifications(msg)
+
+            conn2 = _db_conn()
+            c2 = conn2.cursor()
+            c2.execute("""INSERT INTO site_config (key, value) VALUES ('energy_weekly_last_sent', %s)
+                          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""", (week_key,))
+            conn2.commit()
+            conn2.close()
+
             print(f'[energy] Cobrança semanal enviada para {sent} devedores')
         except Exception as e:
             print(f'[energy] Erro weekly_check: {e}')
+            await self._alert_once('weekly_check', str(e))
 
     @weekly_check.before_loop
     async def before_weekly_check(self):

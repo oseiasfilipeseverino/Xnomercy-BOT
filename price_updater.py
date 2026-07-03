@@ -40,6 +40,14 @@ def _init_table():
         )''')
         c.execute('CREATE INDEX IF NOT EXISTS idx_pc_item ON prices_cache (item_id)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_pc_upd  ON prices_cache (updated_at)')
+        # Fila de demanda: o site grava aqui os itens que precisou buscar ao vivo
+        # na AODP (não estavam no prices_cache) — este updater os incorpora no
+        # próximo ciclo, então o cache converge pro que a guild realmente consulta.
+        c.execute('''CREATE TABLE IF NOT EXISTS price_demand (
+            item_id      TEXT PRIMARY KEY,
+            requested_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            hits         INTEGER NOT NULL DEFAULT 1
+        )''')
         conn.commit()
         print('[price_updater] Tabela prices_cache pronta.')
     except Exception as e:
@@ -241,7 +249,27 @@ ALL_ITEMS = list(dict.fromkeys(
     _gen([
         'MEAL_SOUP_FISH','MEAL_ROAST_FISH','MEAL_SALAD_FISH','MEAL_PIE_FISH',
         'MEAL_SANDWICH',
-    ], [3,4,5,6,7,8])
+    ], [3,4,5,6,7,8]) +
+    # ── Fazenda/Ilha (calculadora de Ilha do site lê o prices_cache via L2) ──
+    # Sementes de cultura + culturas colhidas (T1-T8)
+    ['T1_FARM_CARROT_SEED','T2_FARM_BEAN_SEED','T3_FARM_WHEAT_SEED','T4_FARM_TURNIP_SEED',
+     'T5_FARM_CABBAGE_SEED','T6_FARM_POTATO_SEED','T7_FARM_CORN_SEED','T8_FARM_PUMPKIN_SEED',
+     'T1_CARROT','T2_BEAN','T3_WHEAT','T4_TURNIP','T5_CABBAGE','T6_POTATO','T7_CORN','T8_PUMPKIN'] +
+    # Sementes de erva + ervas colhidas (T2-T8)
+    ['T2_FARM_AGARIC_SEED','T3_FARM_COMFREY_SEED','T4_FARM_BURDOCK_SEED','T5_FARM_TEASEL_SEED',
+     'T6_FARM_FOXGLOVE_SEED','T7_FARM_MULLEIN_SEED','T8_FARM_YARROW_SEED',
+     'T2_AGARIC','T3_COMFREY','T4_BURDOCK','T5_TEASEL','T6_FOXGLOVE','T7_MULLEIN','T8_YARROW'] +
+    # Animais de consumo (filhote + adulto) e produtos contínuos
+    ['T3_FARM_CHICKEN_BABY','T4_FARM_GOAT_BABY','T5_FARM_GOOSE_BABY',
+     'T6_FARM_SHEEP_BABY','T7_FARM_PIG_BABY','T8_FARM_COW_BABY',
+     'T3_FARM_CHICKEN_GROWN','T4_FARM_GOAT_GROWN','T5_FARM_GOOSE_GROWN',
+     'T6_FARM_SHEEP_GROWN','T7_FARM_PIG_GROWN','T8_FARM_COW_GROWN',
+     'T3_EGG','T5_EGG','T4_MILK','T6_MILK','T8_MILK'] +
+    # Montarias de fazenda (filhote + adulto) — mesmos ranges do pg_ilha.html
+    _gen(['FARM_OX_BABY','FARM_OX_GROWN','FARM_HORSE_BABY','FARM_HORSE_GROWN',
+          'FARM_BOAR_BABY','FARM_BOAR_GROWN'], [3,4,5,6,7,8]) +
+    _gen(['FARM_ARMOREDHORSE_BABY','FARM_ARMOREDHORSE_GROWN',
+          'FARM_DIREWOLF_BABY','FARM_DIREWOLF_GROWN'], [4,5,6,7,8])
 ))
 
 # Session HTTP com keep-alive (reutiliza conexão TCP com AODP)
@@ -251,6 +279,25 @@ _session.mount('https://', requests.adapters.HTTPAdapter(
     pool_connections=2, pool_maxsize=4
 ))
 
+# ── Fila de demanda ────────────────────────────────────────────────────────────
+def _get_demand_items(limit=200):
+    """Itens consultados pelo site nos últimos 7 dias que NÃO estão no catálogo
+    fixo — entram no scan da rodada (teto de 200 pra rodada não crescer sem
+    controle; os mais consultados vêm primeiro)."""
+    try:
+        conn = _get_conn()
+        c = conn.cursor()
+        c.execute('''SELECT item_id FROM price_demand
+                     WHERE requested_at > NOW() - INTERVAL '7 days'
+                     ORDER BY hits DESC, requested_at DESC LIMIT %s''', (limit,))
+        rows = c.fetchall()
+        conn.close()
+        known = set(ALL_ITEMS)
+        return [r[0] for r in rows if r[0] not in known]
+    except Exception as e:
+        print(f'[price_updater] fila de demanda: {e}')
+        return []
+
 # ── Funções principais ─────────────────────────────────────────────────────────
 async def update_prices_once():
     """Faz uma rodada completa: busca todos os itens e salva no banco."""
@@ -258,13 +305,17 @@ async def update_prices_once():
     start      = time.time()
     total_rows = 0
     errors     = 0
-    total_ch   = (len(ALL_ITEMS) + CHUNK_SIZE - 1) // CHUNK_SIZE
     loop       = asyncio.get_event_loop()
 
-    print(f'[price_updater] Iniciando: {len(ALL_ITEMS)} itens, {total_ch} chunks')
+    demand     = await loop.run_in_executor(None, _get_demand_items)
+    scan_items = ALL_ITEMS + demand
+    total_ch   = (len(scan_items) + CHUNK_SIZE - 1) // CHUNK_SIZE
 
-    for i in range(0, len(ALL_ITEMS), CHUNK_SIZE):
-        chunk = ','.join(ALL_ITEMS[i:i+CHUNK_SIZE])
+    print(f'[price_updater] Iniciando: {len(scan_items)} itens '
+          f'({len(demand)} da fila de demanda), {total_ch} chunks')
+
+    for i in range(0, len(scan_items), CHUNK_SIZE):
+        chunk = ','.join(scan_items[i:i+CHUNK_SIZE])
         url   = f'{AODP}{chunk}.json?locations={LOCATIONS}&qualities={QUALITIES}'
         try:
             # run_in_executor: não bloqueia o event loop do bot durante o request HTTP

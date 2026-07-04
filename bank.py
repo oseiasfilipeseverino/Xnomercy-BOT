@@ -44,6 +44,55 @@ class BankCog(commands.Cog):
         embed.set_footer(text='XnoMercy Guild')
         await interaction.response.send_message(embed=embed)
 
+    # ── /extrato ───────────────────────────────────────────────────────────────
+    @app_commands.command(name='extrato', description='Veja seu histórico de créditos e débitos na guild.')
+    async def extrato(self, interaction: discord.Interaction):
+        user = interaction.user
+        database.ensure_player(str(user.id), user.display_name)
+        txs = database.get_player_transactions(str(user.id), limit=15)
+
+        embed = discord.Embed(title='📜 Extrato de Saldo', color=discord.Color.gold())
+        embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
+        if not txs:
+            embed.description = 'Nenhuma movimentação registrada ainda.'
+        else:
+            lines = []
+            for t in txs:
+                sign = '+' if t['amount'] >= 0 else ''
+                data = (t['created_at'] or '')[:16].replace('T', ' ')
+                desc = t['description'] or t['type']
+                lines.append(f"`{data}` **{sign}{fmt(t['amount'])}** — {desc}")
+            embed.description = '\n'.join(lines)
+            embed.set_footer(text=f'Últimas {len(txs)} movimentações · saldo atual: {fmt(database.get_player_balance(str(user.id)))}')
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ── /extrato_membro ────────────────────────────────────────────────────────
+    @app_commands.command(name='extrato_membro', description='[LÍDER] Ver o extrato de um membro específico (auditoria).')
+    @app_commands.describe(usuario='Membro que deseja auditar')
+    async def extrato_membro(self, interaction: discord.Interaction, usuario: discord.Member):
+        if not is_financial(interaction.user):
+            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            return
+
+        database.ensure_player(str(usuario.id), usuario.display_name)
+        txs = database.get_player_transactions(str(usuario.id), limit=25)
+
+        embed = discord.Embed(title='📜 Extrato (Auditoria)', color=discord.Color.gold())
+        embed.set_author(name=usuario.display_name, icon_url=usuario.display_avatar.url)
+        if not txs:
+            embed.description = 'Nenhuma movimentação registrada ainda.'
+        else:
+            lines = []
+            for t in txs:
+                sign = '+' if t['amount'] >= 0 else ''
+                data = (t['created_at'] or '')[:16].replace('T', ' ')
+                desc = t['description'] or t['type']
+                by = f" (por {t['created_by']})" if t['created_by'] else ''
+                lines.append(f"`{data}` **{sign}{fmt(t['amount'])}** — {desc}{by}")
+            embed.description = '\n'.join(lines)
+            embed.set_footer(text=f'Últimas {len(txs)} movimentações · saldo atual: {fmt(database.get_player_balance(str(usuario.id)))}')
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
     # ── /saldo_membro ──────────────────────────────────────────────────────────
     @app_commands.command(name='saldo_membro', description='[LÍDER] Ver o saldo de um membro específico.')
     @app_commands.describe(usuario='Membro que deseja consultar')

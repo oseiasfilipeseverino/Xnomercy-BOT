@@ -16,7 +16,7 @@ intents.guild_messages  = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-COGS = ['tickets', 'events', 'bank', 'members', 'welcome', 'setup', 'scheduled_events', 'energy_notifications', 'weekly_report', 'auto_purge']
+COGS = ['tickets', 'events', 'bank', 'members', 'welcome', 'setup', 'scheduled_events', 'energy_notifications', 'weekly_report', 'auto_purge', 'market']
 
 @bot.event
 async def on_message(message):

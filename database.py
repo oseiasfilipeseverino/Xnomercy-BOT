@@ -269,6 +269,26 @@ def get_player_rank(discord_id):
     finally:
         release(conn)
 
+def get_player_transactions(discord_id, limit=15):
+    """Últimas transações do jogador — a tabela `transactions` já registra tudo
+    (valor, motivo, quem fez, quando) desde sempre, mas até agora não existia
+    NENHUMA tela (bot ou site) que mostrasse isso pro próprio membro nem pra
+    gestão auditar. created_at é TEXT (CURRENT_TIMESTAMP), por isso o cast
+    explícito pra ordenar corretamente."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('''SELECT amount, type, description, created_by, created_at
+                     FROM transactions WHERE discord_id=%s
+                     ORDER BY created_at::timestamptz DESC LIMIT %s''', (discord_id, limit))
+        return [{'amount': float(r[0]), 'type': r[1], 'description': r[2],
+                  'created_by': r[3], 'created_at': r[4]} for r in c.fetchall()]
+    except Exception as e:
+        print(f'[get_player_transactions] {e}')
+        return []
+    finally:
+        release(conn)
+
 def update_player_balance(discord_id, username, amount):
     ensure_player(discord_id, username)
     conn = get_connection()

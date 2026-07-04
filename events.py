@@ -439,6 +439,33 @@ class ApproveDepositView(discord.ui.View):
             f'✅ **{interaction.user.display_name}** aprovou o depósito do **Evento #{self.event_id:04d} — {event["title"]}**.')
         await interaction.response.send_message('✅ Aprovado! Saldos distribuídos.', ephemeral=True)
 
+        # Resumo no canal do próprio evento — quem participou não tem acesso ao
+        # canal financeiro (staff-only) então não via se/quanto recebeu sem
+        # perguntar. Best-effort: se o canal já foi arquivado/apagado, só loga.
+        if event.get('channel_id'):
+            try:
+                event_ch = interaction.guild.get_channel(int(event['channel_id']))
+                if event_ch:
+                    lines = []
+                    for p in self.participants:
+                        valor = self.distribution.get(p['discord_id'], 0)
+                        if valor > 0:
+                            lines.append(f'• <@{p["discord_id"]}> → **{fmt(valor)} prata**')
+                    resumo = discord.Embed(
+                        title=f'✅ Loot Aprovado — Evento #{self.event_id:04d}',
+                        description=f'**{event["title"]}**',
+                        color=discord.Color.green()
+                    )
+                    resumo.add_field(
+                        name='💰 Distribuição',
+                        value='\n'.join(lines) if lines else 'Ninguém recebeu prata nessa divisão.',
+                        inline=False
+                    )
+                    resumo.set_footer(text=f'Aprovado por {interaction.user.display_name}')
+                    await event_ch.send(embed=resumo)
+            except Exception as e:
+                print(f'[events] Erro ao postar resumo no canal do evento #{self.event_id}: {e}')
+
     @discord.ui.button(label='❌ Recusar', style=discord.ButtonStyle.danger, custom_id='xnm:recusar_dep')
     async def recusar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_financial(interaction.user):

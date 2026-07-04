@@ -46,6 +46,30 @@ async def on_ready():
             print('❌  Nenhum servidor encontrado pra sincronizar comandos.')
         if not config.GUILD_ID:
             print('⚠️  GUILD_ID não configurado no ambiente — usando fallback por nome (menos seguro).')
+
+        # Comando guild-scoped nunca aparece em DM, não importa o allowed_contexts do
+        # comando — só comando sincronizado GLOBALMENTE pode. Por isso, além da cópia
+        # de sempre pro servidor principal (acima), sincroniza GLOBALMENTE só os 4
+        # comandos de mercado (marcados allowed_contexts(dms=True) em market.py) —
+        # os únicos que o usuário pediu pra funcionar em conversa privada com o bot.
+        # Remove os outros do bucket global temporariamente pra não vazar comando
+        # administrativo (ex: /depositar_evento) pra fora do servidor autorizado —
+        # exatamente o problema que a sincronização por guild (acima) já evita —
+        # e devolve todos ao bucket depois, pra não bagunçar o próximo on_ready
+        # (reconexão) que depende do bucket completo pra copiar de novo pro servidor.
+        try:
+            DM_COMMANDS = {'preco', 'alerta_preco', 'meus_alertas', 'remover_alerta'}
+            all_global = list(bot.tree.get_commands())
+            removed = [c for c in all_global if c.name not in DM_COMMANDS]
+            for c in removed:
+                bot.tree.remove_command(c.name)
+            dm_synced = await bot.tree.sync()
+            for c in removed:
+                bot.tree.add_command(c)
+            print('✅  ' + str(len(dm_synced)) + ' comando(s) global(is)/DM: ' +
+                  ', '.join(c.name for c in dm_synced))
+        except Exception as e:
+            print('❌  Erro ao sincronizar comandos globais (DM): ' + str(e))
     except Exception as e:
         print('❌  Erro ao sincronizar: ' + str(e))
 

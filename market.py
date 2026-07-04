@@ -131,9 +131,16 @@ class MarketCog(commands.Cog):
                 break
         return choices
 
+    # allowed_contexts/allowed_installs: só preço/alertas são liberados fora do
+    # servidor (DM) — não expõem nada sensível da guild (saldo, eventos etc). Pra
+    # isso funcionar de verdade em DM, o main.py também sincroniza estes 4
+    # comandos GLOBALMENTE (além da cópia de sempre no servidor principal), já
+    # que comando guild-scoped nunca aparece em DM, não importa o allowed_contexts.
     @app_commands.command(name='preco', description='Preço atual de um item no mercado, por cidade.')
     @app_commands.describe(item='Nome do item (ex: Espada Longa) — escolha uma sugestão da lista')
     @app_commands.autocomplete(item=_item_autocomplete)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=True, users=True)
     async def preco(self, interaction: discord.Interaction, item: str):
         await interaction.response.defer()
 
@@ -202,6 +209,8 @@ class MarketCog(commands.Cog):
     ])
     @app_commands.choices(cidade=CITY_CHOICES)
     @app_commands.choices(qualidade=QUALITY_CHOICES)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=True, users=True)
     async def alerta_preco(self, interaction: discord.Interaction, item: str, preco: int,
                             direcao: app_commands.Choice[str],
                             cidade: app_commands.Choice[str] = None,
@@ -230,6 +239,8 @@ class MarketCog(commands.Cog):
 
     # ── /meus_alertas ──────────────────────────────────────────────────────────
     @app_commands.command(name='meus_alertas', description='Lista seus alertas de preço ativos.')
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=True, users=True)
     async def meus_alertas(self, interaction: discord.Interaction):
         alerts = _get_user_alerts(str(interaction.user.id))
         if not alerts:
@@ -249,6 +260,8 @@ class MarketCog(commands.Cog):
     # ── /remover_alerta ────────────────────────────────────────────────────────
     @app_commands.command(name='remover_alerta', description='Remove um dos seus alertas de preço.')
     @app_commands.describe(id='Número do alerta (veja em /meus_alertas)')
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=True, users=True)
     async def remover_alerta(self, interaction: discord.Interaction, id: int):
         ok = _remove_alert(str(interaction.user.id), id)
         if ok:

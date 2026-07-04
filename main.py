@@ -51,7 +51,7 @@ async def on_ready():
 
     if not _price_updater_started:
         _price_updater_started = True
-        asyncio.create_task(start_price_updater())  # ← LINHA ADICIONADA
+        asyncio.create_task(start_price_updater(bot))  # bot: alertas de preço mandam DM
         print('✅  Price updater iniciado (atualiza a cada 30min)')
 
 @bot.tree.error

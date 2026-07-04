@@ -60,6 +60,55 @@ def _get_prices(unique_name):
 
 
 QUAL_LABELS = {1: 'Normal', 2: 'Bom', 3: 'Excepcional', 4: 'Excelente', 5: 'Obra-prima'}
+CITY_CHOICES = [app_commands.Choice(name=lbl, value=key) for key, lbl in CITY_LABELS.items()]
+QUALITY_CHOICES = [app_commands.Choice(name=lbl, value=q) for q, lbl in QUAL_LABELS.items()]
+
+
+def _create_alert(discord_id, item_id, quality, city, direction, target_price):
+    conn = database.get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('''INSERT INTO price_alerts (discord_id, item_id, quality, city, direction, target_price)
+                     VALUES (%s,%s,%s,%s,%s,%s) RETURNING id''',
+                  (discord_id, item_id, quality, city or '', direction, target_price))
+        alert_id = c.fetchone()[0]
+        conn.commit()
+        return alert_id
+    except Exception as e:
+        print(f'[market] criar alerta: {e}')
+        return None
+    finally:
+        database.release(conn)
+
+
+def _get_user_alerts(discord_id):
+    conn = database.get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('''SELECT a.id, a.item_id, i.name_pt, a.quality, a.city, a.direction, a.target_price
+                     FROM price_alerts a LEFT JOIN items_catalog i ON i.unique_name = a.item_id
+                     WHERE a.discord_id=%s AND a.active=TRUE ORDER BY a.id''', (discord_id,))
+        return c.fetchall()
+    except Exception as e:
+        print(f'[market] listar alertas: {e}')
+        return []
+    finally:
+        database.release(conn)
+
+
+def _remove_alert(discord_id, alert_id):
+    conn = database.get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('UPDATE price_alerts SET active=FALSE WHERE id=%s AND discord_id=%s AND active=TRUE', (alert_id, discord_id))
+        removed = c.rowcount > 0
+        conn.commit()
+        return removed
+    except Exception as e:
+        print(f'[market] remover alerta: {e}')
+        return False
+    finally:
+        database.release(conn)
 
 
 class MarketCog(commands.Cog):
@@ -136,6 +185,76 @@ class MarketCog(commands.Cog):
         embed.set_thumbnail(url=f'https://render.albiononline.com/v1/item/{uid}.png?size=80')
         embed.set_footer(text='Preço atualizado a cada 30min pelo bot — pode ter até 35min de atraso.')
         await interaction.followup.send(embed=embed)
+
+    # ── /alerta_preco ──────────────────────────────────────────────────────────
+    @app_commands.command(name='alerta_preco', description='Avisa por DM quando o preço de um item bater um valor.')
+    @app_commands.describe(
+        item='Nome do item — escolha uma sugestão da lista',
+        preco='Preço alvo (prata)',
+        direcao='Avisar quando o preço cair abaixo ou subir acima desse valor',
+        cidade='Só nessa cidade (padrão: qualquer cidade)',
+        qualidade='Só nessa qualidade (padrão: Normal)',
+    )
+    @app_commands.autocomplete(item=_item_autocomplete)
+    @app_commands.choices(direcao=[
+        app_commands.Choice(name='Abaixo de (comprar barato)', value='below'),
+        app_commands.Choice(name='Acima de (vender caro)', value='above'),
+    ])
+    @app_commands.choices(cidade=CITY_CHOICES)
+    @app_commands.choices(qualidade=QUALITY_CHOICES)
+    async def alerta_preco(self, interaction: discord.Interaction, item: str, preco: int,
+                            direcao: app_commands.Choice[str],
+                            cidade: app_commands.Choice[str] = None,
+                            qualidade: app_commands.Choice[int] = None):
+        rows = _search_items(item, limit=1)
+        if not rows:
+            await interaction.response.send_message(f'❌ Nenhum item encontrado pra "{item}".', ephemeral=True)
+            return
+        uid, name_pt, tier = rows[0]
+        quality = qualidade.value if qualidade else 1
+        city = cidade.value if cidade else None
+
+        alert_id = _create_alert(str(interaction.user.id), uid, quality, city, direcao.value, preco)
+        if alert_id is None:
+            await interaction.response.send_message('❌ Erro ao criar o alerta. Tente de novo.', ephemeral=True)
+            return
+
+        city_txt = f' em **{cidade.name}**' if cidade else ' em qualquer cidade'
+        qual_txt = QUAL_LABELS.get(quality, 'Normal')
+        cmp_txt = 'cair abaixo de' if direcao.value == 'below' else 'subir acima de'
+        await interaction.response.send_message(
+            f'🔔 Alerta #{alert_id} criado: aviso por DM quando **{name_pt}** (T{tier}, {qual_txt}) '
+            f'{cmp_txt} **{fmt(preco)}**{city_txt}.\nVeja seus alertas com `/meus_alertas`.',
+            ephemeral=True
+        )
+
+    # ── /meus_alertas ──────────────────────────────────────────────────────────
+    @app_commands.command(name='meus_alertas', description='Lista seus alertas de preço ativos.')
+    async def meus_alertas(self, interaction: discord.Interaction):
+        alerts = _get_user_alerts(str(interaction.user.id))
+        if not alerts:
+            await interaction.response.send_message('Você não tem alertas ativos. Crie um com `/alerta_preco`.', ephemeral=True)
+            return
+        lines = []
+        for alert_id, item_id, name_pt, quality, city, direction, target_price in alerts:
+            name = name_pt or item_id
+            city_txt = CITY_LABELS.get(city, city) if city else 'qualquer cidade'
+            cmp_txt = 'abaixo de' if direction == 'below' else 'acima de'
+            qual_txt = QUAL_LABELS.get(quality, 'Normal')
+            lines.append(f'`#{alert_id}` **{name}** ({qual_txt}) {cmp_txt} **{fmt(target_price)}** — {city_txt}')
+        embed = discord.Embed(title='🔔 Meus Alertas de Preço', description='\n'.join(lines), color=discord.Color.gold())
+        embed.set_footer(text='Remova um alerta com /remover_alerta id:<número>')
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ── /remover_alerta ────────────────────────────────────────────────────────
+    @app_commands.command(name='remover_alerta', description='Remove um dos seus alertas de preço.')
+    @app_commands.describe(id='Número do alerta (veja em /meus_alertas)')
+    async def remover_alerta(self, interaction: discord.Interaction, id: int):
+        ok = _remove_alert(str(interaction.user.id), id)
+        if ok:
+            await interaction.response.send_message(f'✅ Alerta #{id} removido.', ephemeral=True)
+        else:
+            await interaction.response.send_message(f'❌ Alerta #{id} não encontrado (ou não é seu).', ephemeral=True)
 
 
 async def setup(bot):

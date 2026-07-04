@@ -48,6 +48,22 @@ def _init_table():
             requested_at TIMESTAMP NOT NULL DEFAULT NOW(),
             hits         INTEGER NOT NULL DEFAULT 1
         )''')
+        # Alertas de preço (/alerta_preco no Discord) — checados a cada ciclo de
+        # 30min contra o prices_cache recém-atualizado; dispara UMA vez (active=False)
+        # e avisa por DM, evitando spam repetido enquanto o preço continuar na faixa.
+        c.execute('''CREATE TABLE IF NOT EXISTS price_alerts (
+            id           SERIAL PRIMARY KEY,
+            discord_id   TEXT NOT NULL,
+            item_id      TEXT NOT NULL,
+            quality      INTEGER NOT NULL DEFAULT 1,
+            city         TEXT DEFAULT '',
+            direction    TEXT NOT NULL,
+            target_price BIGINT NOT NULL,
+            active       BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at   TIMESTAMP DEFAULT NOW(),
+            triggered_at TIMESTAMP
+        )''')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_pa_active ON price_alerts (item_id, active)')
         conn.commit()
         print('[price_updater] Tabela prices_cache pronta.')
     except Exception as e:
@@ -279,6 +295,110 @@ _session.mount('https://', requests.adapters.HTTPAdapter(
     pool_connections=2, pool_maxsize=4
 ))
 
+# ── Alertas de preço ────────────────────────────────────────────────────────────
+CITY_LABELS = {
+    'Caerleon': 'Caerleon', 'Martlock': 'Martlock', 'Thetford': 'Thetford',
+    'Lymhurst': 'Lymhurst', 'Bridgewatch': 'Bridgewatch',
+    'FortSterling': 'Fort Sterling', 'Brecilien': 'Brecilien', 'BlackMarket': 'Black Market',
+}
+
+
+def _get_active_alerts():
+    try:
+        conn = _get_conn()
+        c = conn.cursor()
+        c.execute('SELECT id, discord_id, item_id, quality, city, direction, target_price FROM price_alerts WHERE active = TRUE')
+        rows = c.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f'[price_updater] buscar alertas: {e}')
+        return []
+
+
+def _get_matching_prices(item_id, quality, city):
+    try:
+        conn = _get_conn()
+        c = conn.cursor()
+        if city:
+            c.execute('SELECT city, sell_min FROM prices_cache WHERE item_id=%s AND quality=%s AND city=%s AND sell_min > 0', (item_id, quality, city))
+        else:
+            c.execute('SELECT city, sell_min FROM prices_cache WHERE item_id=%s AND quality=%s AND sell_min > 0', (item_id, quality))
+        rows = c.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f'[price_updater] checar preço do alerta: {e}')
+        return []
+
+
+def _get_item_name(item_id):
+    try:
+        conn = _get_conn()
+        c = conn.cursor()
+        c.execute('SELECT name_pt FROM items_catalog WHERE unique_name=%s', (item_id,))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row and row[0] else item_id
+    except Exception:
+        return item_id
+
+
+def _mark_alert_triggered(alert_id):
+    try:
+        conn = _get_conn()
+        c = conn.cursor()
+        c.execute("UPDATE price_alerts SET active=FALSE, triggered_at=NOW() WHERE id=%s", (alert_id,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f'[price_updater] marcar alerta disparado: {e}')
+
+
+async def _check_price_alerts(bot):
+    """Roda ao final de cada ciclo de 30min — compara os alertas ativos contra o
+    prices_cache que acabou de ser atualizado e avisa por DM quem cadastrou."""
+    if bot is None:
+        return
+    alerts = _get_active_alerts()
+    if not alerts:
+        return
+    loop = asyncio.get_event_loop()
+    fired = 0
+    for alert_id, discord_id, item_id, quality, city, direction, target_price in alerts:
+        rows = await loop.run_in_executor(None, lambda i=item_id, q=quality, c=city: _get_matching_prices(i, q, c))
+        hit = None
+        for row_city, sell_min in rows:
+            if direction == 'below' and sell_min <= target_price:
+                hit = (row_city, sell_min)
+                break
+            if direction == 'above' and sell_min >= target_price:
+                hit = (row_city, sell_min)
+                break
+        if not hit:
+            continue
+
+        row_city, sell_min = hit
+        name = await loop.run_in_executor(None, lambda i=item_id: _get_item_name(i))
+        city_label = CITY_LABELS.get(row_city, row_city)
+        cmp_word = 'caiu pra' if direction == 'below' else 'subiu pra'
+        try:
+            user = bot.get_user(int(discord_id)) or await bot.fetch_user(int(discord_id))
+            if user:
+                await user.send(
+                    f'🔔 **Alerta de preço disparado!**\n'
+                    f'**{name}** {cmp_word} **{sell_min:,}**'.replace(',', '.') +
+                    f' em **{city_label}** (alvo: {target_price:,})'.replace(',', '.') +
+                    f'\nEsse alerta foi desativado — cadastre de novo com `/alerta_preco` se quiser continuar acompanhando.'
+                )
+        except Exception as e:
+            print(f'[price_updater] DM de alerta falhou pra {discord_id}: {e}')
+        await loop.run_in_executor(None, lambda a=alert_id: _mark_alert_triggered(a))
+        fired += 1
+    if fired:
+        print(f'[price_updater] {fired} alerta(s) de preço disparado(s)')
+
+
 # ── Fila de demanda ────────────────────────────────────────────────────────────
 def _get_demand_items(limit=200):
     """Itens consultados pelo site nos últimos 7 dias que NÃO estão no catálogo
@@ -299,7 +419,7 @@ def _get_demand_items(limit=200):
         return []
 
 # ── Funções principais ─────────────────────────────────────────────────────────
-async def update_prices_once():
+async def update_prices_once(bot=None):
     """Faz uma rodada completa: busca todos os itens e salva no banco."""
     import time
     start      = time.time()
@@ -343,12 +463,23 @@ async def update_prices_once():
 
     elapsed = time.time() - start
     print(f'[price_updater] Concluído: {total_rows} registros, {errors} erros, {elapsed:.0f}s')
+
+    # Checa alertas de preço com os dados que acabaram de ser salvos — precisa
+    # do `bot` pra mandar DM, por isso só roda quando chamado a partir do loop
+    # principal (start_price_updater), nunca de um teste isolado.
+    try:
+        await _check_price_alerts(bot)
+    except Exception as e:
+        print(f'[price_updater] Erro ao checar alertas: {e}')
+
     return total_rows
 
-async def start_price_updater():
+async def start_price_updater(bot=None):
     """
     Loop principal. Roda para sempre enquanto o bot estiver ligado.
-    Chame com: asyncio.create_task(start_price_updater())
+    Chame com: asyncio.create_task(start_price_updater(bot))
+    `bot` é opcional só pra não quebrar quem já chamava sem argumento — sem ele,
+    os alertas de preço não conseguem mandar DM (ficam ativos, só não disparam).
     """
     # Cria a tabela se não existir
     loop = asyncio.get_event_loop()
@@ -359,7 +490,7 @@ async def start_price_updater():
 
     # Primeira execução imediata ao ligar o bot
     try:
-        await update_prices_once()
+        await update_prices_once(bot)
     except Exception as e:
         print(f'[price_updater] Erro na primeira execução: {e}')
 
@@ -367,7 +498,7 @@ async def start_price_updater():
     while True:
         try:
             await asyncio.sleep(INTERVAL_MINUTES * 60)
-            await update_prices_once()
+            await update_prices_once(bot)
         except asyncio.CancelledError:
             print('[price_updater] Encerrado.')
             break

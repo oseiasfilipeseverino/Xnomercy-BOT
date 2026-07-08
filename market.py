@@ -28,14 +28,36 @@ def fmt(v) -> str:
 
 def _search_items(query, limit=20):
     """Busca no catálogo por nome PT-BR ou unique_name — mesma tabela que o site
-    usa pro autocomplete de busca do Mercado."""
+    usa pro autocomplete de busca do Mercado.
+
+    Multi-palavra em AND ("espada larga" acha "Espada Larga" em qualquer ordem)
+    + unaccent (busca sem acento acha nome acentuado) + ranking de relevância
+    (exato > começa com > contém; depois tier DESC e base antes de @1..@4) —
+    mesmo ranking do items_catalog_search do site."""
+    words = [w.strip() for w in query.split() if len(w.strip()) >= 2]
+    if not words:
+        return []
     conn = database.get_connection()
     try:
         c = conn.cursor()
+        conditions, params = [], []
+        for w in words:
+            pat = '%' + w.replace('%', '').replace('_', '') + '%'
+            conditions.append('(unaccent(name_pt) ILIKE unaccent(%s) OR unique_name ILIKE %s)')
+            params.extend([pat, pat])
+        q_clean = query.strip().replace('%', '').replace('_', '')
+        params.extend([q_clean, q_clean + '%', limit])
         c.execute('''SELECT unique_name, name_pt, tier FROM items_catalog
-                     WHERE name_pt ILIKE %s OR unique_name ILIKE %s
-                     ORDER BY tier DESC, name_pt LIMIT %s''',
-                  (f'%{query}%', f'%{query}%', limit))
+                     WHERE ''' + ' AND '.join(conditions) + '''
+                     ORDER BY
+                       CASE WHEN unaccent(lower(name_pt)) = unaccent(lower(%s)) THEN 0
+                            WHEN unaccent(lower(name_pt)) LIKE unaccent(lower(%s)) THEN 1
+                            ELSE 2 END,
+                       tier DESC,
+                       CASE WHEN unique_name LIKE '%@%'
+                       THEN CAST(SPLIT_PART(unique_name, '@', 2) AS INTEGER)
+                       ELSE 0 END,
+                       LENGTH(name_pt), name_pt LIMIT %s''', params)
         return c.fetchall()
     except Exception as e:
         print(f'[market] busca: {e}')
@@ -44,13 +66,13 @@ def _search_items(query, limit=20):
         database.release(conn)
 
 
-def _get_prices(unique_name):
+def _get_prices(unique_name, max_age_minutes=35):
     conn = database.get_connection()
     try:
         c = conn.cursor()
         c.execute('''SELECT city, quality, sell_min, buy_max, date_sell
-                     FROM prices_cache WHERE item_id=%s AND updated_at > NOW() - INTERVAL '35 minutes'
-                     ORDER BY quality''', (unique_name,))
+                     FROM prices_cache WHERE item_id=%s AND updated_at > NOW() - make_interval(mins => %s)
+                     ORDER BY quality''', (unique_name, int(max_age_minutes)))
         return c.fetchall()
     except Exception as e:
         print(f'[market] preços: {e}')
@@ -154,9 +176,15 @@ class MarketCog(commands.Cog):
         uid, name_pt, tier = rows[0]
 
         prices = _get_prices(uid)
+        stale = False
+        if not prices:
+            # Ciclo do bot atrasou ou item de pouco giro — preço de até 24h ainda
+            # é referência melhor que "sem preço" (o rodapé avisa que é antigo).
+            prices = _get_prices(uid, max_age_minutes=1440)
+            stale = bool(prices)
         if not prices:
             await interaction.followup.send(
-                f'⚠️ Sem preço em cache pra **{name_pt}** (T{tier}) nos últimos 35min. '
+                f'⚠️ Sem preço em cache pra **{name_pt}** (T{tier}) nas últimas 24h. '
                 f'Pode ser um item de pouco giro — tente ver no site.')
             return
 
@@ -190,7 +218,10 @@ class MarketCog(commands.Cog):
                 embed.add_field(name=QUAL_LABELS.get(q, f'Q{q}'), value='\n'.join(lines), inline=True)
 
         embed.set_thumbnail(url=f'https://render.albiononline.com/v1/item/{uid}.png?size=80')
-        embed.set_footer(text='Preço atualizado a cada 30min pelo bot — pode ter até 35min de atraso.')
+        if stale:
+            embed.set_footer(text='⚠️ Preço antigo (mais de 35min — o ciclo de atualização atrasou). Use como referência aproximada.')
+        else:
+            embed.set_footer(text='Preço atualizado a cada 30min pelo bot — pode ter até 35min de atraso.')
         await interaction.followup.send(embed=embed)
 
     # ── /alerta_preco ──────────────────────────────────────────────────────────

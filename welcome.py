@@ -34,13 +34,15 @@ class WelcomeCog(commands.Cog):
             embed.set_thumbnail(url=member.display_avatar.url)
             embed.set_footer(text='XnoMercy Guild')
  
-            # Envia no canal de boas-vindas do servidor
+            # Envia no canal de boas-vindas do servidor. A menção vai no CONTENT
+            # (fora do embed) — menção dentro de embed não dispara notificação;
+            # é assim que a Loritta pinga o novo membro de verdade no canal.
             ch_id = cfg['channel_id'] or database.get_config('channel_boas_vindas')
             if ch_id:
                 ch = member.guild.get_channel(int(ch_id))
                 if ch:
                     try:
-                        await ch.send(embed=embed)
+                        await ch.send(content=member.mention, embed=embed)
                     except Exception as e:
                         print(f'[welcome] Erro no canal: {e}')
  

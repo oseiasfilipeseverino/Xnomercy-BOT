@@ -56,6 +56,106 @@ class WelcomeCog(commands.Cog):
         except Exception as e:
             print(f'[welcome] Erro on_member_join: {e}')
  
+    # ── Evento: membro saiu ────────────────────────────────────────────────────
+    # IMPORTANTE (limitação do Discord): assim que a pessoa sai, se ela não
+    # compartilha nenhum outro servidor com o bot, o Discord BLOQUEIA a DM
+    # (Forbidden). A DM só costuma passar quando o canal de DM já existia — ex:
+    # a pessoa recebeu a DM de boas-vindas na entrada. Por isso o envio é
+    # best-effort: se falhar, só registra e segue (nunca quebra). O aviso no
+    # canal de saídas, esse sim, sempre funciona.
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        try:
+            title = database.get_config('goodbye_title') or 'Até a próxima!'
+            raw_msg = database.get_config('goodbye_message') or (
+                '{nome} saiu do XnoMercy. Obrigado por ter feito parte da guild — '
+                'as portas ficam abertas se um dia quiser voltar.'
+            )
+            site_url = database.get_config('site_url') or 'https://nome-xnomercy-site-production.up.railway.app'
+            message = (raw_msg
+                       .replace('{mention}', member.mention)
+                       .replace('{nome}', member.display_name)
+                       .replace('{site}', f'[🌐 Acesse o site da guild]({site_url})'))
+
+            embed = discord.Embed(title=title, description=message, color=discord.Color.dark_gold())
+            embed.set_thumbnail(url=member.display_avatar.url)
+            embed.set_footer(text='XnoMercy Guild')
+
+            # Aviso no canal de saídas (sempre funciona)
+            ch_id = database.get_config('channel_saidas_membros')
+            if ch_id:
+                ch = member.guild.get_channel(int(ch_id))
+                if ch:
+                    try:
+                        await ch.send(embed=embed)
+                    except Exception as e:
+                        print(f'[goodbye] Erro no canal: {e}')
+
+            # DM de despedida — best-effort (ver comentário acima)
+            try:
+                await member.send(embed=embed)
+                print(f'[goodbye] DM enviado para {member.display_name}')
+            except discord.Forbidden:
+                # Caso mais comum: pessoa já saiu / bloqueou DM. Esperado, não é erro.
+                print(f'[goodbye] Não foi possível enviar DM para {member.display_name} (já saiu ou DM fechada)')
+            except Exception as e:
+                print(f'[goodbye] Erro DM: {e}')
+
+        except Exception as e:
+            print(f'[goodbye] Erro on_member_remove: {e}')
+
+    # ── /configurar_despedida ──────────────────────────────────────────────────
+    @app_commands.command(name='configurar_despedida', description='[LÍDER] Edita a mensagem de despedida (quando alguém sai).')
+    @app_commands.describe(
+        titulo  ='Título da mensagem',
+        mensagem='Mensagem (use {nome} para o nome, {mention} para marcar, {site} para o link)',
+    )
+    async def configurar_despedida(self, interaction: discord.Interaction, titulo: str, mensagem: str):
+        if not is_financial(interaction.user):
+            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            return
+        database.set_config('goodbye_title', titulo)
+        database.set_config('goodbye_message', mensagem.replace('\\n', '\n'))
+        embed = discord.Embed(title='✅ Despedida Atualizada', color=discord.Color.green())
+        embed.add_field(name='Título',   value=titulo,   inline=False)
+        embed.add_field(name='Mensagem', value=mensagem, inline=False)
+        embed.set_footer(text='A DM de despedida é best-effort — o Discord bloqueia o envio pra quem já saiu e não compartilha outro servidor com o bot. O aviso no canal de saídas sempre funciona.')
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ── /testar_despedida ──────────────────────────────────────────────────────
+    @app_commands.command(name='testar_despedida', description='[LÍDER] Testa a DM de despedida (envia pra você mesmo).')
+    @app_commands.describe(usuario='Quem recebe o teste (padrão: você mesmo)')
+    async def testar_despedida(self, interaction: discord.Interaction, usuario: discord.Member = None):
+        if not is_financial(interaction.user):
+            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            return
+        target = usuario or interaction.user
+        title = database.get_config('goodbye_title') or 'Até a próxima!'
+        raw_msg = database.get_config('goodbye_message') or (
+            '{nome} saiu do XnoMercy. Obrigado por ter feito parte da guild — '
+            'as portas ficam abertas se um dia quiser voltar.'
+        )
+        site_url = database.get_config('site_url') or 'https://nome-xnomercy-site-production.up.railway.app'
+        message = (raw_msg
+                   .replace('{mention}', target.mention)
+                   .replace('{nome}', target.display_name)
+                   .replace('{site}', f'[🌐 Acesse o site da guild]({site_url})'))
+        embed = discord.Embed(title=title, description=message, color=discord.Color.dark_gold())
+        embed.set_thumbnail(url=target.display_avatar.url)
+        embed.set_footer(text='XnoMercy Guild | Mensagem de despedida (teste)')
+        try:
+            await target.send(embed=embed)
+            await interaction.response.send_message(
+                f'✅ DM de despedida enviada para **{target.display_name}**! '
+                f'(No caso real, o Discord pode bloquear pra quem já saiu — ver /configurar_despedida.)',
+                ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                f'❌ **{target.display_name}** bloqueou DMs ou não aceita mensagens de bots.', ephemeral=True)
+        except Exception as e:
+            print(f'[goodbye] {e}')
+            await interaction.response.send_message('❌ Erro ao enviar a DM. Tente novamente.', ephemeral=True)
+
     # ── /testar_boas_vindas ────────────────────────────────────────────────────
     @app_commands.command(name='testar_boas_vindas', description='[LÍDER] Testa o envio da mensagem de boas-vindas via DM.')
     @app_commands.describe(usuario='Usuário que vai receber o DM de teste (padrão: você mesmo)')

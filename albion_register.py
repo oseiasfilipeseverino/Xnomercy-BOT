@@ -170,6 +170,8 @@ class AlbionRegister(commands.Cog):
         embed.set_footer(text='Registro automático via /albion_register')
         await _log(interaction.guild, embed)
 
+        # Confirmação pública — o resto do fluxo (erros, "já é membro") continua
+        # privado, mas o registro concluído é visível pra guild ver quem entrou.
         await interaction.followup.send(
             '✅ **Registro concluído!**\n\n'
             '> 🎮 Nick: **' + player_name + '**\n'
@@ -177,7 +179,7 @@ class AlbionRegister(commands.Cog):
             '> 🏰 Guild: **' + guild_name + '** ✓\n'
             '> 🎖️ Cargo **' + ROLE_MEMBRO + '** atribuído\n\n'
             'Bem-vindo à **XnoMercy**, ' + player_name + '! ⚔️',
-            ephemeral=True)
+            ephemeral=False)
 
     # ── /registrar ────────────────────────────────────────────────────────────
     @app_commands.command(
@@ -236,12 +238,13 @@ class AlbionRegister(commands.Cog):
         embed.set_footer(text='Registro manual via /registrar')
         await _log(interaction.guild, embed)
 
+        # Confirmação pública — igual ao /albion_register, só os erros ficam privados.
         await interaction.followup.send(
             '✅ **' + usuario.display_name + '** registrado como **' + NICK_PREFIX + player_name + '**!\n'
             '> ' + guild_status + '\n'
             '> Cargo **' + ROLE_MEMBRO + '** atribuído\n'
             '> Nick Discord: **' + NICK_PREFIX + player_name + '**',
-            ephemeral=True)
+            ephemeral=False)
 
 
 async def setup(bot):

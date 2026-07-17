@@ -153,21 +153,41 @@ class TicketButton(discord.ui.Button):
         )
  
         database.create_ticket(str(ch.id), str(user.id), user.display_name, self.ticket_type)
- 
-        # Mensagem editável do ticket
+
+        # Mensagem editavel do ticket - get_ticket_message() volta None se ninguem
+        # configurou esse tipo ainda (/configurar_ticket) OU se o banco teve um
+        # soluco momentaneo na hora da consulta. Sem fallback aqui, o canal ja
+        # criado acima ficava PARA SEMPRE vazio: a excecao de acessar ticket_msg['title']
+        # interrompia o codigo antes do ch.send() (mensagem de boas-vindas) E antes
+        # do interaction.response (confirmacao pro usuario) - ninguem, nem staff nem
+        # quem abriu, ficava sabendo que o ticket "nasceu quebrado".
         ticket_msg = database.get_ticket_message(self.ticket_type)
         cfg        = TICKET_TYPES[self.ticket_type]
- 
-        embed = discord.Embed(
-            title=ticket_msg['title'],
-            description=ticket_msg['message'],
-            color=cfg['color']
+
+        title   = ticket_msg['title']   if ticket_msg else f"{cfg['emoji']} {cfg['label']} | XnoMercy"
+        message = ticket_msg['message'] if ticket_msg else (
+            'Ticket aberto! A lideranca vai atender em breve.\n\n'
+            '_(Mensagem padrao deste ticket nao configurada -- avise a lideranca '
+            'para ajustar em /configurar_ticket.)_'
         )
+        embed = discord.Embed(title=title, description=message, color=cfg['color'])
         embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
         embed.set_footer(text=f'XnoMercy Guild | Clique em Fechar quando resolver')
- 
-        await ch.send(content=user.mention, embed=embed, view=CloseTicketView())
-        await interaction.response.send_message(f'✅ Ticket criado! {ch.mention}', ephemeral=True)
+
+        try:
+            await ch.send(content=user.mention, embed=embed, view=CloseTicketView())
+            await interaction.response.send_message(f'✅ Ticket criado! {ch.mention}', ephemeral=True)
+        except Exception as e:
+            # Canal ja existe e esta registrado no banco -- mesmo se o envio da
+            # mensagem falhar (rate limit, permissao), avisa quem abriu em vez de
+            # deixar a interacao simplesmente "falhar" sem explicacao nenhuma.
+            print(f'[tickets] Erro ao enviar mensagem inicial do ticket {ch.id}: {e}')
+            try:
+                await interaction.response.send_message(
+                    f'⚠️ Ticket criado em {ch.mention}, mas houve um erro ao postar a mensagem inicial. '
+                    f'Avise a lideranca.', ephemeral=True)
+            except Exception:
+                pass
  
  
 # ── Painéis individuais por tipo ───────────────────────────────────────────────

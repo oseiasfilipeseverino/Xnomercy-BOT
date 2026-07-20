@@ -80,6 +80,21 @@ def init_db():
             amount FLOAT NOT NULL, type TEXT NOT NULL,
             description TEXT DEFAULT '', created_by TEXT DEFAULT '',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+        # Tabela do SITE (event_id aqui referencia scheduled_events, não `events`
+        # acima) — o bot só lê/escreve pra postar a aprovação com botão no
+        # financeiro quando o split é criado pelo site (/eventos/finalizar).
+        # CREATE TABLE aqui é defensivo (idempotente) caso o bot suba antes do
+        # site numa base nova; o schema real é o mesmo que o site já mantém.
+        c.execute('''CREATE TABLE IF NOT EXISTS pending_splits (
+            id SERIAL PRIMARY KEY, event_id INTEGER NOT NULL,
+            total_loot BIGINT DEFAULT 0, repair_cost BIGINT DEFAULT 0,
+            guild_tax_pct REAL DEFAULT 5, vendor_tax_pct REAL DEFAULT 15,
+            per_player BIGINT DEFAULT 0, num_players INTEGER DEFAULT 0,
+            participants_json TEXT DEFAULT '[]', submitted_by TEXT DEFAULT '',
+            submitted_at TIMESTAMP DEFAULT NOW(), status TEXT DEFAULT 'pending',
+            reviewed_by TEXT DEFAULT '', reviewed_at TIMESTAMP,
+            discord_message_id TEXT DEFAULT '')''')
+        c.execute("ALTER TABLE pending_splits ADD COLUMN IF NOT EXISTS discord_message_id TEXT DEFAULT ''")
         c.execute('''CREATE TABLE IF NOT EXISTS tickets (
             id SERIAL PRIMARY KEY, channel_id TEXT UNIQUE,
             discord_id TEXT NOT NULL, username TEXT NOT NULL,
@@ -722,6 +737,141 @@ def finish_scheduled_event(event_id):
         conn.commit()
     finally:
         release(conn)
+
+# ── Pending Splits (splits criados pelo site, aprovados via Discord) ──────────
+def get_pending_splits_unposted():
+    """Splits que o site criou mas que o bot ainda não postou no financeiro
+    (discord_message_id vazio) — o poller do site_splits.py roda isso a cada
+    ciclo e posta o embed com Aprovar/Recusar pra cada um encontrado aqui."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('''SELECT ps.id, ps.event_id, ps.total_loot, ps.repair_cost,
+                            ps.guild_tax_pct, ps.vendor_tax_pct, ps.per_player,
+                            ps.num_players, ps.participants_json, ps.submitted_by, se.title
+                     FROM pending_splits ps
+                     LEFT JOIN scheduled_events se ON se.id = ps.event_id
+                     WHERE ps.status='pending' AND (ps.discord_message_id IS NULL OR ps.discord_message_id='')
+                     ORDER BY ps.submitted_at''')
+        return [{'id': r[0], 'event_id': r[1], 'total_loot': r[2], 'repair_cost': r[3],
+                 'guild_tax_pct': r[4], 'vendor_tax_pct': r[5], 'per_player': r[6],
+                 'num_players': r[7], 'participants_json': r[8], 'submitted_by': r[9],
+                 'event_title': r[10] or f'Evento #{r[1]}'} for r in c.fetchall()]
+    except Exception as e:
+        print(f'[pending_splits] erro ao listar não postados: {e}')
+        return []
+    finally:
+        release(conn)
+
+def get_posted_pending_splits():
+    """Splits já postados no Discord e ainda pendentes — usado no on_ready pra
+    recriar as Views (botões) depois de um restart do bot, senão os botões de
+    mensagens antigas param de responder."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT id FROM pending_splits WHERE status='pending' AND discord_message_id IS NOT NULL AND discord_message_id != ''")
+        return [{'id': r[0]} for r in c.fetchall()]
+    except Exception as e:
+        print(f'[pending_splits] erro ao listar postados: {e}')
+        return []
+    finally:
+        release(conn)
+
+def mark_pending_split_posted(split_id, message_id):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('UPDATE pending_splits SET discord_message_id=%s WHERE id=%s', (message_id, split_id))
+        conn.commit()
+    finally:
+        release(conn)
+
+def get_pending_split(split_id):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('''SELECT id, event_id, total_loot, repair_cost, guild_tax_pct, vendor_tax_pct,
+                            per_player, num_players, participants_json, submitted_by, status
+                     FROM pending_splits WHERE id=%s''', (split_id,))
+        r = c.fetchone()
+        if not r: return None
+        return {'id': r[0], 'event_id': r[1], 'total_loot': r[2], 'repair_cost': r[3],
+                'guild_tax_pct': r[4], 'vendor_tax_pct': r[5], 'per_player': r[6],
+                'num_players': r[7], 'participants_json': r[8], 'submitted_by': r[9], 'status': r[10]}
+    except Exception:
+        return None
+    finally:
+        release(conn)
+
+def approve_pending_split(split_id, reviewed_by):
+    """UPDATE condicional (WHERE status='pending') — atômico, evita dois cliques
+    quase simultâneos (Discord + site, ou dois admins no Discord) aprovando e
+    depositando a prata em dobro."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE pending_splits SET status='approved', reviewed_by=%s, reviewed_at=NOW() WHERE id=%s AND status='pending'",
+                  (reviewed_by, split_id))
+        conn.commit()
+        return c.rowcount > 0
+    finally:
+        release(conn)
+
+def reject_pending_split(split_id, reviewed_by):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE pending_splits SET status='rejected', reviewed_by=%s, reviewed_at=NOW() WHERE id=%s AND status='pending'",
+                  (reviewed_by, split_id))
+        c.execute("UPDATE scheduled_events SET status='finished' WHERE id=(SELECT event_id FROM pending_splits WHERE id=%s)", (split_id,))
+        conn.commit()
+        return c.rowcount > 0
+    finally:
+        release(conn)
+
+def save_split_participants(event_id, participants, event_title=''):
+    """Credita o saldo de cada participante — só chamado depois que o split foi
+    aprovado (botão Aprovar no Discord). participants: [{'name','discord_id',
+    'amount','pct'}]. Espelha o save_split do site (mesma tabela event_participants
+    compartilhada), incluindo o registro em `transactions` pro /extrato mostrar."""
+    desc = f'Evento: {event_title}' if event_title else f'Evento #{event_id}'
+    for p in participants:
+        amount = int(p.get('amount', 0))
+        conn = get_connection()
+        try:
+            c = conn.cursor()
+            c.execute('''INSERT INTO event_participants (event_id, discord_id, username, share)
+                         VALUES (%s, %s, %s, %s)
+                         ON CONFLICT (event_id, discord_id) DO UPDATE SET share=EXCLUDED.share, username=EXCLUDED.username''',
+                      (event_id, p.get('discord_id', ''), p['name'], amount))
+            if amount > 0 and p.get('discord_id'):
+                c.execute('''INSERT INTO players (discord_id, username, balance, total_earned)
+                             VALUES (%s, %s, %s, %s)
+                             ON CONFLICT (discord_id) DO UPDATE SET
+                             balance = players.balance + EXCLUDED.balance,
+                             total_earned = players.total_earned + EXCLUDED.total_earned,
+                             username = EXCLUDED.username''',
+                          (p['discord_id'], p['name'], amount, amount))
+                c.execute('''INSERT INTO transactions (discord_id, amount, type, description, created_by)
+                             VALUES (%s, %s, 'loot', %s, %s)''',
+                          (p['discord_id'], amount, desc, 'Split (site)'))
+            conn.commit()
+        except Exception as e:
+            print(f'[pending_splits] erro ao creditar {p.get("name","?")}: {e}')
+        finally:
+            release(conn)
+
+    conn2 = get_connection()
+    try:
+        c2 = conn2.cursor()
+        c2.execute("UPDATE scheduled_events SET status='split_done' WHERE id=%s", (event_id,))
+        conn2.commit()
+    except Exception as e:
+        print(f'[pending_splits] erro ao marcar evento {event_id}: {e}')
+    finally:
+        release(conn2)
+
 
 def get_scheduled_event_by_thread(thread_id):
     conn = get_connection()

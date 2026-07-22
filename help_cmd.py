@@ -40,7 +40,7 @@ COMMAND_GROUPS = [
     ]),
     ('Líder / Vice — Saldos & Taxas', 'financial', [
         ('/adicionar_saldo', 'Adiciona prata ao saldo de um player'),
-        ('/diminuir_saldo', 'Remove prata do saldo de um player'),
+        ('/pagar_saldo', 'Paga (remove do saldo) a prata devida a um player'),
         ('/zerar_saldo', 'Zera o saldo após pagamento'),
         ('/saldo_membro', 'Ver o saldo de um player específico'),
         ('/extrato_membro', 'Ver o extrato de um membro (auditoria)'),

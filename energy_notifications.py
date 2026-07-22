@@ -17,12 +17,16 @@ import database
 
 def _db_conn():
     url = urlparse(os.environ.get('DATABASE_URL', ''))
+    # ssl_context=True — igual database.get_connection(). Sem isso, o handshake
+    # com o Postgres do Railway podia falhar de forma intermitente (mascarado
+    # até agora pelo backoff/alert-once deste módulo).
     return pg8000.connect(
         host=url.hostname,
         port=url.port or 5432,
         user=url.username,
         password=url.password,
         database=url.path.lstrip('/'),
+        ssl_context=True,
         timeout=15
     )
 

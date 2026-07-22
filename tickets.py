@@ -10,8 +10,9 @@ from discord.ext import commands
  
 import database
 from permissions import is_financial
- 
- 
+from view_utils import LoggedView
+
+
 TICKET_TYPES = {
     'recrutamento': {'emoji': '⚔️', 'label': 'Recrutamento',   'color': discord.Color.blue(),   'btn_style': discord.ButtonStyle.primary},
     'suporte':      {'emoji': '🆘', 'label': 'Suporte',         'color': discord.Color.orange(), 'btn_style': discord.ButtonStyle.danger},
@@ -27,7 +28,7 @@ def get_ticket_category(guild: discord.Guild, ticket_type: str) -> discord.Categ
     return None
  
  
-class CloseTicketView(discord.ui.View):
+class CloseTicketView(LoggedView):
     def __init__(self):
         super().__init__(timeout=None)
  
@@ -192,23 +193,23 @@ class TicketButton(discord.ui.Button):
  
 # ── Painéis individuais por tipo ───────────────────────────────────────────────
  
-class RecrutamentoPanel(discord.ui.View):
+class RecrutamentoPanel(LoggedView):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(TicketButton('recrutamento'))
  
-class SuportePanel(discord.ui.View):
+class SuportePanel(LoggedView):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(TicketButton('suporte'))
  
-class SaquePanel(discord.ui.View):
+class SaquePanel(LoggedView):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(TicketButton('saque'))
  
 # Painel completo com os 3 botões (opcional)
-class TicketPanel(discord.ui.View):
+class TicketPanel(LoggedView):
     def __init__(self):
         super().__init__(timeout=None)
         for t in TICKET_TYPES:

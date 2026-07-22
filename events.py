@@ -9,6 +9,7 @@ from discord.ext import commands
 
 import database
 from permissions import can_manage_events, is_member, is_financial, has_permission
+from view_utils import LoggedView
 
 
 def fmt(v: float) -> str:
@@ -104,7 +105,7 @@ class CreateEventModal(discord.ui.Modal, title='Criar Evento'):
         await interaction.followup.send(f'✅ Evento criado! Verifique {text_ch.mention}', ephemeral=True)
 
 
-class CreateEventView(discord.ui.View):
+class CreateEventView(LoggedView):
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -197,7 +198,7 @@ class FinalizeEventButton(discord.ui.Button):
                 pass
 
 
-class ParticipateView(discord.ui.View):
+class ParticipateView(LoggedView):
     def __init__(self, events: list):
         super().__init__(timeout=None)
         for i, ev in enumerate(events[:12]):
@@ -209,7 +210,7 @@ class ParticipateView(discord.ui.View):
 
 # ── Botões no canal de texto do evento ────────────────────────────────────────
 
-class EventManageView(discord.ui.View):
+class EventManageView(LoggedView):
     def __init__(self, event_id: int):
         super().__init__(timeout=None)
         self.event_id = event_id
@@ -399,7 +400,7 @@ async def _do_finalize(guild, event_id, by_name):
 
 # ── Aprovação no #financeiro ───────────────────────────────────────────────────
 
-class ApproveDepositView(discord.ui.View):
+class ApproveDepositView(LoggedView):
     def __init__(self, event_id: int, distribution: dict, participants: list):
         super().__init__(timeout=None)
         self.event_id     = event_id
@@ -424,20 +425,52 @@ class ApproveDepositView(discord.ui.View):
         for p in self.participants:
             valor = self.distribution.get(p['discord_id'], 0)
             if valor > 0:
-                database.update_player_balance(p['discord_id'], p['username'], valor)
-                database.add_transaction(p['discord_id'], valor, 'loot',
-                    f'Evento #{self.event_id:04d}: {event["title"]}', interaction.user.display_name)
+                try:
+                    database.update_player_balance(p['discord_id'], p['username'], valor)
+                    database.add_transaction(p['discord_id'], valor, 'loot',
+                        f'Evento #{self.event_id:04d}: {event["title"]}', interaction.user.display_name)
+                except Exception as e:
+                    print(f'[events] erro ao creditar {p.get("username","?")} no evento #{self.event_id}: {e}')
+                    continue
 
-        embed = interaction.message.embeds[0]
-        embed.color = discord.Color.green()
-        embed.title = f'✅ Depósito Aprovado — Evento #{self.event_id:04d}'
-        embed.set_footer(text=f'Aprovado por {interaction.user.display_name}')
-        for item in self.children: item.disabled = True
+                # Mention dentro do embed não notifica ninguém (Discord só pinga
+                # mention em `content`) — igual ao /adicionar_saldo, avisa por DM em
+                # vez de pingar o canal inteiro (evitando ping-storm com N participantes).
+                try:
+                    membro = interaction.guild.get_member(int(p['discord_id']))
+                    if membro:
+                        dm = discord.Embed(
+                            title='💰 Você recebeu prata!',
+                            description=f'**{fmt(valor)}** do **Evento #{self.event_id:04d} — {event["title"]}**.',
+                            color=discord.Color.gold()
+                        )
+                        await membro.send(embed=dm)
+                except Exception:
+                    pass
 
-        await interaction.message.edit(embed=embed, view=self)
-        await _log(interaction.guild,
-            f'✅ **{interaction.user.display_name}** aprovou o depósito do **Evento #{self.event_id:04d} — {event["title"]}**.')
-        await interaction.response.send_message('✅ Aprovado! Saldos distribuídos.', ephemeral=True)
+        # A prata já foi creditada acima — daqui pra baixo é só feedback visual/log,
+        # então nada disso pode deixar o clique parecendo travado ou sem resposta
+        # se o Discord falhar (mesmo padrão do bug já corrigido em tickets.py).
+        try:
+            embed = interaction.message.embeds[0]
+            embed.color = discord.Color.green()
+            embed.title = f'✅ Depósito Aprovado — Evento #{self.event_id:04d}'
+            embed.set_footer(text=f'Aprovado por {interaction.user.display_name}')
+            for item in self.children: item.disabled = True
+            await interaction.message.edit(embed=embed, view=self)
+        except Exception as e:
+            print(f'[events] erro ao editar embed de aprovação do evento #{self.event_id}: {e}')
+
+        try:
+            await _log(interaction.guild,
+                f'✅ **{interaction.user.display_name}** aprovou o depósito do **Evento #{self.event_id:04d} — {event["title"]}**.')
+        except Exception as e:
+            print(f'[events] erro ao logar aprovação do evento #{self.event_id}: {e}')
+
+        try:
+            await interaction.response.send_message('✅ Aprovado! Saldos distribuídos.', ephemeral=True)
+        except Exception as e:
+            print(f'[events] erro ao responder aprovação do evento #{self.event_id}: {e}')
 
         # Resumo no canal do próprio evento — quem participou não tem acesso ao
         # canal financeiro (staff-only) então não via se/quanto recebeu sem
@@ -478,14 +511,20 @@ class ApproveDepositView(discord.ui.View):
             await interaction.response.send_message('❌ Já processado.', ephemeral=True)
             return
 
-        embed = interaction.message.embeds[0]
-        embed.color = discord.Color.red()
-        embed.title = f'❌ Depósito Recusado — Evento #{self.event_id:04d}'
-        embed.set_footer(text=f'Recusado por {interaction.user.display_name}')
-        for item in self.children: item.disabled = True
+        try:
+            embed = interaction.message.embeds[0]
+            embed.color = discord.Color.red()
+            embed.title = f'❌ Depósito Recusado — Evento #{self.event_id:04d}'
+            embed.set_footer(text=f'Recusado por {interaction.user.display_name}')
+            for item in self.children: item.disabled = True
+            await interaction.message.edit(embed=embed, view=self)
+        except Exception as e:
+            print(f'[events] erro ao editar embed de recusa do evento #{self.event_id}: {e}')
 
-        await interaction.message.edit(embed=embed, view=self)
-        await interaction.response.send_message('❌ Depósito recusado.', ephemeral=True)
+        try:
+            await interaction.response.send_message('❌ Depósito recusado.', ephemeral=True)
+        except Exception as e:
+            print(f'[events] erro ao responder recusa do evento #{self.event_id}: {e}')
 
 
 # ── Cog ───────────────────────────────────────────────────────────────────────

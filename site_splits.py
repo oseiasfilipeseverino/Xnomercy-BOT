@@ -16,6 +16,7 @@ from discord.ext import commands, tasks
 
 import database
 from permissions import is_financial
+from view_utils import LoggedView
 
 
 def _fmt(v) -> str:
@@ -50,7 +51,7 @@ def _build_embed(split, title_prefix='⏳ Split Pendente (via site)'):
     return embed
 
 
-class SitePendingSplitView(discord.ui.View):
+class SitePendingSplitView(LoggedView):
     """View dinâmica por split_id — custom_id embute o id, então sobrevive a
     restart do bot desde que seja re-registrada (ver on_ready abaixo), ao
     contrário de uma view com custom_id fixo compartilhado entre instâncias."""
@@ -87,14 +88,40 @@ class SitePendingSplitView(discord.ui.View):
         participants = json.loads(split['participants_json'])
         database.save_split_participants(split['event_id'], participants, event_title)
 
-        embed = interaction.message.embeds[0]
-        embed.color = discord.Color.green()
-        embed.title = f'✅ Split Aprovado — {split.get("event_title", event_title)}'
-        embed.set_footer(text=f'Aprovado por {interaction.user.display_name}')
-        for item in self.children:
-            item.disabled = True
-        await interaction.message.edit(embed=embed, view=self)
-        await interaction.response.send_message('✅ Aprovado! Saldos distribuídos.', ephemeral=True)
+        # Mention dentro do embed não notifica ninguém (Discord só pinga mention em
+        # `content`) — avisa por DM em vez de pingar o canal inteiro com N pessoas.
+        for p in participants:
+            amt = p.get('amount', 0)
+            if amt > 0 and p.get('discord_id'):
+                try:
+                    membro = interaction.guild.get_member(int(p['discord_id']))
+                    if membro:
+                        dm = discord.Embed(
+                            title='💰 Você recebeu prata!',
+                            description=f'**{_fmt(amt)}** do split de **{split.get("event_title", event_title)}**.',
+                            color=discord.Color.gold()
+                        )
+                        await membro.send(embed=dm)
+                except Exception:
+                    pass
+
+        # Saldo já foi creditado acima — daqui pra baixo é só feedback visual/log,
+        # não pode deixar a aprovação parecendo travada se o Discord falhar aqui.
+        try:
+            embed = interaction.message.embeds[0]
+            embed.color = discord.Color.green()
+            embed.title = f'✅ Split Aprovado — {split.get("event_title", event_title)}'
+            embed.set_footer(text=f'Aprovado por {interaction.user.display_name}')
+            for item in self.children:
+                item.disabled = True
+            await interaction.message.edit(embed=embed, view=self)
+        except Exception as e:
+            print(f'[site_splits] erro ao editar embed de aprovação do split {self.split_id}: {e}')
+
+        try:
+            await interaction.response.send_message('✅ Aprovado! Saldos distribuídos.', ephemeral=True)
+        except Exception as e:
+            print(f'[site_splits] erro ao responder aprovação do split {self.split_id}: {e}')
 
     async def _recusar(self, interaction: discord.Interaction):
         if not is_financial(interaction.user):
@@ -110,14 +137,21 @@ class SitePendingSplitView(discord.ui.View):
             await interaction.response.send_message('❌ Já processado por outra pessoa.', ephemeral=True)
             return
 
-        embed = interaction.message.embeds[0]
-        embed.color = discord.Color.red()
-        embed.title = f'❌ Split Recusado — {split.get("event_title", "")}'
-        embed.set_footer(text=f'Recusado por {interaction.user.display_name}')
-        for item in self.children:
-            item.disabled = True
-        await interaction.message.edit(embed=embed, view=self)
-        await interaction.response.send_message('❌ Split recusado. O evento voltou para Finalizados.', ephemeral=True)
+        try:
+            embed = interaction.message.embeds[0]
+            embed.color = discord.Color.red()
+            embed.title = f'❌ Split Recusado — {split.get("event_title", "")}'
+            embed.set_footer(text=f'Recusado por {interaction.user.display_name}')
+            for item in self.children:
+                item.disabled = True
+            await interaction.message.edit(embed=embed, view=self)
+        except Exception as e:
+            print(f'[site_splits] erro ao editar embed de recusa do split {self.split_id}: {e}')
+
+        try:
+            await interaction.response.send_message('❌ Split recusado. O evento voltou para Finalizados.', ephemeral=True)
+        except Exception as e:
+            print(f'[site_splits] erro ao responder recusa do split {self.split_id}: {e}')
 
 
 class SiteSplitsCog(commands.Cog):

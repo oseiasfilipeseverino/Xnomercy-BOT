@@ -123,6 +123,16 @@ def init_db():
             username TEXT NOT NULL, assigned_at TEXT DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(scheduled_event_id, slot_number),
             UNIQUE(scheduled_event_id, discord_id))''')
+        # Rastreia o aviso de "membro saiu com saldo positivo" — cada linha vira
+        # uma View com custom_id dinâmico (xnm:confiscar:<id>), igual ao padrão de
+        # pending_splits. Sem isso, a View de confisco usava custom_id fixo e era
+        # registrada com dados vazios no restart, fazendo qualquer clique em
+        # qualquer mensagem antiga (de qualquer membro) cair na instância errada.
+        c.execute('''CREATE TABLE IF NOT EXISTS member_departures (
+            id SERIAL PRIMARY KEY, discord_id TEXT NOT NULL, username TEXT NOT NULL,
+            balance REAL DEFAULT 0, status TEXT DEFAULT 'pending',
+            channel_id TEXT DEFAULT '', message_id TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
 
         for key, value in [
             ('guild_tax','10'),('vendor_tax','5'),('repair_tax','3'),('setup_done','0'),
@@ -871,6 +881,71 @@ def save_split_participants(event_id, participants, event_title=''):
         print(f'[pending_splits] erro ao marcar evento {event_id}: {e}')
     finally:
         release(conn2)
+
+
+# ── Confisco de saldo (membro saiu do servidor) ─────────────────────────────────
+def create_member_departure(discord_id, username, balance):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('''INSERT INTO member_departures (discord_id, username, balance)
+                     VALUES (%s, %s, %s) RETURNING id''', (discord_id, username, balance))
+        new_id = c.fetchone()[0]
+        conn.commit()
+        return new_id
+    finally:
+        release(conn)
+
+def set_member_departure_message(departure_id, channel_id, message_id):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('UPDATE member_departures SET channel_id=%s, message_id=%s WHERE id=%s',
+                  (channel_id, message_id, departure_id))
+        conn.commit()
+    finally:
+        release(conn)
+
+def get_member_departure(departure_id):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('SELECT id, discord_id, username, balance, status FROM member_departures WHERE id=%s',
+                  (departure_id,))
+        r = c.fetchone()
+        if not r: return None
+        return {'id': r[0], 'discord_id': r[1], 'username': r[2], 'balance': r[3], 'status': r[4]}
+    except Exception:
+        return None
+    finally:
+        release(conn)
+
+def get_pending_member_departures():
+    """Avisos de saída ainda pendentes (nem confiscados nem cancelados) — usado
+    no on_ready pra recriar as Views (botões) depois de um restart do bot."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT id FROM member_departures WHERE status='pending' AND message_id != ''")
+        return [{'id': r[0]} for r in c.fetchall()]
+    except Exception as e:
+        print(f'[member_departures] erro ao listar pendentes: {e}')
+        return []
+    finally:
+        release(conn)
+
+def resolve_member_departure(departure_id, status):
+    """UPDATE condicional (WHERE status='pending') — atômico, evita dois cliques
+    quase simultâneos (dois admins) confiscando ou confiscar+cancelar em dobro."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE member_departures SET status=%s WHERE id=%s AND status='pending'",
+                  (status, departure_id))
+        conn.commit()
+        return c.rowcount > 0
+    finally:
+        release(conn)
 
 
 def get_scheduled_event_by_thread(thread_id):

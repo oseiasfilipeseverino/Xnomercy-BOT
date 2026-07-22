@@ -184,14 +184,14 @@ class BankCog(commands.Cog):
         except Exception:
             pass
 
-    # ── /diminuir_saldo ────────────────────────────────────────────────────────
-    @app_commands.command(name='diminuir_saldo', description='[LÍDER] Remove prata do saldo de um player.')
+    # ── /pagar_saldo ────────────────────────────────────────────────────────────
+    @app_commands.command(name='pagar_saldo', description='[LÍDER] Paga (remove do saldo) a prata devida a um player.')
     @app_commands.describe(
-        usuario='Player que terá prata removida',
-        valor  ='Valor em prata a remover',
-        motivo ='Motivo da remoção'
+        usuario='Player que está sendo pago',
+        valor  ='Valor em prata pago',
+        motivo ='Motivo do pagamento'
     )
-    async def diminuir_saldo(self, interaction: discord.Interaction, usuario: discord.Member, valor: float, motivo: str = 'Desconto manual'):
+    async def pagar_saldo(self, interaction: discord.Interaction, usuario: discord.Member, valor: float, motivo: str = 'Pagamento manual'):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
@@ -207,24 +207,24 @@ class BankCog(commands.Cog):
             return
 
         database.update_player_balance(str(usuario.id), usuario.display_name, -valor)
-        database.add_transaction(str(usuario.id), -valor, 'deduction', motivo, interaction.user.display_name)
+        database.add_transaction(str(usuario.id), -valor, 'payment', motivo, interaction.user.display_name)
         novo = database.get_player_balance(str(usuario.id))
 
-        embed = discord.Embed(title='➖ Saldo Removido!', color=discord.Color.red())
+        embed = discord.Embed(title='✅ Pagamento Realizado!', color=discord.Color.green())
         embed.set_author(name=usuario.display_name, icon_url=usuario.display_avatar.url)
-        embed.add_field(name='➖ Removido',    value=fmt(valor), inline=True)
+        embed.add_field(name='💸 Pago',        value=fmt(valor), inline=True)
         embed.add_field(name='💎 Saldo Atual', value=fmt(novo),  inline=True)
         embed.add_field(name='📝 Motivo',      value=motivo,     inline=False)
         embed.set_footer(text=f'Por {interaction.user.display_name}')
         await interaction.response.send_message(embed=embed)
 
         await _log(interaction.guild,
-            f'➖ **{interaction.user.display_name}** removeu **{fmt(valor)}** de **{usuario.display_name}**. Motivo: {motivo}')
+            f'✅ **{interaction.user.display_name}** pagou **{fmt(valor)}** para **{usuario.display_name}**. Motivo: {motivo}')
         try:
             dm = discord.Embed(
-                title='💰 Seu saldo foi reduzido.',
-                description=f'**{fmt(valor)}** removidos do seu saldo.\nMotivo: {motivo}\nSaldo atual: **{fmt(novo)}**',
-                color=discord.Color.orange()
+                title='✅ Você foi pago!',
+                description=f'**{fmt(valor)}** pagos e removidos do seu saldo.\nMotivo: {motivo}\nSaldo atual: **{fmt(novo)}**',
+                color=discord.Color.green()
             )
             await usuario.send(embed=dm)
         except Exception:
@@ -248,7 +248,7 @@ class BankCog(commands.Cog):
             color=discord.Color.green()
         )
         embed.set_footer(text=f'Por {interaction.user.display_name}')
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed)
 
         await _log(interaction.guild,
             f'💸 **{interaction.user.display_name}** zerou o saldo de **{usuario.display_name}** ({fmt(old)})')
@@ -280,6 +280,12 @@ class BankCog(commands.Cog):
 
         embed = discord.Embed(title='✅ Taxas Atualizadas', description='\n'.join(changed), color=discord.Color.green())
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        # Afeta o payout de TODO evento/split futuro — sem log aqui, uma mudança de
+        # taxa não deixava rastro nenhum no canal de auditoria (diferente de
+        # adicionar/remover/zerar saldo, que sempre logam).
+        await _log(interaction.guild,
+            f'⚙️ **{interaction.user.display_name}** alterou as taxas: {", ".join(changed)}')
 
     # ── /ver_taxas ─────────────────────────────────────────────────────────────
     @app_commands.command(name='ver_taxas', description='[LÍDER] Ver as taxas configuradas.')

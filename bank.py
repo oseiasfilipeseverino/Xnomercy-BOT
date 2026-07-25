@@ -157,7 +157,11 @@ class BankCog(commands.Cog):
         total  = 0.0
         for i, row in enumerate(balances):
             prefix = medals[i] if i < 3 else f'`{i+1}.`'
-            lines.append(f'{prefix} <@{row["discord_id"]}> — {fmt(row["balance"])}')
+            # A menção <@id> só vira nome de verdade se o Discord conseguir resolver
+            # (a pessoa ainda estar no servidor). Quem já saiu da guild mas ficou com
+            # saldo aparecia só como "<@276...>" cru, sem dar pra saber quem é — o
+            # username salvo no nosso banco serve de fallback pra esses casos.
+            lines.append(f'{prefix} <@{row["discord_id"]}> ({row["username"]}) — {fmt(row["balance"])}')
             total += row['balance']
 
         # A description de um embed só aguenta 4096 caracteres — mostrando TODO

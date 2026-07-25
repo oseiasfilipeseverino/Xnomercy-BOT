@@ -160,14 +160,24 @@ class BankCog(commands.Cog):
             lines.append(f'{prefix} <@{row["discord_id"]}> — {fmt(row["balance"])}')
             total += row['balance']
 
-        embed = discord.Embed(
-            title='💰 Saldos da Guild XnoMercy',
-            description='\n'.join(lines),
-            color=discord.Color.gold()
-        )
-        embed.add_field(name='📊 Total em circulação', value=fmt(total), inline=False)
-        embed.set_footer(text=f'XnoMercy Guild | {len(balances)} players com saldo')
-        await interaction.response.send_message(embed=embed)
+        # A description de um embed só aguenta 4096 caracteres — mostrando TODO
+        # mundo (não só um top N) uma guild grande passa disso fácil. Quebra em
+        # várias mensagens em vez de cortar a lista ou estourar erro do Discord.
+        CHUNK = 40
+        pages = ['\n'.join(lines[i:i + CHUNK]) for i in range(0, len(lines), CHUNK)]
+
+        for i, page in enumerate(pages):
+            title = '💰 Saldos da Guild XnoMercy'
+            if len(pages) > 1:
+                title += f' ({i+1}/{len(pages)})'
+            embed = discord.Embed(title=title, description=page, color=discord.Color.gold())
+            if i == len(pages) - 1:
+                embed.add_field(name='📊 Total em circulação', value=fmt(total), inline=False)
+            embed.set_footer(text=f'XnoMercy Guild | {len(balances)} players com saldo')
+            if i == 0:
+                await interaction.response.send_message(embed=embed)
+            else:
+                await interaction.followup.send(embed=embed)
 
     # ── /adicionar_saldo ───────────────────────────────────────────────────────
     @app_commands.command(name='adicionar_saldo', description='[LÍDER] Adiciona prata ao saldo de um ou mais players.')
@@ -228,13 +238,13 @@ class BankCog(commands.Cog):
                 pass
 
     # ── /pagar_saldo ────────────────────────────────────────────────────────────
-    @app_commands.command(name='pagar_saldo', description='[LÍDER] Paga (remove do saldo) a prata devida a um player.')
+    @app_commands.command(name='pagar_saldo', description='[LÍDER] Paga (remove do saldo) a prata devida a um ou mais players.')
     @app_commands.describe(
-        usuario='Player que está sendo pago',
-        valor  ='Valor em prata pago',
-        motivo ='Motivo do pagamento'
+        usuarios='Um ou mais players — @mencione todos ou cole os IDs separados por espaço/vírgula',
+        valor    ='Valor em prata pago (pra cada um)',
+        motivo   ='Motivo do pagamento'
     )
-    async def pagar_saldo(self, interaction: discord.Interaction, usuario: discord.Member, valor: float, motivo: str = 'Pagamento manual'):
+    async def pagar_saldo(self, interaction: discord.Interaction, usuarios: str, valor: float, motivo: str = 'Pagamento manual'):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
@@ -242,68 +252,110 @@ class BankCog(commands.Cog):
             await interaction.response.send_message('❌ O valor precisa ser maior que zero.', ephemeral=True)
             return
 
-        balance = database.get_player_balance(str(usuario.id))
-        if valor > balance:
+        members, invalid = _resolve_members(interaction.guild, usuarios)
+        if not members:
             await interaction.response.send_message(
-                f'❌ Saldo insuficiente. **{usuario.display_name}** tem apenas **{fmt(balance)}**.', ephemeral=True
-            )
+                '❌ Nenhum player válido encontrado. Mencione (@player) ou cole o ID de quem está sendo pago.',
+                ephemeral=True)
             return
 
-        database.update_player_balance(str(usuario.id), usuario.display_name, -valor)
-        database.add_transaction(str(usuario.id), -valor, 'payment', motivo, interaction.user.display_name)
-        novo = database.get_player_balance(str(usuario.id))
+        results, insufficient = [], []
+        for m in members:
+            balance = database.get_player_balance(str(m.id))
+            if valor > balance:
+                insufficient.append(f'{m.display_name} (tem só {fmt(balance)})')
+                continue
+            database.update_player_balance(str(m.id), m.display_name, -valor)
+            database.add_transaction(str(m.id), -valor, 'payment', motivo, interaction.user.display_name)
+            results.append((m, database.get_player_balance(str(m.id))))
 
-        embed = discord.Embed(title='✅ Pagamento Realizado!', color=discord.Color.green())
-        embed.set_author(name=usuario.display_name, icon_url=usuario.display_avatar.url)
-        embed.add_field(name='💸 Pago',        value=fmt(valor), inline=True)
-        embed.add_field(name='💎 Saldo Atual', value=fmt(novo),  inline=True)
-        embed.add_field(name='📝 Motivo',      value=motivo,     inline=False)
+        if not results:
+            await interaction.response.send_message(
+                '❌ Saldo insuficiente pra todo mundo listado:\n' + '\n'.join(insufficient), ephemeral=True)
+            return
+
+        if len(results) == 1:
+            m, novo = results[0]
+            embed = discord.Embed(title='✅ Pagamento Realizado!', color=discord.Color.green())
+            embed.set_author(name=m.display_name, icon_url=m.display_avatar.url)
+            embed.add_field(name='💸 Pago',        value=fmt(valor), inline=True)
+            embed.add_field(name='💎 Saldo Atual', value=fmt(novo),  inline=True)
+        else:
+            embed = discord.Embed(title=f'✅ Pagamento Realizado ({len(results)} players)!', color=discord.Color.green())
+            embed.description = '\n'.join(
+                f'**{m.display_name}** — {fmt(valor)} (saldo atual: {fmt(novo)})' for m, novo in results)
+        embed.add_field(name='📝 Motivo', value=motivo, inline=False)
+        if invalid:
+            embed.add_field(name='⚠️ Não encontrados no servidor', value=', '.join(invalid), inline=False)
+        if insufficient:
+            embed.add_field(name='⚠️ Saldo insuficiente (pulado)', value='\n'.join(insufficient), inline=False)
         embed.set_footer(text=f'Por {interaction.user.display_name}')
         await interaction.response.send_message(embed=embed)
 
+        nomes = ', '.join(m.display_name for m, _ in results)
         await _log(interaction.guild,
-            f'✅ **{interaction.user.display_name}** pagou **{fmt(valor)}** para **{usuario.display_name}**. Motivo: {motivo}')
-        try:
-            dm = discord.Embed(
-                title='✅ Você foi pago!',
-                description=f'**{fmt(valor)}** pagos e removidos do seu saldo.\nMotivo: {motivo}\nSaldo atual: **{fmt(novo)}**',
-                color=discord.Color.green()
-            )
-            await usuario.send(embed=dm)
-        except Exception:
-            pass
+            f'✅ **{interaction.user.display_name}** pagou **{fmt(valor)}** para **{nomes}**. Motivo: {motivo}')
+        for m, novo in results:
+            try:
+                dm = discord.Embed(
+                    title='✅ Você foi pago!',
+                    description=f'**{fmt(valor)}** pagos e removidos do seu saldo.\nMotivo: {motivo}\nSaldo atual: **{fmt(novo)}**',
+                    color=discord.Color.green()
+                )
+                await m.send(embed=dm)
+            except Exception:
+                pass
 
     # ── /zerar_saldo ───────────────────────────────────────────────────────────
-    @app_commands.command(name='zerar_saldo', description='[LÍDER] Zera o saldo de um player após pagamento.')
-    @app_commands.describe(usuario='Player que terá o saldo zerado')
-    async def zerar_saldo(self, interaction: discord.Interaction, usuario: discord.Member):
+    @app_commands.command(name='zerar_saldo', description='[LÍDER] Zera o saldo de um ou mais players após pagamento.')
+    @app_commands.describe(usuarios='Um ou mais players — @mencione todos ou cole os IDs separados por espaço/vírgula')
+    async def zerar_saldo(self, interaction: discord.Interaction, usuarios: str):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
 
-        old = database.get_player_balance(str(usuario.id))
-        database.set_player_balance(str(usuario.id), usuario.display_name, 0.0)
-        database.add_transaction(str(usuario.id), -old, 'withdrawal', 'Saldo zerado — pagamento efetuado', interaction.user.display_name)
+        members, invalid = _resolve_members(interaction.guild, usuarios)
+        if not members:
+            await interaction.response.send_message(
+                '❌ Nenhum player válido encontrado. Mencione (@player) ou cole o ID de quem vai ter o saldo zerado.',
+                ephemeral=True)
+            return
 
-        embed = discord.Embed(
-            title='✅ Saldo Zerado',
-            description=f'Saldo de **{usuario.display_name}** zerado.\nValor pago: **{fmt(old)}**',
-            color=discord.Color.green()
-        )
+        results = []
+        for m in members:
+            old = database.get_player_balance(str(m.id))
+            database.set_player_balance(str(m.id), m.display_name, 0.0)
+            database.add_transaction(str(m.id), -old, 'withdrawal', 'Saldo zerado — pagamento efetuado', interaction.user.display_name)
+            results.append((m, old))
+
+        if len(results) == 1:
+            m, old = results[0]
+            embed = discord.Embed(
+                title='✅ Saldo Zerado',
+                description=f'Saldo de **{m.display_name}** zerado.\nValor pago: **{fmt(old)}**',
+                color=discord.Color.green()
+            )
+        else:
+            embed = discord.Embed(title=f'✅ Saldo Zerado ({len(results)} players)', color=discord.Color.green())
+            embed.description = '\n'.join(f'**{m.display_name}** — {fmt(old)}' for m, old in results)
+        if invalid:
+            embed.add_field(name='⚠️ Não encontrados no servidor', value=', '.join(invalid), inline=False)
         embed.set_footer(text=f'Por {interaction.user.display_name}')
         await interaction.response.send_message(embed=embed)
 
+        nomes = ', '.join(f'{m.display_name} ({fmt(old)})' for m, old in results)
         await _log(interaction.guild,
-            f'💸 **{interaction.user.display_name}** zerou o saldo de **{usuario.display_name}** ({fmt(old)})')
-        try:
-            dm = discord.Embed(
-                title='💰 Seu saldo foi zerado!',
-                description=f'**{fmt(old)}** registrados como pagos.\nSaldo atual: **0 prata**.',
-                color=discord.Color.gold()
-            )
-            await usuario.send(embed=dm)
-        except Exception:
-            pass
+            f'💸 **{interaction.user.display_name}** zerou o saldo de **{nomes}**')
+        for m, old in results:
+            try:
+                dm = discord.Embed(
+                    title='💰 Seu saldo foi zerado!',
+                    description=f'**{fmt(old)}** registrados como pagos.\nSaldo atual: **0 prata**.',
+                    color=discord.Color.gold()
+                )
+                await m.send(embed=dm)
+            except Exception:
+                pass
 
     # ── /configurar_taxa ───────────────────────────────────────────────────────
     @app_commands.command(name='configurar_taxa', description='[LÍDER] Configura as taxas de loot.')

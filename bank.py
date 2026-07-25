@@ -17,10 +17,35 @@ def fmt(v: float) -> str:
 
 _ID_RE = re.compile(r'<@!?(\d+)>|(\d{15,20})')
 
+class _Target:
+    """Representa um alvo de ação de saldo — ou um discord.Member de verdade (ainda
+    no servidor), ou um fallback só com o que temos salvo no banco (saiu da guild,
+    mas já teve saldo antes). Deixa adicionar_saldo/pagar_saldo/zerar_saldo tratarem
+    os dois casos com o mesmo código, sem precisar de member.send()/display_avatar
+    em quem não tem mais Member de verdade."""
+    def __init__(self, discord_id, name, member=None):
+        self.id = discord_id
+        self.display_name = name
+        self.member = member  # None = já saiu do servidor
+
+    @property
+    def display_avatar(self):
+        return self.member.display_avatar if self.member else None
+
+    async def send(self, *a, **kw):
+        if self.member:
+            await self.member.send(*a, **kw)
+        # Sem Member (saiu do servidor), o bot não compartilha mais nenhum
+        # servidor com a pessoa — Discord não permite mandar DM nesse caso.
+
+
 def _resolve_members(guild: discord.Guild, text: str):
     """Extrai menções (@player) e IDs crus separados por espaço/vírgula/quebra de
-    linha e resolve pra discord.Member. Retorna (members, invalid) — invalid tem
-    os tokens que não bateram com ninguém no servidor (ID errado, saiu, etc)."""
+    linha e resolve pra _Target. Aceita quem já SAIU do servidor, contanto que já
+    tenha um registro de saldo no banco (senão qualquer ID errado passaria) —
+    necessário pra dar pra confiscar/zerar saldo de quem saiu com saldo positivo.
+    Retorna (targets, invalid) — invalid tem os tokens que não bateram com
+    ninguém (nem no servidor, nem no banco)."""
     ids, seen = [], set()
     for m1, m2 in _ID_RE.findall(text):
         uid = m1 or m2
@@ -28,14 +53,18 @@ def _resolve_members(guild: discord.Guild, text: str):
             seen.add(uid)
             ids.append(uid)
 
-    members, invalid = [], []
+    targets, invalid = [], []
     for uid in ids:
         member = guild.get_member(int(uid))
         if member:
-            members.append(member)
+            targets.append(_Target(uid, member.display_name, member))
+            continue
+        player = database.get_player(uid)
+        if player:
+            targets.append(_Target(uid, player['username'] or uid))
         else:
             invalid.append(uid)
-    return members, invalid
+    return targets, invalid
 
 
 async def _log(guild, message: str):
@@ -214,7 +243,7 @@ class BankCog(commands.Cog):
         if len(results) == 1:
             m, novo = results[0]
             embed = discord.Embed(title='➕ Saldo Adicionado!', color=discord.Color.green())
-            embed.set_author(name=m.display_name, icon_url=m.display_avatar.url)
+            embed.set_author(name=m.display_name, icon_url=m.display_avatar.url if m.display_avatar else None)
             embed.add_field(name='➕ Adicionado',  value=fmt(valor), inline=True)
             embed.add_field(name='💎 Saldo Atual', value=fmt(novo),  inline=True)
         else:
@@ -281,7 +310,7 @@ class BankCog(commands.Cog):
         if len(results) == 1:
             m, novo = results[0]
             embed = discord.Embed(title='✅ Pagamento Realizado!', color=discord.Color.green())
-            embed.set_author(name=m.display_name, icon_url=m.display_avatar.url)
+            embed.set_author(name=m.display_name, icon_url=m.display_avatar.url if m.display_avatar else None)
             embed.add_field(name='💸 Pago',        value=fmt(valor), inline=True)
             embed.add_field(name='💎 Saldo Atual', value=fmt(novo),  inline=True)
         else:

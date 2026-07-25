@@ -268,6 +268,21 @@ def ensure_player(discord_id, username):
     finally:
         release(conn)
 
+def get_player(discord_id):
+    """None se esse discord_id nunca teve registro no banco — usado pra permitir
+    ações de saldo (zerar/pagar) em quem já SAIU do servidor, contanto que já
+    tenha interagido com o banco antes (senão qualquer ID digitado errado passaria)."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('SELECT discord_id, username, balance FROM players WHERE discord_id=%s', (discord_id,))
+        row = c.fetchone()
+        return {'discord_id': row[0], 'username': row[1], 'balance': float(row[2])} if row else None
+    except Exception:
+        return None
+    finally:
+        release(conn)
+
 def get_player_balance(discord_id):
     conn = get_connection()
     try:

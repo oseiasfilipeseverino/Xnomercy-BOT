@@ -2,6 +2,7 @@
 bank.py — Banco da guild: saldos, ranking, ajustes, bônus
 """
 
+import re
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -12,6 +13,29 @@ from permissions import is_financial
 
 def fmt(v: float) -> str:
     return f'{v:,.0f}'.replace(',', '.') + ' prata'
+
+
+_ID_RE = re.compile(r'<@!?(\d+)>|(\d{15,20})')
+
+def _resolve_members(guild: discord.Guild, text: str):
+    """Extrai menções (@player) e IDs crus separados por espaço/vírgula/quebra de
+    linha e resolve pra discord.Member. Retorna (members, invalid) — invalid tem
+    os tokens que não bateram com ninguém no servidor (ID errado, saiu, etc)."""
+    ids, seen = [], set()
+    for m1, m2 in _ID_RE.findall(text):
+        uid = m1 or m2
+        if uid not in seen:
+            seen.add(uid)
+            ids.append(uid)
+
+    members, invalid = [], []
+    for uid in ids:
+        member = guild.get_member(int(uid))
+        if member:
+            members.append(member)
+        else:
+            invalid.append(uid)
+    return members, invalid
 
 
 async def _log(guild, message: str):
@@ -146,13 +170,13 @@ class BankCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     # ── /adicionar_saldo ───────────────────────────────────────────────────────
-    @app_commands.command(name='adicionar_saldo', description='[LÍDER] Adiciona prata ao saldo de um player.')
+    @app_commands.command(name='adicionar_saldo', description='[LÍDER] Adiciona prata ao saldo de um ou mais players.')
     @app_commands.describe(
-        usuario='Player que vai receber',
-        valor  ='Valor em prata a adicionar',
-        motivo ='Motivo do bônus'
+        usuarios='Um ou mais players — @mencione todos ou cole os IDs separados por espaço/vírgula',
+        valor   ='Valor em prata a adicionar (pra cada um)',
+        motivo  ='Motivo do bônus'
     )
-    async def adicionar_saldo(self, interaction: discord.Interaction, usuario: discord.Member, valor: float, motivo: str = 'Bônus da liderança'):
+    async def adicionar_saldo(self, interaction: discord.Interaction, usuarios: str, valor: float, motivo: str = 'Bônus da liderança'):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
@@ -160,29 +184,48 @@ class BankCog(commands.Cog):
             await interaction.response.send_message('❌ O valor precisa ser maior que zero.', ephemeral=True)
             return
 
-        database.update_player_balance(str(usuario.id), usuario.display_name, valor)
-        database.add_transaction(str(usuario.id), valor, 'bonus', motivo, interaction.user.display_name)
-        novo = database.get_player_balance(str(usuario.id))
+        members, invalid = _resolve_members(interaction.guild, usuarios)
+        if not members:
+            await interaction.response.send_message(
+                '❌ Nenhum player válido encontrado. Mencione (@player) ou cole o ID de quem vai receber.',
+                ephemeral=True)
+            return
 
-        embed = discord.Embed(title='➕ Saldo Adicionado!', color=discord.Color.green())
-        embed.set_author(name=usuario.display_name, icon_url=usuario.display_avatar.url)
-        embed.add_field(name='➕ Adicionado',  value=fmt(valor), inline=True)
-        embed.add_field(name='💎 Saldo Atual', value=fmt(novo),  inline=True)
-        embed.add_field(name='📝 Motivo',      value=motivo,     inline=False)
+        results = []
+        for m in members:
+            database.update_player_balance(str(m.id), m.display_name, valor)
+            database.add_transaction(str(m.id), valor, 'bonus', motivo, interaction.user.display_name)
+            results.append((m, database.get_player_balance(str(m.id))))
+
+        if len(results) == 1:
+            m, novo = results[0]
+            embed = discord.Embed(title='➕ Saldo Adicionado!', color=discord.Color.green())
+            embed.set_author(name=m.display_name, icon_url=m.display_avatar.url)
+            embed.add_field(name='➕ Adicionado',  value=fmt(valor), inline=True)
+            embed.add_field(name='💎 Saldo Atual', value=fmt(novo),  inline=True)
+        else:
+            embed = discord.Embed(title=f'➕ Saldo Adicionado ({len(results)} players)!', color=discord.Color.green())
+            embed.description = '\n'.join(
+                f'**{m.display_name}** — {fmt(valor)} (saldo atual: {fmt(novo)})' for m, novo in results)
+        embed.add_field(name='📝 Motivo', value=motivo, inline=False)
+        if invalid:
+            embed.add_field(name='⚠️ Não encontrados no servidor', value=', '.join(invalid), inline=False)
         embed.set_footer(text=f'Por {interaction.user.display_name}')
         await interaction.response.send_message(embed=embed)
 
+        nomes = ', '.join(m.display_name for m, _ in results)
         await _log(interaction.guild,
-            f'➕ **{interaction.user.display_name}** adicionou **{fmt(valor)}** para **{usuario.display_name}**. Motivo: {motivo}')
-        try:
-            dm = discord.Embed(
-                title='💰 Você recebeu prata!',
-                description=f'**{fmt(valor)}** adicionados ao seu saldo!\nMotivo: {motivo}\nSaldo atual: **{fmt(novo)}**',
-                color=discord.Color.gold()
-            )
-            await usuario.send(embed=dm)
-        except Exception:
-            pass
+            f'➕ **{interaction.user.display_name}** adicionou **{fmt(valor)}** para **{nomes}**. Motivo: {motivo}')
+        for m, novo in results:
+            try:
+                dm = discord.Embed(
+                    title='💰 Você recebeu prata!',
+                    description=f'**{fmt(valor)}** adicionados ao seu saldo!\nMotivo: {motivo}\nSaldo atual: **{fmt(novo)}**',
+                    color=discord.Color.gold()
+                )
+                await m.send(embed=dm)
+            except Exception:
+                pass
 
     # ── /pagar_saldo ────────────────────────────────────────────────────────────
     @app_commands.command(name='pagar_saldo', description='[LÍDER] Paga (remove do saldo) a prata devida a um player.')

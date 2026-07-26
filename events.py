@@ -87,7 +87,7 @@ class CreateEventModal(discord.ui.Modal, title='Criar Evento'):
 
         # Move criador para a call
         try: await interaction.user.move_to(voice_ch)
-        except: pass
+        except Exception: pass
 
         # Embed no canal de texto
         embed = _build_event_embed(event_id, title, interaction.user.display_name, [])
@@ -143,7 +143,7 @@ class JoinEventButton(discord.ui.Button):
             voice_ch = interaction.guild.get_channel(int(self.voice_ch_id)) if self.voice_ch_id else None
             if voice_ch:
                 try: await interaction.user.move_to(voice_ch)
-                except: pass
+                except Exception: pass
 
             await _update_event_embed(interaction.guild, self.event_id)
             await _log(interaction.guild, f'✅ **{interaction.user.display_name}** entrou no **Evento #{self.event_id:04d}**')
@@ -228,13 +228,13 @@ class AddPlayerModal(discord.ui.Modal, title='Adicionar Player'):
     async def on_submit(self, interaction: discord.Interaction):
         try:
             member = await interaction.guild.fetch_member(int(self.user_id.value))
-        except:
+        except Exception:
             await interaction.response.send_message('❌ Membro não encontrado.', ephemeral=True)
             return
 
         try:
             weight = max(1.0, min(100.0, float(self.participacao.value)))
-        except:
+        except Exception:
             weight = 100.0
 
         added = database.add_event_participant(self.event_id, str(member.id), member.display_name, weight)
@@ -341,7 +341,7 @@ async def _refresh_participar(guild):
                 to_delete.append(msg)
         for msg in to_delete:
             try: await msg.delete()
-            except: pass
+            except Exception: pass
 
         if active:
             await ch.send(embed=embed, view=ParticipateView(active))
@@ -364,11 +364,11 @@ async def _do_finalize(guild, event_id, by_name):
             if voice_ch and aguardando:
                 for member in list(voice_ch.members):
                     try: await member.move_to(aguardando)
-                    except: pass
+                    except Exception: pass
                 await asyncio.sleep(1)
             if voice_ch:
                 try: await voice_ch.delete()
-                except: pass
+                except Exception: pass
 
         cat_id = database.get_config('category_eventos_finalizados')
         cat    = guild.get_channel(int(cat_id)) if cat_id else None

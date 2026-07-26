@@ -134,7 +134,7 @@ class SetupCog(commands.Cog):
         async for msg in ch_criar.history(limit=20):
             if msg.author == guild.me:
                 try: await msg.delete()
-                except: pass
+                except Exception: pass
  
         embed_criar = discord.Embed(
             title='⚔️ Criar Evento | XnoMercy',
@@ -147,7 +147,7 @@ class SetupCog(commands.Cog):
         async for msg in ch_part.history(limit=20):
             if msg.author == guild.me:
                 try: await msg.delete()
-                except: pass
+                except Exception: pass
  
         embed_part = discord.Embed(
             title='⚔️ Eventos em Andamento | XnoMercy',

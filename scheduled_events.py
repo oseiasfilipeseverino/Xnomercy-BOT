@@ -200,8 +200,14 @@ class ScheduledEventsCog(commands.Cog):
 
         print("[slots] Thread " + str(message.channel.id) + " num=" + str(num))
 
+        # run_db: as consultas ao Postgres são síncronas. Chamadas direto aqui, elas
+        # travam o bot inteiro enquanto esperam a rede — e ESTE é o caminho mais
+        # quente do bot: numa CTA, 20 pessoas digitam o número do slot quase juntas,
+        # cada mensagem fazendo várias consultas. Jogando pro executor, o bot segue
+        # atendendo todo mundo em paralelo.
         try:
-            event = database.get_scheduled_event_by_thread(str(message.channel.id))
+            event = await database.run_db(
+                database.get_scheduled_event_by_thread, str(message.channel.id))
         except Exception as db_err:
             print("[slots] ERRO DB: " + str(db_err))
             return
@@ -218,57 +224,57 @@ class ScheduledEventsCog(commands.Cog):
             reply = await message.reply("Slot invalido. Escolha entre 1 e " + str(len(slots)) + ".", mention_author=False)
             await asyncio.sleep(6)
             try: await reply.delete()
-            except: pass
+            except Exception: pass
             try: await message.delete()
-            except: pass
+            except Exception: pass
             return
 
         discord_id = str(message.author.id)
         username   = message.author.display_name
 
         if num > 0:
-            result = database.assign_slot(event["id"], num, discord_id, username)
+            result = await database.run_db(database.assign_slot, event["id"], num, discord_id, username)
             if result == "ok":
                 await message.add_reaction("✅")
             elif result == "has_slot":
-                current = database.get_player_slot(event["id"], discord_id)
+                current = await database.run_db(database.get_player_slot, event["id"], discord_id)
                 reply = await message.reply(
                     "Voce ja esta no slot **" + str(current) + "**. Digite **-" + str(current) + "** para sair primeiro.",
                     mention_author=False
                 )
                 await asyncio.sleep(8)
                 try: await reply.delete()
-                except: pass
+                except Exception: pass
                 try: await message.delete()
-                except: pass
+                except Exception: pass
                 return
             else:
                 reply = await message.reply("Slot **" + str(num) + "** ja esta ocupado!", mention_author=False)
                 await asyncio.sleep(6)
                 try: await reply.delete()
-                except: pass
+                except Exception: pass
                 try: await message.delete()
-                except: pass
+                except Exception: pass
                 return
         else:
-            removed = database.unassign_slot(event["id"], abs_num, discord_id)
+            removed = await database.run_db(database.unassign_slot, event["id"], abs_num, discord_id)
             if removed:
                 await message.add_reaction("👋")
             else:
                 reply = await message.reply("Voce nao esta no slot **" + str(abs_num) + "**.", mention_author=False)
                 await asyncio.sleep(6)
                 try: await reply.delete()
-                except: pass
+                except Exception: pass
                 try: await message.delete()
-                except: pass
+                except Exception: pass
                 return
 
         await self._update_embed(event["id"])
 
     async def _update_embed(self, event_id):
         try:
-            event       = database.get_scheduled_event(event_id)
-            assignments = database.get_slot_assignments(event_id)
+            event       = await database.run_db(database.get_scheduled_event, event_id)
+            assignments = await database.run_db(database.get_slot_assignments, event_id)
             embed       = build_embed(event, assignments)
 
             if not event.get("message_id") or not event.get("channel_id"):

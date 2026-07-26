@@ -488,8 +488,11 @@ class BankCog(commands.Cog):
             await interaction.response.send_message('⚠️ Informe ao menos uma taxa.', ephemeral=True)
             return
 
+        # Público (não ephemeral): muda o payout de TODO evento/split futuro, então a
+        # guild toda tem interesse em ver — mesmo critério dos outros comandos
+        # financeiros (/adicionar_saldo, /pagar_saldo, /zerar_saldo).
         embed = discord.Embed(title='✅ Taxas Atualizadas', description='\n'.join(changed), color=discord.Color.green())
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed)
 
         # Afeta o payout de TODO evento/split futuro — sem log aqui, uma mudança de
         # taxa não deixava rastro nenhum no canal de auditoria (diferente de

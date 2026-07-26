@@ -3,10 +3,28 @@ database.py — PostgreSQL com pg8000 + connection pool + try/finally
 OTIMIZADO: todas as funcoes protegidas contra vazamento de conexao
 """
 
+import asyncio
+import functools
 import os, threading
 import pg8000.dbapi
 from urllib.parse import urlparse
 from datetime import datetime
+
+
+async def run_db(fn, *args, **kwargs):
+    """Roda uma função de banco (síncrona) numa thread, liberando o event loop.
+
+    Todas as funções deste módulo usam pg8000, que é SÍNCRONO — chamadas direto de
+    dentro de um handler async do discord.py bloqueiam o bot inteiro enquanto
+    esperam a resposta do Postgres (que está na rede, não local). Numa CTA com 20
+    pessoas digitando o número do slot ao mesmo tempo, isso vira uma fila: cada
+    mensagem faz várias consultas e ninguém mais é atendido no meio.
+
+    Usar nos caminhos de alto tráfego:  await database.run_db(database.assign_slot, ...)
+    """
+    loop = asyncio.get_running_loop()
+    call = functools.partial(fn, *args, **kwargs) if kwargs else functools.partial(fn, *args)
+    return await loop.run_in_executor(None, call)
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
@@ -24,7 +42,7 @@ def get_connection():
                 return conn
             except Exception:
                 try: conn.close()
-                except: pass
+                except Exception: pass
     url = urlparse(DATABASE_URL)
     return pg8000.dbapi.connect(
         host=url.hostname, port=url.port or 5432,
@@ -42,7 +60,7 @@ def release(conn):
                 return
             except Exception: pass
     try: conn.close()
-    except: pass
+    except Exception: pass
 
 def _row_to_dict(row, keys):
     return dict(zip(keys, row)) if row else None

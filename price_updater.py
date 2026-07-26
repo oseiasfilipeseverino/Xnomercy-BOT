@@ -136,7 +136,7 @@ def _save_prices(prices_data):
         return 0
     finally:
         try: conn.close()
-        except: pass
+        except Exception: pass
 
 # ── Configuração AODP Americas ─────────────────────────────────────────────────
 AODP      = 'https://west.albion-online-data.com/api/v2/stats/prices/'

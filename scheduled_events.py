@@ -55,7 +55,12 @@ def build_embed(event, assignments):
     embed.add_field(name="Horario", value=time_str, inline=True)
     embed.add_field(name="Slots", value=str(filled) + "/" + str(total), inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=True)
-    embed.add_field(name="Instrucoes", value=INSTRUCTIONS, inline=False)
+    # As instrucoes saem daqui de proposito — ficam so na 1a mensagem do topico
+    # (onde a pessoa realmente digita o numero do slot). No embed do ping elas so
+    # ocupavam espaco e empurravam a composicao pra baixo.
+    link = (event.get("link_url") or "").strip()
+    if link:
+        embed.add_field(name="Link", value="[Abrir](" + link + ")", inline=False)
 
     if slots:
         col1, col2, col3 = [], [], []

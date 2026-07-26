@@ -117,6 +117,8 @@ def init_db():
             notify_15 INTEGER DEFAULT 0, ping_type TEXT DEFAULT 'none',
             ping_role_id TEXT DEFAULT '', created_by TEXT NOT NULL,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+        # Link opcional do evento (ex: planilha de builds) — o site é quem preenche.
+        c.execute("ALTER TABLE scheduled_events ADD COLUMN IF NOT EXISTS link_url TEXT DEFAULT ''")
         c.execute('''CREATE TABLE IF NOT EXISTS slot_assignments (
             id SERIAL PRIMARY KEY, scheduled_event_id INTEGER NOT NULL,
             slot_number INTEGER NOT NULL, discord_id TEXT NOT NULL,
@@ -694,9 +696,11 @@ def delete_event_template(template_id):
 
 
 # ── Scheduled Events ───────────────────────────────────────────────────────────
+# Ordem tem que bater com a das colunas na tabela (as queries usam SELECT *).
+# link_url foi adicionado via ALTER TABLE, então vem por último.
 SCHED_KEYS = ['id','title','description','channel_id','thread_id','message_id',
               'slots','scheduled_time','status','notify_30','notify_15',
-              'ping_type','ping_role_id','created_by','created_at']
+              'ping_type','ping_role_id','created_by','created_at','link_url']
 
 def create_scheduled_event(title, description, channel_id, slots, scheduled_time, created_by):
     conn = get_connection()

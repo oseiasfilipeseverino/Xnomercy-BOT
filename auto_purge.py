@@ -4,6 +4,7 @@ Checa todos com [NM] no nick a cada 6 horas via Albion API.
 Remove Membro, adiciona Amigo, troca [NM] por [AMG].
 """
 
+import asyncio
 import discord
 from discord.ext import commands, tasks
 import requests
@@ -16,6 +17,15 @@ GUILD_NAME = 'XnoMercy'
 ROLE_MEMBRO = 'Membro'
 ROLE_AMIGO = 'Amigo'
 CHECK_INTERVAL = 21600  # 6 horas
+
+# Trava de seguranca: se a API devolver uma lista pequena demais, e quase certo
+# que foi resposta incompleta/glitch da Albion, nao que a guild inteira saiu.
+# Sem isso, um `[]` vindo da API rebaixava TODO MUNDO com [NM] de uma vez
+# (tira cargo Membro, poe Amigo e renomeia pra [AMG]) — estrago enorme e
+# chato de desfazer na mao, membro por membro.
+MIN_MEMBERS_SANITY = 5
+# Se mais de 30% dos membros checados sumirem de uma vez, tambem e' suspeito.
+MAX_PURGE_RATIO = 0.30
 
 
 class AutoPurgeCog(commands.Cog):
@@ -72,14 +82,27 @@ class AutoPurgeCog(commands.Cog):
     @tasks.loop(seconds=CHECK_INTERVAL)
     async def purge_check_task(self):
         try:
-            guild_id = self._get_albion_guild_id()
+            # run_in_executor: requests.get e' SINCRONO. Chamado direto aqui, ele
+            # congelava o bot INTEIRO (nenhum comando respondia, ninguem conseguia
+            # entrar em slot de evento) por ate 15-20s a cada ciclo — e isso nao e'
+            # teorico: o log de producao ja mostrou "Read timed out (read timeout=15)"
+            # exatamente aqui.
+            loop = asyncio.get_event_loop()
+            guild_id = await loop.run_in_executor(None, self._get_albion_guild_id)
             if not guild_id:
                 print('[auto_purge] Guild ID nao encontrado')
                 return
 
-            albion_members = self._get_guild_members_albion(guild_id)
+            albion_members = await loop.run_in_executor(
+                None, self._get_guild_members_albion, guild_id)
             if albion_members is None:
                 print('[auto_purge] Falha ao buscar membros da API')
+                return
+
+            # Resposta vazia/curta demais = glitch da API, nao guild dissolvida.
+            if len(albion_members) < MIN_MEMBERS_SANITY:
+                print(f'[auto_purge] ABORTADO: API devolveu so {len(albion_members)} membro(s) — '
+                      f'resposta suspeita, nada foi alterado.')
                 return
 
             discord_guild = self._get_guild()
@@ -96,7 +119,10 @@ class AutoPurgeCog(commands.Cog):
                 print(f'[auto_purge] Role {ROLE_AMIGO} nao encontrada — crie no Discord')
                 return
 
-            changed = []
+            # 1a passada: so DECIDE quem sairia, sem alterar nada ainda. Isso
+            # permite abortar tudo se o resultado parecer um falso positivo em
+            # massa (ver MAX_PURGE_RATIO) antes de mexer no cargo de alguem.
+            to_purge = []
             checked = 0
 
             for member in discord_guild.members:
@@ -115,6 +141,29 @@ class AutoPurgeCog(commands.Cog):
                 if albion_nick.lower() in albion_members:
                     continue
 
+                to_purge.append((member, albion_nick))
+
+            if checked and len(to_purge) > max(MIN_MEMBERS_SANITY, checked * MAX_PURGE_RATIO):
+                print(f'[auto_purge] ABORTADO: {len(to_purge)} de {checked} membros seriam '
+                      f'rebaixados de uma vez — parece falha da API, nao saida real. '
+                      f'Nada foi alterado.')
+                try:
+                    ch_id = database.get_config('channel_logs')
+                    if ch_id:
+                        ch = discord_guild.get_channel(int(ch_id))
+                        if ch:
+                            await ch.send(
+                                f'⚠️ **Auto-Purge abortado por seguranca:** a API do Albion indicou que '
+                                f'**{len(to_purge)} de {checked}** membros teriam saido da guild de uma vez. '
+                                f'Isso quase sempre e falha da API, entao nenhum cargo foi alterado. '
+                                f'Se a saida foi real mesmo, ajuste os cargos na mao.')
+                except Exception:
+                    pass
+                return
+
+            changed = []
+
+            for member, albion_nick in to_purge:
                 # Saiu da guild: remove Membro, adiciona Amigo, troca [NM] por [AMG]
                 try:
                     await member.remove_roles(membro_role, reason='Auto-purge: saiu da guild no Albion')

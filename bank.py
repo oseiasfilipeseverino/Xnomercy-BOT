@@ -294,13 +294,15 @@ class BankCog(commands.Cog):
 
         results, insufficient = [], []
         for m in members:
-            balance = database.get_player_balance(str(m.id))
-            if valor > balance:
-                insufficient.append(f'{m.display_name} (tem só {fmt(balance)})')
+            # Débito atômico (checa saldo e debita na mesma query) — ler o saldo e
+            # só depois debitar deixava dois Líderes pagarem a mesma pessoa ao
+            # mesmo tempo e o saldo ficar NEGATIVO.
+            novo = database.debit_player_balance(str(m.id), m.display_name, valor)
+            if novo is None:
+                insufficient.append(f'{m.display_name} (tem só {fmt(database.get_player_balance(str(m.id)))})')
                 continue
-            database.update_player_balance(str(m.id), m.display_name, -valor)
             database.add_transaction(str(m.id), -valor, 'payment', motivo, interaction.user.display_name)
-            results.append((m, database.get_player_balance(str(m.id))))
+            results.append((m, novo))
 
         if not results:
             await interaction.response.send_message(
@@ -356,9 +358,12 @@ class BankCog(commands.Cog):
 
         results = []
         for m in members:
-            old = database.get_player_balance(str(m.id))
-            database.set_player_balance(str(m.id), m.display_name, 0.0)
-            database.add_transaction(str(m.id), -old, 'withdrawal', 'Saldo zerado — pagamento efetuado', interaction.user.display_name)
+            # Zera e devolve o saldo antigo na mesma query — ler e só depois zerar
+            # deixava dois admins zerando junto registrarem DUAS transações do
+            # mesmo valor, inflando o débito no extrato de auditoria.
+            old = database.zero_player_balance(str(m.id), m.display_name)
+            if old:
+                database.add_transaction(str(m.id), -old, 'withdrawal', 'Saldo zerado — pagamento efetuado', interaction.user.display_name)
             results.append((m, old))
 
         if len(results) == 1:

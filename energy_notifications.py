@@ -6,6 +6,7 @@ Cog de notificações de energia + logs + broadcast.
 - weekly_check (1h): cobrança semanal de energia (segunda 12h BRT)
 """
 import asyncio
+import contextlib
 import discord
 from discord.ext import commands, tasks
 import datetime
@@ -29,6 +30,27 @@ def _db_conn():
         ssl_context=True,
         timeout=15
     )
+
+
+@contextlib.contextmanager
+def _db():
+    """Fecha a conexão SEMPRE, inclusive quando a query levanta exceção.
+
+    Antes, o padrão aqui era `conn = _db_conn() ... conn.close()` solto: se
+    qualquer execute() no meio falhasse, o fluxo pulava direto pro except do
+    loop e a conexão nunca era fechada. Como estes loops rodam a cada 15-30s
+    24h por dia, uma instabilidade do banco vazava uma conexão por ciclo até
+    o Postgres recusar novas ligações — derrubando o bot inteiro, não só este
+    módulo.
+    """
+    conn = _db_conn()
+    try:
+        yield conn
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 EXCLUDE = ['gayzaoviadao']
 
@@ -111,37 +133,38 @@ class EnergyNotifications(commands.Cog):
         return None
 
     def _get_debtors(self):
-        """Busca devedores do banco (exclui players da lista)."""
+        """Busca devedores do banco (exclui players da lista).
+
+        Usa o `with _db()` só por consistência com o resto do módulo — esta
+        função já fechava a conexão corretamente (tinha finally próprio).
+        """
         try:
-            conn = _db_conn()
-            c = conn.cursor()
-            exclude_lower = [e.lower() for e in EXCLUDE]
-            if exclude_lower:
-                placeholders = ','.join(['%s'] * len(exclude_lower))
-                c.execute(f'''
-                    SELECT player, SUM(amount) as balance
-                    FROM energy_records
-                    WHERE LOWER(player) NOT IN ({placeholders})
-                    GROUP BY player
-                    HAVING SUM(amount) < 0
-                    ORDER BY SUM(amount) ASC
-                ''', exclude_lower)
-            else:
-                c.execute('''
-                    SELECT player, SUM(amount) as balance
-                    FROM energy_records
-                    GROUP BY player
-                    HAVING SUM(amount) < 0
-                    ORDER BY SUM(amount) ASC
-                ''')
-            rows = c.fetchall()
+            with _db() as conn:
+                c = conn.cursor()
+                exclude_lower = [e.lower() for e in EXCLUDE]
+                if exclude_lower:
+                    placeholders = ','.join(['%s'] * len(exclude_lower))
+                    c.execute(f'''
+                        SELECT player, SUM(amount) as balance
+                        FROM energy_records
+                        WHERE LOWER(player) NOT IN ({placeholders})
+                        GROUP BY player
+                        HAVING SUM(amount) < 0
+                        ORDER BY SUM(amount) ASC
+                    ''', exclude_lower)
+                else:
+                    c.execute('''
+                        SELECT player, SUM(amount) as balance
+                        FROM energy_records
+                        GROUP BY player
+                        HAVING SUM(amount) < 0
+                        ORDER BY SUM(amount) ASC
+                    ''')
+                rows = c.fetchall()
             return [{'player': r[0], 'debt': abs(r[1])} for r in rows]
         except Exception as e:
             print(f'[energy] Erro ao buscar devedores: {e}')
             return []
-        finally:
-            try: conn.close()
-            except: pass
 
     async def _send_notifications(self, message_template):
         """Envia DM para cada devedor com a mensagem customizada."""
@@ -183,22 +206,20 @@ class EnergyNotifications(commands.Cog):
         if self._in_backoff('check_pending'):
             return
         try:
-            conn = _db_conn()
-            c = conn.cursor()
-            c.execute("SELECT value FROM site_config WHERE key='energy_pending_msg'")
-            r = c.fetchone()
-            conn.close()
+            with _db() as conn:
+                c = conn.cursor()
+                c.execute("SELECT value FROM site_config WHERE key='energy_pending_msg'")
+                r = c.fetchone()
 
             if r and r[0]:
                 msg = r[0]
                 print(f'[energy] Notificação pendente encontrada: {msg[:50]}...')
 
                 # Limpar pendente antes de enviar
-                conn2 = _db_conn()
-                c2 = conn2.cursor()
-                c2.execute("UPDATE site_config SET value='' WHERE key='energy_pending_msg'")
-                conn2.commit()
-                conn2.close()
+                with _db() as conn2:
+                    c2 = conn2.cursor()
+                    c2.execute("UPDATE site_config SET value='' WHERE key='energy_pending_msg'")
+                    conn2.commit()
 
                 sent = await self._send_notifications(msg)
                 print(f'[energy] Notificação enviada para {sent} devedores')
@@ -219,25 +240,23 @@ class EnergyNotifications(commands.Cog):
         if self._in_backoff('check_logs'):
             return
         try:
-            conn = _db_conn()
-            c = conn.cursor()
-            c.execute('SELECT id, message FROM pending_logs ORDER BY id LIMIT 5')
-            rows = c.fetchall()
-            self._record_success('check_logs')  # query funcionou — tabela existe e DB está OK
-            if not rows:
-                conn.close()
-                return
+            with _db() as conn:
+                c = conn.cursor()
+                c.execute('SELECT id, message FROM pending_logs ORDER BY id LIMIT 5')
+                rows = c.fetchall()
+                self._record_success('check_logs')  # query funcionou — tabela existe e DB está OK
+                if not rows:
+                    return
 
-            # Buscar canal de logs
-            c.execute("SELECT value FROM guild_config WHERE key='channel_logs'")
-            ch_row = c.fetchone()
-            log_channel_id = ch_row[0] if ch_row else ''
+                # Buscar canal de logs
+                c.execute("SELECT value FROM guild_config WHERE key='channel_logs'")
+                ch_row = c.fetchone()
+                log_channel_id = ch_row[0] if ch_row else ''
 
-            # Deletar logs processados
-            for row in rows:
-                c.execute('DELETE FROM pending_logs WHERE id=%s', (row[0],))
-            conn.commit()
-            conn.close()
+                # Deletar logs processados
+                for row in rows:
+                    c.execute('DELETE FROM pending_logs WHERE id=%s', (row[0],))
+                conn.commit()
 
             if not log_channel_id:
                 print('[logs] Canal de logs não configurado')
@@ -275,11 +294,10 @@ class EnergyNotifications(commands.Cog):
         if self._in_backoff('check_broadcast'):
             return
         try:
-            conn = _db_conn()
-            c = conn.cursor()
-            c.execute("SELECT value FROM site_config WHERE key='broadcast_pending'")
-            r = c.fetchone()
-            conn.close()
+            with _db() as conn:
+                c = conn.cursor()
+                c.execute("SELECT value FROM site_config WHERE key='broadcast_pending'")
+                r = c.fetchone()
             self._record_success('check_broadcast')
 
             if not r or not r[0]:
@@ -289,11 +307,10 @@ class EnergyNotifications(commands.Cog):
             print(f'[broadcast] Mensagem pendente encontrada: {msg[:50]}...')
 
             # Limpar pendente ANTES de enviar
-            conn2 = _db_conn()
-            c2 = conn2.cursor()
-            c2.execute("UPDATE site_config SET value='' WHERE key='broadcast_pending'")
-            conn2.commit()
-            conn2.close()
+            with _db() as conn2:
+                c2 = conn2.cursor()
+                c2.execute("UPDATE site_config SET value='' WHERE key='broadcast_pending'")
+                conn2.commit()
 
             # Enviar DM para TODOS os membros do servidor
             guild = self._get_guild()
@@ -324,11 +341,10 @@ class EnergyNotifications(commands.Cog):
 
             # Posta resultado no canal de logs
             try:
-                conn3 = _db_conn()
-                c3 = conn3.cursor()
-                c3.execute("SELECT value FROM guild_config WHERE key='channel_logs'")
-                ch = c3.fetchone()
-                conn3.close()
+                with _db() as conn3:
+                    c3 = conn3.cursor()
+                    c3.execute("SELECT value FROM guild_config WHERE key='channel_logs'")
+                    ch = c3.fetchone()
                 if ch and ch[0]:
                     channel = guild.get_channel(int(ch[0]))
                     if channel:
@@ -364,13 +380,12 @@ class EnergyNotifications(commands.Cog):
                 return
             week_key = target.strftime('%Y-%m-%d')
 
-            conn = _db_conn()
-            c = conn.cursor()
-            c.execute("SELECT value FROM site_config WHERE key='energy_weekly_enabled'")
-            r = c.fetchone()
-            c.execute("SELECT value FROM site_config WHERE key='energy_weekly_last_sent'")
-            last_sent = c.fetchone()
-            conn.close()
+            with _db() as conn:
+                c = conn.cursor()
+                c.execute("SELECT value FROM site_config WHERE key='energy_weekly_enabled'")
+                r = c.fetchone()
+                c.execute("SELECT value FROM site_config WHERE key='energy_weekly_last_sent'")
+                last_sent = c.fetchone()
             self._record_success('weekly_check')
 
             if not r or r[0] != '1':
@@ -386,12 +401,11 @@ class EnergyNotifications(commands.Cog):
             )
             sent = await self._send_notifications(msg)
 
-            conn2 = _db_conn()
-            c2 = conn2.cursor()
-            c2.execute("""INSERT INTO site_config (key, value) VALUES ('energy_weekly_last_sent', %s)
-                          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""", (week_key,))
-            conn2.commit()
-            conn2.close()
+            with _db() as conn2:
+                c2 = conn2.cursor()
+                c2.execute("""INSERT INTO site_config (key, value) VALUES ('energy_weekly_last_sent', %s)
+                              ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""", (week_key,))
+                conn2.commit()
 
             print(f'[energy] Cobrança semanal enviada para {sent} devedores')
         except Exception as e:

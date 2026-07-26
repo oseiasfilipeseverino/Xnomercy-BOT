@@ -353,6 +353,47 @@ def set_player_balance(discord_id, username, amount):
     finally:
         release(conn)
 
+def debit_player_balance(discord_id, username, amount):
+    """Debita SÓ se houver saldo suficiente, tudo numa query atômica. Retorna o
+    novo saldo, ou None se não tinha saldo (nada foi alterado).
+
+    A versão ingênua (ler saldo -> comparar em Python -> update) deixa uma janela
+    onde dois Líderes pagando a mesma pessoa ao mesmo tempo passam os dois pela
+    checagem e o saldo fica NEGATIVO. O `AND balance >= %s` fecha essa janela:
+    quem chegar depois não encontra linha pra atualizar e recebe None."""
+    ensure_player(discord_id, username)
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('UPDATE players SET balance=balance-%s WHERE discord_id=%s AND balance >= %s RETURNING balance',
+                  (amount, discord_id, amount))
+        row = c.fetchone()
+        conn.commit()
+        return float(row[0]) if row else None
+    finally:
+        release(conn)
+
+def zero_player_balance(discord_id, username):
+    """Zera o saldo e devolve quanto tinha ANTES, numa query só. Sem isso, dois
+    admins zerando ao mesmo tempo liam o mesmo saldo antigo e cada um registrava
+    uma transação de -saldo, dobrando o débito no extrato (o saldo final ficava
+    certo, mas o histórico de auditoria mentia)."""
+    ensure_player(discord_id, username)
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        # O self-join com `FROM players old` deixa o RETURNING enxergar o valor
+        # ANTES do update (RETURNING sozinho só devolve o valor novo, que aqui é
+        # sempre 0). Padrão documentado do Postgres pra "troca e me diz o antigo".
+        c.execute('UPDATE players p SET balance=0 FROM players old '
+                  'WHERE p.discord_id=%s AND old.discord_id=p.discord_id RETURNING old.balance',
+                  (discord_id,))
+        row = c.fetchone()
+        conn.commit()
+        return float(row[0]) if row else 0.0
+    finally:
+        release(conn)
+
 def get_all_balances():
     conn = get_connection()
     try:

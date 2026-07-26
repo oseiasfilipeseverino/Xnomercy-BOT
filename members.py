@@ -60,9 +60,11 @@ class ConfiscarView(LoggedView):
             await interaction.response.send_message('❌ Já processado por outra pessoa.', ephemeral=True)
             return
 
-        balance = database.get_player_balance(dep['discord_id'])
+        # Zera e devolve o saldo antigo na mesma query (ver database.zero_player_balance):
+        # ler e só depois zerar podia registrar a transação com um valor diferente do
+        # que realmente saiu, se algo creditasse esse player nesse meio-tempo.
+        balance = database.zero_player_balance(dep['discord_id'], dep['username'])
         if balance > 0:
-            database.set_player_balance(dep['discord_id'], dep['username'], 0.0)
             database.add_transaction(
                 dep['discord_id'], -balance, 'confiscation',
                 'Saldo confiscado — membro saiu do servidor',

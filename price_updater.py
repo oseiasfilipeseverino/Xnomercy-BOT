@@ -8,6 +8,7 @@ Como usar no main.py do bot (já foi adicionado):
 """
 
 import asyncio
+import contextlib
 import os
 import requests
 import pg8000.dbapi
@@ -21,6 +22,26 @@ def _get_conn():
         database=url.path[1:], user=url.username,
         password=url.password, ssl_context=True, timeout=15
     )
+
+
+@contextlib.contextmanager
+def _db():
+    """Fecha a conexão SEMPRE, mesmo se a query levantar exceção.
+
+    Antes as funções aqui faziam `conn = _get_conn() ... conn.close()` solto:
+    qualquer erro no meio pulava o close e vazava a conexão. Como este módulo
+    roda a cada 30min (e as funções de alerta rodam uma vez por alerta ativo),
+    instabilidade do banco ia acumulando conexões abertas até o Postgres
+    recusar novas — derrubando o bot inteiro junto.
+    """
+    conn = _get_conn()
+    try:
+        yield conn
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 def _init_table():
     """Cria a tabela prices_cache se não existir."""
@@ -70,7 +91,7 @@ def _init_table():
         print(f'[price_updater] Erro ao criar tabela: {e}')
     finally:
         try: conn.close()
-        except: pass
+        except Exception: pass
 
 def _save_prices(prices_data):
     """Salva lista de precos no banco. Preserva precos antigos quando novo=0."""
@@ -305,12 +326,10 @@ CITY_LABELS = {
 
 def _get_active_alerts():
     try:
-        conn = _get_conn()
-        c = conn.cursor()
-        c.execute('SELECT id, discord_id, item_id, quality, city, direction, target_price FROM price_alerts WHERE active = TRUE')
-        rows = c.fetchall()
-        conn.close()
-        return rows
+        with _db() as conn:
+            c = conn.cursor()
+            c.execute('SELECT id, discord_id, item_id, quality, city, direction, target_price FROM price_alerts WHERE active = TRUE')
+            return c.fetchall()
     except Exception as e:
         print(f'[price_updater] buscar alertas: {e}')
         return []
@@ -318,15 +337,13 @@ def _get_active_alerts():
 
 def _get_matching_prices(item_id, quality, city):
     try:
-        conn = _get_conn()
-        c = conn.cursor()
-        if city:
-            c.execute('SELECT city, sell_min FROM prices_cache WHERE item_id=%s AND quality=%s AND city=%s AND sell_min > 0', (item_id, quality, city))
-        else:
-            c.execute('SELECT city, sell_min FROM prices_cache WHERE item_id=%s AND quality=%s AND sell_min > 0', (item_id, quality))
-        rows = c.fetchall()
-        conn.close()
-        return rows
+        with _db() as conn:
+            c = conn.cursor()
+            if city:
+                c.execute('SELECT city, sell_min FROM prices_cache WHERE item_id=%s AND quality=%s AND city=%s AND sell_min > 0', (item_id, quality, city))
+            else:
+                c.execute('SELECT city, sell_min FROM prices_cache WHERE item_id=%s AND quality=%s AND sell_min > 0', (item_id, quality))
+            return c.fetchall()
     except Exception as e:
         print(f'[price_updater] checar preço do alerta: {e}')
         return []
@@ -334,23 +351,21 @@ def _get_matching_prices(item_id, quality, city):
 
 def _get_item_name(item_id):
     try:
-        conn = _get_conn()
-        c = conn.cursor()
-        c.execute('SELECT name_pt FROM items_catalog WHERE unique_name=%s', (item_id,))
-        row = c.fetchone()
-        conn.close()
-        return row[0] if row and row[0] else item_id
+        with _db() as conn:
+            c = conn.cursor()
+            c.execute('SELECT name_pt FROM items_catalog WHERE unique_name=%s', (item_id,))
+            row = c.fetchone()
+            return row[0] if row and row[0] else item_id
     except Exception:
         return item_id
 
 
 def _mark_alert_triggered(alert_id):
     try:
-        conn = _get_conn()
-        c = conn.cursor()
-        c.execute("UPDATE price_alerts SET active=FALSE, triggered_at=NOW() WHERE id=%s", (alert_id,))
-        conn.commit()
-        conn.close()
+        with _db() as conn:
+            c = conn.cursor()
+            c.execute("UPDATE price_alerts SET active=FALSE, triggered_at=NOW() WHERE id=%s", (alert_id,))
+            conn.commit()
     except Exception as e:
         print(f'[price_updater] marcar alerta disparado: {e}')
 

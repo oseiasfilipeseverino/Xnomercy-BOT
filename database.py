@@ -373,6 +373,53 @@ def debit_player_balance(discord_id, username, amount):
     finally:
         release(conn)
 
+def transfer_balance(from_id, from_name, to_id, to_name, amount, note=''):
+    """Move prata de um player pro outro numa ÚNICA transação.
+
+    Retorna (ok, saldo_novo_do_remetente). ok=False quando não havia saldo
+    suficiente (nada é alterado).
+
+    Tudo — débito, crédito e os dois registros no extrato — vai num commit só,
+    com rollback se qualquer passo falhar. Se fosse feito com as funções
+    separadas (debit_player_balance + update_player_balance), cada uma faz seu
+    próprio commit: uma falha entre elas debitaria o remetente sem creditar
+    ninguém, e a prata simplesmente sumia do sistema sem rastro.
+    """
+    ensure_player(from_id, from_name)
+    ensure_player(to_id, to_name)
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        # `AND balance >= %s` na mesma query = checagem e débito atômicos: duas
+        # transferências simultâneas do mesmo remetente não conseguem as duas
+        # passar e deixar o saldo negativo.
+        c.execute('UPDATE players SET balance=balance-%s WHERE discord_id=%s AND balance >= %s RETURNING balance',
+                  (amount, from_id, amount))
+        row = c.fetchone()
+        if not row:
+            conn.rollback()
+            return False, None
+        novo_saldo = float(row[0])
+
+        c.execute('UPDATE players SET balance=balance+%s, total_earned=total_earned+%s WHERE discord_id=%s',
+                  (amount, amount, to_id))
+
+        desc_out = f'Transferência para {to_name}' + (f' — {note}' if note else '')
+        desc_in  = f'Transferência de {from_name}' + (f' — {note}' if note else '')
+        c.execute("INSERT INTO transactions (discord_id, amount, type, description, created_by) "
+                  "VALUES (%s, %s, 'transfer_out', %s, %s)", (from_id, -amount, desc_out, from_name))
+        c.execute("INSERT INTO transactions (discord_id, amount, type, description, created_by) "
+                  "VALUES (%s, %s, 'transfer_in', %s, %s)", (to_id, amount, desc_in, from_name))
+
+        conn.commit()
+        return True, novo_saldo
+    except Exception:
+        try: conn.rollback()
+        except Exception: pass
+        raise
+    finally:
+        release(conn)
+
 def zero_player_balance(discord_id, username):
     """Zera o saldo e devolve quanto tinha ANTES, numa query só. Sem isso, dois
     admins zerando ao mesmo tempo liam o mesmo saldo antigo e cada um registrava

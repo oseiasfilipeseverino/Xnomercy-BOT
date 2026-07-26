@@ -8,7 +8,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import database
-from permissions import is_financial
+from permissions import is_financial, is_member
 
 
 def fmt(v: float) -> str:
@@ -118,6 +118,83 @@ class BankCog(commands.Cog):
             embed.description = '\n'.join(lines)
             embed.set_footer(text=f'Últimas {len(txs)} movimentações · saldo atual: {fmt(database.get_player_balance(str(user.id)))}')
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ── /transferir_saldo ──────────────────────────────────────────────────────
+    @app_commands.command(name='transferir_saldo', description='Transfere prata do SEU saldo para outro membro.')
+    @app_commands.describe(
+        usuario='Quem vai receber a prata',
+        valor  ='Quanto transferir do seu saldo',
+        motivo ='Motivo (opcional — aparece no extrato dos dois)'
+    )
+    async def transferir_saldo(self, interaction: discord.Interaction,
+                               usuario: discord.Member, valor: float, motivo: str = ''):
+        remetente = interaction.user
+
+        # Qualquer membro pode transferir o PRÓPRIO saldo — não é ação de gestão.
+        if not is_member(remetente):
+            await interaction.response.send_message('❌ Apenas membros da guild.', ephemeral=True)
+            return
+        if usuario.id == remetente.id:
+            await interaction.response.send_message('❌ Você não pode transferir para si mesmo.', ephemeral=True)
+            return
+        if usuario.bot:
+            await interaction.response.send_message('❌ Não dá pra transferir para um bot.', ephemeral=True)
+            return
+        if valor <= 0:
+            await interaction.response.send_message('❌ O valor precisa ser maior que zero.', ephemeral=True)
+            return
+        # Fração de prata não existe no jogo — evita saldo com centavos no extrato.
+        valor = float(int(valor))
+        if valor <= 0:
+            await interaction.response.send_message('❌ O valor precisa ser de pelo menos 1 prata.', ephemeral=True)
+            return
+
+        motivo = (motivo or '').strip()[:150]
+
+        try:
+            ok, novo = database.transfer_balance(
+                str(remetente.id), remetente.display_name,
+                str(usuario.id), usuario.display_name,
+                valor, motivo
+            )
+        except Exception as e:
+            print(f'[bank] erro na transferencia {remetente.id} -> {usuario.id}: {e}')
+            await interaction.response.send_message(
+                '❌ Erro ao transferir. Nada foi alterado no seu saldo — tente de novo.', ephemeral=True)
+            return
+
+        if not ok:
+            saldo = database.get_player_balance(str(remetente.id))
+            await interaction.response.send_message(
+                f'❌ Saldo insuficiente. Você tem **{fmt(saldo)}** e tentou transferir **{fmt(valor)}**.',
+                ephemeral=True)
+            return
+
+        embed = discord.Embed(title='🔄 Transferência Realizada!', color=discord.Color.blurple())
+        embed.set_author(name=remetente.display_name, icon_url=remetente.display_avatar.url)
+        embed.add_field(name='➡️ Para',          value=usuario.mention, inline=True)
+        embed.add_field(name='💸 Valor',          value=fmt(valor),      inline=True)
+        embed.add_field(name='💎 Seu saldo agora', value=fmt(novo),      inline=True)
+        if motivo:
+            embed.add_field(name='📝 Motivo', value=motivo, inline=False)
+        embed.set_footer(text='XnoMercy Guild')
+        await interaction.response.send_message(content=usuario.mention, embed=embed)
+
+        await _log(interaction.guild,
+            f'🔄 **{remetente.display_name}** transferiu **{fmt(valor)}** para **{usuario.display_name}**.'
+            + (f' Motivo: {motivo}' if motivo else ''))
+
+        try:
+            dm = discord.Embed(
+                title='🔄 Você recebeu uma transferência!',
+                description=(f'**{remetente.display_name}** te transferiu **{fmt(valor)}**.\n'
+                             + (f'Motivo: {motivo}\n' if motivo else '')
+                             + f'Seu saldo atual: **{fmt(database.get_player_balance(str(usuario.id)))}**'),
+                color=discord.Color.blurple()
+            )
+            await usuario.send(embed=dm)
+        except Exception:
+            pass
 
     # ── /extrato_membro ────────────────────────────────────────────────────────
     @app_commands.command(name='extrato_membro', description='[LÍDER] Ver o extrato de um membro específico (auditoria).')

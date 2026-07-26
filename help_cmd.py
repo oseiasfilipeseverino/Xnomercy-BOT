@@ -24,6 +24,7 @@ COMMAND_GROUPS = [
         ('/meus_alertas', 'Lista seus alertas de preço ativos'),
         ('/remover_alerta', 'Remove um alerta seu'),
         ('/extrato', 'Seu histórico de créditos e débitos na guild'),
+        ('/transferir_saldo', 'Transfere prata do SEU saldo para outro membro'),
         ('/albion_register', 'Registra seu nick do Albion pra ganhar o cargo de Membro'),
     ]),
     ('Staff', 'support_tickets', [

@@ -15,6 +15,19 @@ def fmt(v: float) -> str:
     return f'{v:,.0f}'.replace(',', '.') + ' prata'
 
 
+def _prata_inteira(v: float) -> int:
+    """Trunca pra prata inteira.
+
+    Prata fracionada não existe no Albion (nem dá pra transferir), e o formato de
+    exibição arredonda pra 0 decimais — então um saldo de 0,4 aparecia no /saldos
+    como "0 prata", parecendo que a lista mostrava gente sem saldo. Todo comando
+    que mexe em saldo passa o valor por aqui antes de gravar."""
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return 0
+
+
 _ID_RE = re.compile(r'<@!?(\d+)>|(\d{15,20})')
 
 class _Target:
@@ -140,11 +153,7 @@ class BankCog(commands.Cog):
         if usuario.bot:
             await interaction.response.send_message('❌ Não dá pra transferir para um bot.', ephemeral=True)
             return
-        if valor <= 0:
-            await interaction.response.send_message('❌ O valor precisa ser maior que zero.', ephemeral=True)
-            return
-        # Fração de prata não existe no jogo — evita saldo com centavos no extrato.
-        valor = float(int(valor))
+        valor = _prata_inteira(valor)
         if valor <= 0:
             await interaction.response.send_message('❌ O valor precisa ser de pelo menos 1 prata.', ephemeral=True)
             return
@@ -303,8 +312,9 @@ class BankCog(commands.Cog):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
+        valor = _prata_inteira(valor)
         if valor <= 0:
-            await interaction.response.send_message('❌ O valor precisa ser maior que zero.', ephemeral=True)
+            await interaction.response.send_message('❌ O valor precisa ser de pelo menos 1 prata.', ephemeral=True)
             return
 
         members, invalid = _resolve_members(interaction.guild, usuarios)
@@ -361,8 +371,9 @@ class BankCog(commands.Cog):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
+        valor = _prata_inteira(valor)
         if valor <= 0:
-            await interaction.response.send_message('❌ O valor precisa ser maior que zero.', ephemeral=True)
+            await interaction.response.send_message('❌ O valor precisa ser de pelo menos 1 prata.', ephemeral=True)
             return
 
         members, invalid = _resolve_members(interaction.guild, usuarios)

@@ -86,10 +86,26 @@ CITY_CHOICES = [app_commands.Choice(name=lbl, value=key) for key, lbl in CITY_LA
 QUALITY_CHOICES = [app_commands.Choice(name=lbl, value=q) for q, lbl in QUAL_LABELS.items()]
 
 
+# Teto de alertas ativos por pessoa. Sem limite, dava pra cadastrar centenas: o
+# price_updater roda 2 consultas POR ALERTA a cada ciclo de 30min, e cada disparo
+# manda uma DM — passar do rate limit global de DM do Discord degrada o bot INTEIRO
+# (comandos de todo mundo), não só de quem criou os alertas.
+MAX_ALERTS_PER_USER = 25
+
+
 def _create_alert(discord_id, item_id, quality, city, direction, target_price):
+    """Retorna o id do alerta, 'limite' se a pessoa já bateu o teto, ou None em erro."""
     conn = database.get_connection()
     try:
         c = conn.cursor()
+        # Conta e insere na MESMA conexão/transação — contar numa chamada separada
+        # deixaria uma janela pra dois /alerta_preco quase simultâneos passarem os
+        # dois pelo teto.
+        c.execute('SELECT COUNT(*) FROM price_alerts WHERE discord_id=%s AND active=TRUE', (discord_id,))
+        atuais = int((c.fetchone() or [0])[0])
+        if atuais >= MAX_ALERTS_PER_USER:
+            conn.rollback()
+            return 'limite'
         c.execute('''INSERT INTO price_alerts (discord_id, item_id, quality, city, direction, target_price)
                      VALUES (%s,%s,%s,%s,%s,%s) RETURNING id''',
                   (discord_id, item_id, quality, city or '', direction, target_price))
@@ -255,6 +271,12 @@ class MarketCog(commands.Cog):
         city = cidade.value if cidade else None
 
         alert_id = _create_alert(str(interaction.user.id), uid, quality, city, direcao.value, preco)
+        if alert_id == 'limite':
+            await interaction.response.send_message(
+                f'❌ Você já tem **{MAX_ALERTS_PER_USER} alertas ativos** (o máximo). '
+                f'Remova algum com `/remover_alerta` antes de criar outro — veja a lista '
+                f'em `/meus_alertas`.', ephemeral=True)
+            return
         if alert_id is None:
             await interaction.response.send_message('❌ Erro ao criar o alerta. Tente de novo.', ephemeral=True)
             return

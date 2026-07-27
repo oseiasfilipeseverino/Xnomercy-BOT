@@ -28,6 +28,56 @@ def _prata_inteira(v: float) -> int:
         return 0
 
 
+def parse_prata(texto) -> int | None:
+    """Lê um valor de prata escrito como a gente escreve de verdade.
+
+    O campo era `valor: float`, e aí o Discord só aceitava o formato americano:
+    digitar **1.200.000** (como se escreve prata em português) era recusado ou lido
+    errado. Agora o campo é texto e a interpretação é feita aqui, aceitando:
+
+        1.200.000   1200000   1,200,000   1.200.000,75   1,200,000.75   1200,50
+
+    Regra pra desfazer a ambiguidade do separador:
+      - os dois presentes -> o ÚLTIMO é o decimal (o outro é milhar);
+      - só um, repetido   -> é separador de milhar;
+      - só um, uma vez    -> milhar se sobrarem 3 dígitos depois ("1.200" = 1200),
+                             decimal se sobrarem 1 ou 2 ("1200,50" = 1200,5).
+
+    Devolve prata INTEIRA (trunca o centavo, que não existe no jogo) ou None se
+    não der pra entender — o chamador avisa em vez de gravar valor errado.
+    """
+    if texto is None:
+        return None
+    s = str(texto).strip().lower()
+    for lixo in ('prata', 'silver', ' ', ' '):
+        s = s.replace(lixo, '')
+    if not s:
+        return None
+    negativo = s.startswith('-')
+    s = s.lstrip('+-')
+    if not s or any(c not in '0123456789.,' for c in s):
+        return None
+
+    tem_ponto, tem_virgula = '.' in s, ',' in s
+    if tem_ponto and tem_virgula:
+        dec = ',' if s.rfind(',') > s.rfind('.') else '.'
+        mil = '.' if dec == ',' else ','
+        s = s.replace(mil, '').replace(dec, '.')
+    elif tem_ponto or tem_virgula:
+        sep = '.' if tem_ponto else ','
+        if s.count(sep) > 1:
+            s = s.replace(sep, '')                 # milhar repetido
+        else:
+            depois = len(s) - s.rfind(sep) - 1
+            s = s.replace(sep, '' if depois == 3 else '.')
+    try:
+        valor = float(s)
+    except ValueError:
+        return None
+    valor = int(valor)          # trunca centavo
+    return -valor if negativo else valor
+
+
 _ID_RE = re.compile(r'<@!?(\d+)>|(\d{15,20})')
 
 class _Target:
@@ -136,11 +186,11 @@ class BankCog(commands.Cog):
     @app_commands.command(name='transferir_saldo', description='Transfere prata do SEU saldo para outro membro.')
     @app_commands.describe(
         usuario='Quem vai receber a prata',
-        valor  ='Quanto transferir do seu saldo',
+        valor  ='Quanto transferir — ex: 1.200.000 ou 1200000',
         motivo ='Motivo (opcional — aparece no extrato dos dois)'
     )
     async def transferir_saldo(self, interaction: discord.Interaction,
-                               usuario: discord.Member, valor: float, motivo: str = ''):
+                               usuario: discord.Member, valor: str, motivo: str = ''):
         remetente = interaction.user
 
         # Qualquer membro pode transferir o PRÓPRIO saldo — não é ação de gestão.
@@ -153,7 +203,12 @@ class BankCog(commands.Cog):
         if usuario.bot:
             await interaction.response.send_message('❌ Não dá pra transferir para um bot.', ephemeral=True)
             return
-        valor = _prata_inteira(valor)
+        valor = parse_prata(valor)
+        if valor is None:
+            await interaction.response.send_message(
+                '❌ Valor não reconhecido. Escreva como preferir: `1.200.000`, `1200000` ou `1,200,000`.',
+                ephemeral=True)
+            return
         if valor <= 0:
             await interaction.response.send_message('❌ O valor precisa ser de pelo menos 1 prata.', ephemeral=True)
             return
@@ -305,14 +360,19 @@ class BankCog(commands.Cog):
     @app_commands.command(name='adicionar_saldo', description='[LÍDER] Adiciona prata ao saldo de um ou mais players.')
     @app_commands.describe(
         usuarios='Um ou mais players — @mencione todos ou cole os IDs separados por espaço/vírgula',
-        valor   ='Valor em prata a adicionar (pra cada um)',
+        valor   ='Valor por pessoa — ex: 1.200.000 ou 1200000',
         motivo  ='Motivo do bônus'
     )
-    async def adicionar_saldo(self, interaction: discord.Interaction, usuarios: str, valor: float, motivo: str = 'Bônus da liderança'):
+    async def adicionar_saldo(self, interaction: discord.Interaction, usuarios: str, valor: str, motivo: str = 'Bônus da liderança'):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
-        valor = _prata_inteira(valor)
+        valor = parse_prata(valor)
+        if valor is None:
+            await interaction.response.send_message(
+                '❌ Valor não reconhecido. Escreva como preferir: `1.200.000`, `1200000` ou `1,200,000`.',
+                ephemeral=True)
+            return
         if valor <= 0:
             await interaction.response.send_message('❌ O valor precisa ser de pelo menos 1 prata.', ephemeral=True)
             return
@@ -364,14 +424,19 @@ class BankCog(commands.Cog):
     @app_commands.command(name='pagar_saldo', description='[LÍDER] Paga (remove do saldo) a prata devida a um ou mais players.')
     @app_commands.describe(
         usuarios='Um ou mais players — @mencione todos ou cole os IDs separados por espaço/vírgula',
-        valor    ='Valor em prata pago (pra cada um)',
+        valor    ='Valor por pessoa — ex: 1.200.000 ou 1200000',
         motivo   ='Motivo do pagamento'
     )
-    async def pagar_saldo(self, interaction: discord.Interaction, usuarios: str, valor: float, motivo: str = 'Pagamento manual'):
+    async def pagar_saldo(self, interaction: discord.Interaction, usuarios: str, valor: str, motivo: str = 'Pagamento manual'):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
-        valor = _prata_inteira(valor)
+        valor = parse_prata(valor)
+        if valor is None:
+            await interaction.response.send_message(
+                '❌ Valor não reconhecido. Escreva como preferir: `1.200.000`, `1200000` ou `1,200,000`.',
+                ephemeral=True)
+            return
         if valor <= 0:
             await interaction.response.send_message('❌ O valor precisa ser de pelo menos 1 prata.', ephemeral=True)
             return

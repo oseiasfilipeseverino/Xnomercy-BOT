@@ -9,6 +9,7 @@ from discord.ext import commands
 
 import database
 from permissions import can_manage_events, is_member, is_financial, has_permission
+from bank import parse_prata   # aceita 1.200.000 / 1200000 / 1,200,000
 from view_utils import LoggedView
 
 
@@ -596,11 +597,26 @@ class EventsCog(commands.Cog):
 
     # ── /simular_evento ────────────────────────────────────────────────────────
     @app_commands.command(name='simular_evento', description='Simula a distribuição proporcional do loot. Informe o valor total e o reparo.')
-    @app_commands.describe(valor_total='Valor total do loot em prata (ex: 25000000)', reparo='Custo total de reparo em prata (ex: 2000000 | coloque 0 se não houver)')
-    async def simular(self, interaction: discord.Interaction, valor_total: float, reparo: float):
+    @app_commands.describe(valor_total='Loot total — ex: 25.000.000 ou 25000000', reparo='Reparo total — ex: 2.000.000 (0 se não houver)')
+    async def simular(self, interaction: discord.Interaction, valor_total: str, reparo: str = '0'):
         if not (can_manage_events(interaction.user) or is_staff_up(interaction.user)):
             await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
             return
+
+        # Aceita 1.200.000 / 1200000 / 1,200,000 — ver bank.parse_prata. O campo era
+        # float e o Discord recusava o formato brasileiro.
+        valor_total_n = parse_prata(valor_total)
+        reparo_n      = parse_prata(reparo if reparo not in (None, '') else '0')
+        if valor_total_n is None or reparo_n is None:
+            await interaction.response.send_message(
+                '❌ Valor não reconhecido. Escreva como preferir: `25.000.000`, `25000000` ou `25,000,000`.',
+                ephemeral=True)
+            return
+        if valor_total_n <= 0 or reparo_n < 0:
+            await interaction.response.send_message(
+                '❌ O loot precisa ser maior que zero e o reparo não pode ser negativo.', ephemeral=True)
+            return
+        valor_total, reparo = valor_total_n, reparo_n
 
         event = database.get_event_by_channel(str(interaction.channel_id))
         if not event:
@@ -652,11 +668,26 @@ class EventsCog(commands.Cog):
 
     # ── /depositar_evento ──────────────────────────────────────────────────────
     @app_commands.command(name='depositar_evento', description='Envia o loot para aprovação. Informe o valor total e o custo de reparo.')
-    @app_commands.describe(valor_total='Valor total do loot em prata (ex: 25000000)', reparo='Custo total de reparo em prata (ex: 2000000 | coloque 0 se não houver)')
-    async def depositar(self, interaction: discord.Interaction, valor_total: float, reparo: float):
+    @app_commands.describe(valor_total='Loot total — ex: 25.000.000 ou 25000000', reparo='Reparo total — ex: 2.000.000 (0 se não houver)')
+    async def depositar(self, interaction: discord.Interaction, valor_total: str, reparo: str = '0'):
         if not (can_manage_events(interaction.user) or is_staff_up(interaction.user)):
             await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
             return
+
+        # Aceita 1.200.000 / 1200000 / 1,200,000 — ver bank.parse_prata. O campo era
+        # float e o Discord recusava o formato brasileiro.
+        valor_total_n = parse_prata(valor_total)
+        reparo_n      = parse_prata(reparo if reparo not in (None, '') else '0')
+        if valor_total_n is None or reparo_n is None:
+            await interaction.response.send_message(
+                '❌ Valor não reconhecido. Escreva como preferir: `25.000.000`, `25000000` ou `25,000,000`.',
+                ephemeral=True)
+            return
+        if valor_total_n <= 0 or reparo_n < 0:
+            await interaction.response.send_message(
+                '❌ O loot precisa ser maior que zero e o reparo não pode ser negativo.', ephemeral=True)
+            return
+        valor_total, reparo = valor_total_n, reparo_n
 
         event = database.get_event_by_channel(str(interaction.channel_id))
         if not event:

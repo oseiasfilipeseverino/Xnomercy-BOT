@@ -463,7 +463,10 @@ def get_all_balances():
     conn = get_connection()
     try:
         c = conn.cursor()
-        c.execute('SELECT discord_id, username, balance FROM players WHERE balance > 0 ORDER BY balance DESC')
+        # >= 0.5 e não > 0: saldo fracionário antigo (ex: 0,4 de prata, sobra de
+        # divisão de split antes do arredondamento) passava no "> 0" mas era exibido
+        # como "0 prata", parecendo que a lista mostrava gente sem saldo.
+        c.execute('SELECT discord_id, username, balance FROM players WHERE balance >= 0.5 ORDER BY balance DESC')
         return [{'discord_id': r[0], 'username': r[1], 'balance': r[2]} for r in c.fetchall()]
     except Exception:
         return []

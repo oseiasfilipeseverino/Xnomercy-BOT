@@ -263,11 +263,14 @@ class BankCog(commands.Cog):
         total  = 0.0
         for i, row in enumerate(balances):
             prefix = medals[i] if i < 3 else f'`{i+1}.`'
-            # A menção <@id> só vira nome de verdade se o Discord conseguir resolver
-            # (a pessoa ainda estar no servidor). Quem já saiu da guild mas ficou com
-            # saldo aparecia só como "<@276...>" cru, sem dar pra saber quem é — o
-            # username salvo no nosso banco serve de fallback pra esses casos.
-            lines.append(f'{prefix} <@{row["discord_id"]}> ({row["username"]}) — {fmt(row["balance"])}')
+            # A menção <@id> só vira nome de verdade se a pessoa ainda estiver no
+            # servidor. Pra quem já saiu, ela fica como "<@276...>" cru e não dá pra
+            # saber quem é — nesses casos (e SÓ nesses) acrescenta o nome salvo no
+            # banco. Antes o nome vinha sempre, o que duplicava a informação em
+            # todas as linhas ("@[NM] Fulano ([NM] Fulano)").
+            ainda_no_servidor = interaction.guild.get_member(int(row['discord_id'])) is not None
+            nome = '' if ainda_no_servidor else f' ({row["username"]})'
+            lines.append(f'{prefix} <@{row["discord_id"]}>{nome} — {fmt(row["balance"])}')
             total += row['balance']
 
         # A description de um embed só aguenta 4096 caracteres — mostrando TODO

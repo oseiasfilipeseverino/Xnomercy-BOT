@@ -35,7 +35,15 @@ async def _get_aguardando(guild):
     return None
 
 def _calc_distribution(participants, net: float) -> dict:
-    """Calcula distribuição proporcional. Players com 0% são excluídos."""
+    """Calcula distribuição proporcional. Players com 0% são excluídos.
+
+    Devolve PRATA INTEIRA (arredondada pra baixo). Antes devolvia float, e a
+    sobra fracionária ia direto pro saldo: alguém acabava com 0,4 de prata, que
+    passava no filtro `balance > 0` do /saldos mas era exibido como "0 prata" —
+    aparecia na lista como se tivesse saldo zerado. Prata fracionada não existe
+    no jogo (nem dá pra transferir), então o certo é truncar aqui, igual o site
+    já faz na tela de split. O resto da divisão simplesmente não é distribuído.
+    """
     active = [p for p in participants if float(p['share'] or 0) > 0]
     total_weight = sum(float(p['share']) for p in active)
     if total_weight == 0:
@@ -43,7 +51,7 @@ def _calc_distribution(participants, net: float) -> dict:
     result = {}
     for p in participants:
         weight = float(p['share'] or 0)
-        result[p['discord_id']] = net * (weight / total_weight) if weight > 0 else 0
+        result[p['discord_id']] = int(net * (weight / total_weight)) if weight > 0 else 0
     return result
 
 # ── Modal: Criar Evento ────────────────────────────────────────────────────────

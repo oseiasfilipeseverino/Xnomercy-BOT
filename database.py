@@ -153,6 +153,14 @@ def init_db():
             balance REAL DEFAULT 0, status TEXT DEFAULT 'pending',
             channel_id TEXT DEFAULT '', message_id TEXT DEFAULT '',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+        # Quantas verificações CONSECUTIVAS um membro apareceu como "fora da guild"
+        # na API do Albion. O auto-purge só rebaixa depois de confirmar mais de uma
+        # vez — a API devolve resposta incompleta de vez em quando, e agir na
+        # primeira observação já rebaixou gente que estava na guild.
+        c.execute('''CREATE TABLE IF NOT EXISTS purge_strikes (
+            discord_id TEXT PRIMARY KEY, albion_nick TEXT DEFAULT '',
+            strikes INTEGER NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP NOT NULL DEFAULT NOW())''')
 
         for key, value in [
             ('guild_tax','10'),('vendor_tax','5'),('repair_tax','3'),('setup_done','0'),
@@ -1009,6 +1017,42 @@ def save_split_participants(event_id, participants, event_title=''):
         print(f'[pending_splits] erro ao marcar evento {event_id}: {e}')
     finally:
         release(conn2)
+
+
+# ── Auto-purge: confirmação em múltiplas verificações ──────────────────────────
+def purge_strike_add(discord_id, albion_nick):
+    """Registra que este membro apareceu como fora da guild AGORA e devolve quantas
+    verificações consecutivas isso já aconteceu."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('''INSERT INTO purge_strikes (discord_id, albion_nick, strikes, updated_at)
+                     VALUES (%s, %s, 1, NOW())
+                     ON CONFLICT (discord_id) DO UPDATE SET
+                       strikes = purge_strikes.strikes + 1,
+                       albion_nick = EXCLUDED.albion_nick,
+                       updated_at = NOW()
+                     RETURNING strikes''', (discord_id, albion_nick))
+        row = c.fetchone()
+        conn.commit()
+        return int(row[0]) if row else 1
+    except Exception as e:
+        print(f'[purge_strikes] erro ao registrar: {e}')
+        return 1
+    finally:
+        release(conn)
+
+def purge_strike_clear(discord_id):
+    """Apareceu na guild — zera o histórico pra que uma ausência futura comece de novo."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('DELETE FROM purge_strikes WHERE discord_id=%s', (discord_id,))
+        conn.commit()
+    except Exception as e:
+        print(f'[purge_strikes] erro ao limpar: {e}')
+    finally:
+        release(conn)
 
 
 # ── Confisco de saldo (membro saiu do servidor) ─────────────────────────────────

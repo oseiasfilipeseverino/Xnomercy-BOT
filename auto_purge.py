@@ -35,6 +35,15 @@ def _sem_acento(s):
                    if unicodedata.category(c) != 'Mn')
 
 
+# Quantas verificacoes CONSECUTIVAS alguem precisa aparecer como fora da guild antes
+# de ser rebaixado. Com o ciclo de 6h, 2 significa ~6h de ausencia confirmada.
+#
+# Existe porque a API do Albion devolve resposta INCOMPLETA de vez em quando: o
+# Carabit6 foi rebaixado estando na guild (verificado consultando a API na mao logo
+# depois — ele estava lá, entre 99 membros). Uma resposta faltando 1 pessoa passa por
+# qualquer trava de volume, entao a unica defesa real e' nao agir na primeira vez.
+STRIKES_TO_PURGE = 2
+
 MIN_MEMBERS_SANITY = 5
 # Se mais de 30% dos membros checados sumirem de uma vez, tambem e' suspeito.
 MAX_PURGE_RATIO = 0.30
@@ -196,6 +205,7 @@ class AutoPurgeCog(commands.Cog):
 
                 # Ainda esta na guild? Testa todos os candidatos (cru, sem emoji, etc).
                 if any(c.lower() in albion_members for c in candidatos):
+                    database.purge_strike_clear(str(member.id))
                     continue
 
                 # Nenhum candidato casou. Se o apelido nao permite isolar um nome de
@@ -203,6 +213,15 @@ class AutoPurgeCog(commands.Cog):
                 # pessoa saiu da guild. Só avisa pra liderança arrumar o apelido.
                 if not confiavel:
                     nao_verificaveis.append((member, candidatos[0]))
+                    continue
+
+                # Confirmacao em multiplas verificacoes: a API do Albion as vezes
+                # devolve lista incompleta, e agir na primeira observacao ja rebaixou
+                # gente que estava na guild. So entra na fila apos STRIKES_TO_PURGE.
+                strikes = database.purge_strike_add(str(member.id), candidatos[0])
+                if strikes < STRIKES_TO_PURGE:
+                    print(f'[auto_purge] {candidatos[0]}: ausente na API '
+                          f'({strikes}/{STRIKES_TO_PURGE}) — aguardando confirmacao')
                     continue
 
                 to_purge.append((member, candidatos[0]))

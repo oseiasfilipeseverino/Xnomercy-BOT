@@ -6,6 +6,7 @@ Remove Membro, adiciona Amigo, troca [NM] por [AMG].
 
 import asyncio
 import re
+import unicodedata
 import discord
 from discord.ext import commands, tasks
 import requests
@@ -24,6 +25,16 @@ CHECK_INTERVAL = 21600  # 6 horas
 # Sem isso, um `[]` vindo da API rebaixava TODO MUNDO com [NM] de uma vez
 # (tira cargo Membro, poe Amigo e renomeia pra [AMG]) — estrago enorme e
 # chato de desfazer na mao, membro por membro.
+def _sem_acento(s):
+    """"Carabitó" -> "Carabito". Nome de conta do Albion e' ASCII, mas o apelido do
+    Discord as vezes vem com acento — sem normalizar, a comparacao com a API falhava
+    e a pessoa era rebaixada por engano."""
+    if not s:
+        return s
+    return ''.join(c for c in unicodedata.normalize('NFD', s)
+                   if unicodedata.category(c) != 'Mn')
+
+
 MIN_MEMBERS_SANITY = 5
 # Se mais de 30% dos membros checados sumirem de uma vez, tambem e' suspeito.
 MAX_PURGE_RATIO = 0.30
@@ -99,22 +110,29 @@ class AutoPurgeCog(commands.Cog):
         if not resto:
             return None, False
 
-        candidatos = []
-        # 1) O texto cru (cobre quem nao decorou nada, o caso mais comum).
-        candidatos.append(resto)
-        # 2) Primeiro "pedaco" antes de espaco — tira emoji/tag posto depois do nome.
         primeiro = resto.split()[0] if resto.split() else ''
-        if primeiro and primeiro not in candidatos:
-            candidatos.append(primeiro)
-        # 3) Só os caracteres validos de nome de conta do Albion, do começo.
-        m = re.match(r'[A-Za-z0-9_]+', resto)
-        if m and m.group(0) not in candidatos:
-            candidatos.append(m.group(0))
 
-        # Confiavel quando algum candidato e' um nome de conta plausivel (Albion
-        # permite letras/numeros/underscore, 3-16 caracteres). Se nada bate esse
-        # formato — apelido so com emoji, acentos, etc — preferimos NAO decidir.
-        confiavel = any(re.fullmatch(r'[A-Za-z0-9_]{3,16}', c) for c in candidatos)
+        candidatos = []
+        for c in (resto, primeiro, _sem_acento(resto), _sem_acento(primeiro)):
+            if c and c not in candidatos:
+                candidatos.append(c)
+        # Só os caracteres validos de nome de conta, do começo (pega emoji colado).
+        for base in (resto, _sem_acento(resto)):
+            m = re.match(r'[A-Za-z0-9_]+', base)
+            if m and m.group(0) not in candidatos:
+                candidatos.append(m.group(0))
+
+        # CONFIANÇA (regra endurecida): só é confiável quando o primeiro pedaço do
+        # apelido JÁ É, por inteiro, um nome de conta válido do Albion (letras,
+        # números e underscore — sem acento, sem emoji, sem símbolo).
+        #
+        # A regra anterior era "algum candidato parece um nome válido", e isso era
+        # fraco demais: com o apelido "[NM] Carabitó", o recorte "Carabit" parece um
+        # nome válido, então o bot se dava por confiante e rebaixava — mesmo o nome
+        # real dele podendo ser "Carabito"/"Carabit6". Parecer um nome válido não é
+        # o mesmo que SER o nome da pessoa. Se houver qualquer caractere estranho no
+        # nome, agora preferimos avisar a liderança em vez de mexer no cargo.
+        confiavel = bool(re.fullmatch(r'[A-Za-z0-9_]{3,16}', primeiro))
         return candidatos, confiavel
 
     @tasks.loop(seconds=CHECK_INTERVAL)

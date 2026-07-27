@@ -5,6 +5,7 @@ Remove Membro, adiciona Amigo, troca [NM] por [AMG].
 """
 
 import asyncio
+import re
 import discord
 from discord.ext import commands, tasks
 import requests
@@ -71,13 +72,50 @@ class AutoPurgeCog(commands.Cog):
         return None
 
     def _extract_albion_nick(self, discord_member):
-        """Extrai nick do Albion de membros com [NM]. Sem [NM] = ignora."""
+        """Extrai o nick do Albion de um apelido "[NM] Nome". Devolve uma tupla
+        (candidatos, confiavel):
+
+          - candidatos: nomes possiveis pra comparar com a API, do mais provavel
+            pro menos;
+          - confiavel: False quando nao deu pra isolar um nome valido com certeza.
+            Nesse caso o auto-purge NAO rebaixa — so avisa. Duvida nunca pode
+            virar rebaixamento automatico.
+
+        Muita gente decora o apelido do Discord ("[NM] BangziN 🏹", "[NM] Zarpam 🏃").
+        A versao anterior devolvia tudo depois do "[NM] " cru, emoji incluso, entao
+        "bangzin 🏹" era comparado com a lista da API — nunca casava, e a pessoa era
+        rebaixada mesmo estando na guild (falso positivo confirmado em producao:
+        BangziN, Carabito e Zarpam perderam o cargo estando na guild). Nome de conta
+        do Albion nao tem emoji nem espaco, entao aqui isolamos o primeiro trecho
+        que se parece com um nome de conta de verdade.
+        """
         nick = discord_member.nick or discord_member.display_name or ''
         if nick.startswith('[NM] '):
-            return nick[5:].strip()
-        if nick.startswith('[NM]'):
-            return nick[4:].strip()
-        return None
+            resto = nick[5:].strip()
+        elif nick.startswith('[NM]'):
+            resto = nick[4:].strip()
+        else:
+            return None, False
+        if not resto:
+            return None, False
+
+        candidatos = []
+        # 1) O texto cru (cobre quem nao decorou nada, o caso mais comum).
+        candidatos.append(resto)
+        # 2) Primeiro "pedaco" antes de espaco — tira emoji/tag posto depois do nome.
+        primeiro = resto.split()[0] if resto.split() else ''
+        if primeiro and primeiro not in candidatos:
+            candidatos.append(primeiro)
+        # 3) Só os caracteres validos de nome de conta do Albion, do começo.
+        m = re.match(r'[A-Za-z0-9_]+', resto)
+        if m and m.group(0) not in candidatos:
+            candidatos.append(m.group(0))
+
+        # Confiavel quando algum candidato e' um nome de conta plausivel (Albion
+        # permite letras/numeros/underscore, 3-16 caracteres). Se nada bate esse
+        # formato — apelido so com emoji, acentos, etc — preferimos NAO decidir.
+        confiavel = any(re.fullmatch(r'[A-Za-z0-9_]{3,16}', c) for c in candidatos)
+        return candidatos, confiavel
 
     @tasks.loop(seconds=CHECK_INTERVAL)
     async def purge_check_task(self):
@@ -124,6 +162,7 @@ class AutoPurgeCog(commands.Cog):
             # massa (ver MAX_PURGE_RATIO) antes de mexer no cargo de alguem.
             to_purge = []
             checked = 0
+            nao_verificaveis = []
 
             for member in discord_guild.members:
                 if member.bot:
@@ -131,17 +170,24 @@ class AutoPurgeCog(commands.Cog):
                 if membro_role not in member.roles:
                     continue
 
-                albion_nick = self._extract_albion_nick(member)
-                if not albion_nick:
+                candidatos, confiavel = self._extract_albion_nick(member)
+                if not candidatos:
                     continue
 
                 checked += 1
 
-                # Ainda esta na guild?
-                if albion_nick.lower() in albion_members:
+                # Ainda esta na guild? Testa todos os candidatos (cru, sem emoji, etc).
+                if any(c.lower() in albion_members for c in candidatos):
                     continue
 
-                to_purge.append((member, albion_nick))
+                # Nenhum candidato casou. Se o apelido nao permite isolar um nome de
+                # conta plausivel, NAO rebaixa: apelido decorado nao e' prova de que a
+                # pessoa saiu da guild. Só avisa pra liderança arrumar o apelido.
+                if not confiavel:
+                    nao_verificaveis.append((member, candidatos[0]))
+                    continue
+
+                to_purge.append((member, candidatos[0]))
 
             if checked and len(to_purge) > max(MIN_MEMBERS_SANITY, checked * MAX_PURGE_RATIO):
                 print(f'[auto_purge] ABORTADO: {len(to_purge)} de {checked} membros seriam '
@@ -160,6 +206,25 @@ class AutoPurgeCog(commands.Cog):
                 except Exception:
                     pass
                 return
+
+            # Avisa (sem rebaixar) quem tem apelido que nao dá pra conferir. Antes
+            # esses casos eram rebaixados por engano; agora ficam visíveis pra
+            # liderança corrigir o apelido em vez de sumirem em silêncio.
+            if nao_verificaveis:
+                print(f'[auto_purge] {len(nao_verificaveis)} apelido(s) nao verificavel(is) — nada alterado')
+                try:
+                    ch_id = database.get_config('channel_logs')
+                    if ch_id:
+                        ch = discord_guild.get_channel(int(ch_id))
+                        if ch:
+                            lista = ', '.join(m.mention for m, _ in nao_verificaveis[:15])
+                            await ch.send(
+                                f'ℹ️ **Auto-Purge:** nao deu pra conferir na API do Albion o apelido de '
+                                f'{lista}. **Nenhum cargo foi alterado.** O apelido precisa ser '
+                                f'`[NM] NomeDaConta` — emoji ou texto extra depois do nome impede a '
+                                f'conferencia (nome de conta do Albion nao tem emoji nem espaco).')
+                except Exception:
+                    pass
 
             changed = []
 

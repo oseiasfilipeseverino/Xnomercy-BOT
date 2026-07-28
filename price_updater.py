@@ -402,8 +402,8 @@ async def _check_price_alerts(bot):
             if user:
                 await user.send(
                     f'🔔 **Alerta de preço disparado!**\n'
-                    f'**{name}** {cmp_word} **{sell_min:,}**'.replace(',', '.') +
-                    f' em **{city_label}** (alvo: {target_price:,})'.replace(',', '.') +
+                    f'**{name}** {cmp_word} **{sell_min:,}**' +
+                    f' em **{city_label}** (alvo: {target_price:,})' +
                     f'\nEsse alerta foi desativado — cadastre de novo com `/alerta_preco` se quiser continuar acompanhando.'
                 )
         except Exception as e:

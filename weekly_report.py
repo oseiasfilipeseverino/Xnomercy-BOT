@@ -14,7 +14,7 @@ BRT_OFFSET = datetime.timedelta(hours=-3)
 
 
 def fmt(v):
-    return f'{v:,.0f}'.replace(',', '.')
+    return f'{v:,.0f}'
 
 
 class WeeklyReportCog(commands.Cog):

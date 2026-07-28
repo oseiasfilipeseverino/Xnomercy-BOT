@@ -12,7 +12,7 @@ from permissions import is_financial, is_member
 
 
 def fmt(v: float) -> str:
-    return f'{v:,.0f}'.replace(',', '.') + ' prata'
+    return f'{v:,.0f} prata'
 
 
 def _prata_inteira(v: float) -> int:

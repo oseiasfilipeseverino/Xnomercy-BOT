@@ -11,7 +11,7 @@ from view_utils import LoggedView
 
 
 def fmt(v: float) -> str:
-    return f'{v:,.0f}'.replace(',', '.')
+    return f'{v:,.0f}'
 
 
 async def _log(guild, message: str):

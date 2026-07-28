@@ -14,7 +14,7 @@ from view_utils import LoggedView
 
 
 def fmt(v: float) -> str:
-    return f'{v:,.0f}'.replace(',', '.')
+    return f'{v:,.0f}'
 
 def is_staff_up(member: discord.Member) -> bool:
     return is_financial(member) or has_permission(member, 'support_tickets')

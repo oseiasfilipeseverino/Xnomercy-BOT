@@ -20,7 +20,7 @@ from view_utils import LoggedView
 
 
 def _fmt(v) -> str:
-    return f'{int(v):,}'.replace(',', '.')
+    return f'{int(v):,}'
 
 
 def _build_embed(split, title_prefix='⏳ Split Pendente (via site)'):

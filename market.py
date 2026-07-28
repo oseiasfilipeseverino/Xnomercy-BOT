@@ -23,7 +23,7 @@ CITY_ORDER = ['Caerleon', 'Bridgewatch', 'Martlock', 'Thetford', 'FortSterling',
 
 
 def fmt(v) -> str:
-    return f'{int(v):,}'.replace(',', '.')
+    return f'{int(v):,}'
 
 
 def _search_items(query, limit=20):

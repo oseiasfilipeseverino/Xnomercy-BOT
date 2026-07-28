@@ -98,10 +98,12 @@ class ScheduledEventsCog(commands.Cog):
         self.bot = bot
         self.post_pending_task.start()
         self.notification_task.start()
+        self.reopen_pending_task.start()
 
     def cog_unload(self):
         self.post_pending_task.cancel()
         self.notification_task.cancel()
+        self.reopen_pending_task.cancel()
 
     # ── Conferencia de quem fechou ────────────────────────────────────────────
     @app_commands.command(
@@ -199,6 +201,103 @@ class ScheduledEventsCog(commands.Cog):
     @post_pending_task.before_loop
     async def before_post(self):
         await self.bot.wait_until_ready()
+
+    # ── Task: reabre eventos pedidos pelo site ────────────────────────────────
+    @tasks.loop(seconds=10)
+    async def reopen_pending_task(self):
+        try:
+            for event in database.get_pending_reopen_events():
+                # Trava o status ANTES de qualquer chamada ao Discord, senão o
+                # proximo ciclo pega o mesmo evento e reprocessa em paralelo.
+                database.set_event_status(event["id"], "reopening")
+                await self._reopen_event(event)
+        except Exception as e:
+            print("[scheduled_events] Erro reopen_pending_task: " + str(e))
+
+    @reopen_pending_task.before_loop
+    async def before_reopen(self):
+        await self.bot.wait_until_ready()
+
+    async def _reopen_event(self, event):
+        """Reabre o evento e relê o tópico atrás de inscrições perdidas.
+
+        Enquanto o evento esteve fechado, quem digitou o número do slot foi
+        ignorado (o on_message só registra evento ativo). Aqui o histórico é
+        relido do mais antigo pro mais novo e reaplicado com as MESMAS funções
+        do fluxo normal — assign_slot devolve 'has_slot' pra quem já está e
+        'already_taken' pra slot ocupado, então reprocessar mensagem antiga não
+        duplica nem rouba slot de ninguém. Quem foi posto na mão pelo site
+        também não é derrubado: o histórico perde pra ocupação atual."""
+        event_id  = event["id"]
+        thread_id = (event.get("thread_id") or "").strip()
+
+        if not thread_id:
+            print("[reopen] Evento " + str(event_id) + " sem thread_id — abortado")
+            database.set_event_status(event_id, "finished")
+            return
+
+        try:
+            thread = self.bot.get_channel(int(thread_id))
+            if thread is None:
+                thread = await self.bot.fetch_channel(int(thread_id))
+        except Exception as e:
+            # Tópico apagado ou sem acesso — devolve pro estado anterior em vez
+            # de deixar o evento preso em "reopening" pra sempre.
+            print("[reopen] Evento " + str(event_id) + " topico inacessivel: " + repr(e))
+            database.set_event_status(event_id, "finished")
+            return
+
+        slots   = parse_slots(event["slots"])
+        total   = len(slots)
+        relidas = 0
+
+        # Conta pelo ANTES/DEPOIS em vez de somar os assign que deram certo:
+        # quem entrou, saiu e voltou no histórico gera dois assign, mas ocupa um
+        # slot só — somar daria "2 inscrições recuperadas" pra uma pessoa.
+        antes = len(await database.run_db(database.get_slot_assignments, event_id))
+
+        try:
+            # oldest_first pra reaplicar entrada/saída na ordem em que aconteceram.
+            async for msg in thread.history(limit=1000, oldest_first=True):
+                if msg.author.bot:
+                    continue
+                try:
+                    num = int(msg.content.strip())
+                except ValueError:
+                    continue
+
+                relidas += 1
+                abs_num = abs(num)
+                if abs_num < 1 or abs_num > total:
+                    continue
+
+                if num > 0:
+                    await database.run_db(database.assign_slot, event_id, num,
+                                          str(msg.author.id), msg.author.display_name)
+                else:
+                    await database.run_db(database.unassign_slot, event_id, abs_num,
+                                          str(msg.author.id))
+        except Exception as e:
+            print("[reopen] Evento " + str(event_id) + " erro na releitura: " + repr(e))
+
+        depois = len(await database.run_db(database.get_slot_assignments, event_id))
+        novos  = max(0, depois - antes)
+
+        database.set_event_status(event_id, "waiting")
+        await self._update_embed(event_id)
+
+        print("[reopen] Evento " + str(event_id) + " reaberto — "
+              + str(relidas) + " mensagem(ns) relida(s), "
+              + str(antes) + " -> " + str(depois) + " inscricao(oes)")
+
+        try:
+            aviso = ("🔓 **Inscricoes reabertas!** Pode digitar o numero do slot de novo.")
+            if novos:
+                aviso += ("\n✅ " + str(novos) + " inscricao(oes) que tinham sido perdidas "
+                          "foram recuperadas do historico.")
+            await thread.send(aviso)
+        except Exception as e:
+            print("[reopen] Evento " + str(event_id) + " falha ao avisar no topico: " + repr(e))
 
     async def _post_event(self, event):
         """

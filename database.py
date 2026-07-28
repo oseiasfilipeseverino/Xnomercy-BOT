@@ -1235,6 +1235,21 @@ def get_pending_post_events():
     finally:
         release(conn)
 
+def get_pending_reopen_events():
+    """Eventos que o site mandou reabrir (botao Reabrir na aba Finalizados).
+
+    Mesmo padrao do pending_post: o site so marca o status, quem fala com o
+    Discord e o bot."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT * FROM scheduled_events WHERE status='pending_reopen' ORDER BY id")
+        return [_row_to_dict(r, SCHED_KEYS) for r in c.fetchall()]
+    except Exception:
+        return []
+    finally:
+        release(conn)
+
 def set_event_status(event_id, status):
     conn = get_connection()
     try:

@@ -9,10 +9,20 @@ from discord.ext import commands
 
 import database
 from permissions import is_financial, is_member
+from discord_utils import log_channel
 
 
 def fmt(v: float) -> str:
     return f'{v:,.0f} prata'
+
+
+def fmt_saldo(discord_id) -> str:
+    """Saldo formatado pra exibicao, ou 'indisponivel' se o banco falhar.
+
+    Nunca mostra 0 por causa de erro — isso ja escondeu falha de banco fazendo
+    parecer saldo zerado de verdade (ver database.get_player_balance)."""
+    ok, valor = database.get_player_balance_display(discord_id)
+    return fmt(valor) if ok else 'indisponivel'
 
 
 def _prata_inteira(v: float) -> int:
@@ -131,12 +141,8 @@ def _resolve_members(guild: discord.Guild, text: str):
 
 
 async def _log(guild, message: str):
-    ch_id = database.get_config('channel_logs')
-    if not ch_id:
-        return
-    ch = guild.get_channel(int(ch_id))
-    if ch:
-        await ch.send(message)
+    # Ver discord_utils.log_channel — texto de log nunca pinga ninguem.
+    await log_channel(guild, message)
 
 
 class BankCog(commands.Cog):
@@ -148,7 +154,14 @@ class BankCog(commands.Cog):
     async def meu_saldo(self, interaction: discord.Interaction):
         user = interaction.user
         database.ensure_player(str(user.id), user.display_name)
-        balance = database.get_player_balance(str(user.id))
+        try:
+            balance = database.get_player_balance(str(user.id))
+        except Exception as e:
+            print(f'[bank] erro ao ler saldo de {user.id}: {e!r}')
+            await interaction.response.send_message(
+                '⚠️ Nao consegui consultar o saldo agora. Tente de novo em instantes.',
+                ephemeral=True)
+            return
         rank    = database.get_player_rank(str(user.id))
 
         embed = discord.Embed(title='💰 Saldo do Membro', color=discord.Color.gold())
@@ -179,7 +192,7 @@ class BankCog(commands.Cog):
                 desc = t['description'] or t['type']
                 lines.append(f"`{data}` **{sign}{fmt(t['amount'])}** — {desc}")
             embed.description = '\n'.join(lines)
-            embed.set_footer(text=f'Últimas {len(txs)} movimentações · saldo atual: {fmt(database.get_player_balance(str(user.id)))}')
+            embed.set_footer(text=f'Últimas {len(txs)} movimentações · saldo atual: {fmt_saldo(str(user.id))}')
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── /transferir_saldo ──────────────────────────────────────────────────────
@@ -228,9 +241,8 @@ class BankCog(commands.Cog):
             return
 
         if not ok:
-            saldo = database.get_player_balance(str(remetente.id))
             await interaction.response.send_message(
-                f'❌ Saldo insuficiente. Você tem **{fmt(saldo)}** e tentou transferir **{fmt(valor)}**.',
+                f'❌ Saldo insuficiente. Você tem **{fmt_saldo(str(remetente.id))}** e tentou transferir **{fmt(valor)}**.',
                 ephemeral=True)
             return
 
@@ -253,7 +265,7 @@ class BankCog(commands.Cog):
                 title='🔄 Você recebeu uma transferência!',
                 description=(f'**{remetente.display_name}** te transferiu **{fmt(valor)}**.\n'
                              + (f'Motivo: {motivo}\n' if motivo else '')
-                             + f'Seu saldo atual: **{fmt(database.get_player_balance(str(usuario.id)))}**'),
+                             + f'Seu saldo atual: **{fmt_saldo(str(usuario.id))}**'),
                 color=discord.Color.blurple()
             )
             await usuario.send(embed=dm)
@@ -284,7 +296,7 @@ class BankCog(commands.Cog):
                 by = f" (por {t['created_by']})" if t['created_by'] else ''
                 lines.append(f"`{data}` **{sign}{fmt(t['amount'])}** — {desc}{by}")
             embed.description = '\n'.join(lines)
-            embed.set_footer(text=f'Últimas {len(txs)} movimentações · saldo atual: {fmt(database.get_player_balance(str(usuario.id)))}')
+            embed.set_footer(text=f'Últimas {len(txs)} movimentações · saldo atual: {fmt_saldo(str(usuario.id))}')
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── /saldo_membro ──────────────────────────────────────────────────────────
@@ -296,7 +308,14 @@ class BankCog(commands.Cog):
             return
 
         database.ensure_player(str(usuario.id), usuario.display_name)
-        balance = database.get_player_balance(str(usuario.id))
+        try:
+            balance = database.get_player_balance(str(usuario.id))
+        except Exception as e:
+            print(f'[bank] erro ao ler saldo de {usuario.id}: {e!r}')
+            await interaction.response.send_message(
+                '⚠️ Nao consegui consultar o saldo agora. Tente de novo em instantes.',
+                ephemeral=True)
+            return
         rank    = database.get_player_rank(str(usuario.id))
 
         embed = discord.Embed(title='💰 Saldo do Membro', color=discord.Color.gold())
@@ -388,7 +407,7 @@ class BankCog(commands.Cog):
         for m in members:
             database.update_player_balance(str(m.id), m.display_name, valor)
             database.add_transaction(str(m.id), valor, 'bonus', motivo, interaction.user.display_name)
-            results.append((m, database.get_player_balance(str(m.id))))
+            results.append((m, database.get_player_balance_display(str(m.id))[1]))
 
         if len(results) == 1:
             m, novo = results[0]
@@ -455,7 +474,7 @@ class BankCog(commands.Cog):
             # mesmo tempo e o saldo ficar NEGATIVO.
             novo = database.debit_player_balance(str(m.id), m.display_name, valor)
             if novo is None:
-                insufficient.append(f'{m.display_name} (tem só {fmt(database.get_player_balance(str(m.id)))})')
+                insufficient.append(f'{m.display_name} (tem só {fmt_saldo(str(m.id))})')
                 continue
             database.add_transaction(str(m.id), -valor, 'payment', motivo, interaction.user.display_name)
             results.append((m, novo))

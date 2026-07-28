@@ -8,6 +8,7 @@ from discord.ext import commands
 import database
 from permissions import is_financial
 from view_utils import LoggedView
+from discord_utils import log_channel
 
 
 def fmt(v: float) -> str:
@@ -15,12 +16,8 @@ def fmt(v: float) -> str:
 
 
 async def _log(guild, message: str):
-    ch_id = database.get_config('channel_logs')
-    if not ch_id:
-        return
-    ch = guild.get_channel(int(ch_id))
-    if ch:
-        await ch.send(message)
+    # Ver discord_utils.log_channel — texto de log nunca pinga ninguem.
+    await log_channel(guild, message)
 
 
 class ConfiscarView(LoggedView):
@@ -144,7 +141,19 @@ class MembersCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
-        balance = database.get_player_balance(str(member.id))
+        # Falha aqui NÃO pode virar "saldo zero e segue o baile": era assim que
+        # uma saída com prata passava batida, sem aviso e sem log. Se o banco
+        # falhar, avisa a liderança pra conferirem na mão.
+        try:
+            balance = database.get_player_balance(str(member.id))
+        except Exception as e:
+            print(f'[members] ERRO ao ler saldo de {member.display_name} na saida: {e!r}')
+            await _log(member.guild,
+                       f'⚠️ **{member.display_name}** saiu do servidor, mas nao consegui '
+                       f'consultar o saldo dele (falha no banco). **Confiram na mao** — '
+                       f'se tinha prata, o confisco NAO foi aberto.')
+            return
+
         if balance <= 0:
             return
 

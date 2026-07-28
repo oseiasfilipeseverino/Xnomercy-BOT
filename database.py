@@ -263,7 +263,8 @@ def get_permission_roles(permission):
         c = conn.cursor()
         c.execute('SELECT role_name FROM permissions WHERE permission=%s', (permission,))
         return [r[0] for r in c.fetchall()]
-    except Exception:
+    except Exception as e:
+        print(f'[get_permission_roles] {e!r}')
         return []
     finally:
         release(conn)
@@ -327,16 +328,35 @@ def get_player(discord_id):
         release(conn)
 
 def get_player_balance(discord_id):
+    """PROPAGA a exceção de propósito (não devolve 0.0 em erro).
+
+    Devolver 0.0 numa falha tornava "deu erro" indistinguível de "não tem
+    prata". O caso grave era on_member_remove: ele lê o saldo e faz
+    `if balance <= 0: return`, então uma falha de banco na hora exata em que
+    alguém saía do servidor cancelava o aviso de saída com saldo positivo e o
+    confisco nunca começava — em silêncio total. Quem chama trata o erro."""
     conn = get_connection()
     try:
         c = conn.cursor()
         c.execute('SELECT balance FROM players WHERE discord_id=%s', (discord_id,))
         row = c.fetchone()
         return float(row[0]) if row else 0.0
-    except Exception:
-        return 0.0
     finally:
         release(conn)
+
+def get_player_balance_display(discord_id):
+    """Versão pra EXIBIÇÃO: devolve (ok, valor).
+
+    Em rodapé de embed e mensagem de confirmação, deixar a exceção subir
+    quebraria a resposta inteira do comando por causa de um número decorativo.
+    Mas mostrar 0 numa falha é pior ainda — parece saldo zerado de verdade.
+    Então quem exibe usa isto e escreve "indisponível" quando ok=False; quem
+    DECIDE algo usa get_player_balance e trata o erro."""
+    try:
+        return True, get_player_balance(discord_id)
+    except Exception as e:
+        print(f'[get_player_balance_display] {discord_id}: {e!r}')
+        return False, 0.0
 
 def get_player_rank(discord_id):
     conn = get_connection()
@@ -347,7 +367,8 @@ def get_player_rank(discord_id):
             if row[0] == discord_id:
                 return i
         return 0
-    except Exception:
+    except Exception as e:
+        print(f'[get_player_rank] {e!r}')
         return 0
     finally:
         release(conn)
@@ -491,7 +512,8 @@ def get_all_balances():
         # como "0 prata", parecendo que a lista mostrava gente sem saldo.
         c.execute('SELECT discord_id, username, balance FROM players WHERE balance >= 0.5 ORDER BY balance DESC')
         return [{'discord_id': r[0], 'username': r[1], 'balance': r[2]} for r in c.fetchall()]
-    except Exception:
+    except Exception as e:
+        print(f'[get_all_balances] {e!r}')
         return []
     finally:
         release(conn)
@@ -853,7 +875,8 @@ def get_scheduled_event(event_id):
         c = conn.cursor()
         c.execute('SELECT * FROM scheduled_events WHERE id=%s', (event_id,))
         return _row_to_dict(c.fetchone(), SCHED_KEYS)
-    except Exception:
+    except Exception as e:
+        print(f'[get_scheduled_event] {e!r}')
         return None
     finally:
         release(conn)
@@ -864,7 +887,8 @@ def get_active_scheduled_events():
         c = conn.cursor()
         c.execute("SELECT * FROM scheduled_events WHERE status NOT IN ('finished','cancelled','split_done') ORDER BY scheduled_time")
         return [_row_to_dict(r, SCHED_KEYS) for r in c.fetchall()]
-    except Exception:
+    except Exception as e:
+        print(f'[get_active_scheduled_events] {e!r}')
         return []
     finally:
         release(conn)
@@ -960,7 +984,8 @@ def get_pending_split(split_id):
         return {'id': r[0], 'event_id': r[1], 'total_loot': r[2], 'repair_cost': r[3],
                 'guild_tax_pct': r[4], 'vendor_tax_pct': r[5], 'per_player': r[6],
                 'num_players': r[7], 'participants_json': r[8], 'submitted_by': r[9], 'status': r[10]}
-    except Exception:
+    except Exception as e:
+        print(f'[get_pending_split] {e!r}')
         return None
     finally:
         release(conn)
@@ -1177,7 +1202,8 @@ def get_slot_assignments(event_id):
         c = conn.cursor()
         c.execute('SELECT * FROM slot_assignments WHERE scheduled_event_id=%s ORDER BY slot_number', (event_id,))
         return [_row_to_dict(r, SLOT_KEYS) for r in c.fetchall()]
-    except Exception:
+    except Exception as e:
+        print(f'[get_slot_assignments] {e!r}')
         return []
     finally:
         release(conn)
@@ -1219,7 +1245,8 @@ def get_player_slot(event_id, discord_id):
         c.execute('SELECT slot_number FROM slot_assignments WHERE scheduled_event_id=%s AND discord_id=%s', (event_id, discord_id))
         row = c.fetchone()
         return row[0] if row else None
-    except Exception:
+    except Exception as e:
+        print(f'[get_player_slot] {e!r}')
         return None
     finally:
         release(conn)
@@ -1230,7 +1257,8 @@ def get_pending_post_events():
         c = conn.cursor()
         c.execute("SELECT * FROM scheduled_events WHERE status='pending_post' ORDER BY id")
         return [_row_to_dict(r, SCHED_KEYS) for r in c.fetchall()]
-    except Exception:
+    except Exception as e:
+        print(f'[get_pending_post_events] {e!r}')
         return []
     finally:
         release(conn)
@@ -1245,7 +1273,8 @@ def get_pending_reopen_events():
         c = conn.cursor()
         c.execute("SELECT * FROM scheduled_events WHERE status='pending_reopen' ORDER BY id")
         return [_row_to_dict(r, SCHED_KEYS) for r in c.fetchall()]
-    except Exception:
+    except Exception as e:
+        print(f'[get_pending_reopen_events] {e!r}')
         return []
     finally:
         release(conn)

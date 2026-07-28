@@ -12,6 +12,7 @@ from discord.ext import commands, tasks
 import requests
 
 import database
+from discord_utils import SEM_MENCOES
 import config
 
 ALBION_API = 'https://gameinfo.albiononline.com/api/gameinfo'
@@ -239,7 +240,8 @@ class AutoPurgeCog(commands.Cog):
                                 f'⚠️ **Auto-Purge abortado por seguranca:** a API do Albion indicou que '
                                 f'**{len(to_purge)} de {checked}** membros teriam saido da guild de uma vez. '
                                 f'Isso quase sempre e falha da API, entao nenhum cargo foi alterado. '
-                                f'Se a saida foi real mesmo, ajuste os cargos na mao.')
+                                f'Se a saida foi real mesmo, ajuste os cargos na mao.',
+                                allowed_mentions=SEM_MENCOES)
                 except Exception:
                     pass
                 return
@@ -259,7 +261,8 @@ class AutoPurgeCog(commands.Cog):
                                 f'ℹ️ **Auto-Purge:** nao deu pra conferir na API do Albion o apelido de '
                                 f'{lista}. **Nenhum cargo foi alterado.** O apelido precisa ser '
                                 f'`[NM] NomeDaConta` — emoji ou texto extra depois do nome impede a '
-                                f'conferencia (nome de conta do Albion nao tem emoji nem espaco).')
+                                f'conferencia (nome de conta do Albion nao tem emoji nem espaco).',
+                                allowed_mentions=SEM_MENCOES)
                 except Exception:
                     pass
 

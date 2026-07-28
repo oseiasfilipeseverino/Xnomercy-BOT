@@ -15,6 +15,7 @@ import pg8000
 from urllib.parse import urlparse
 import config
 import database
+from discord_utils import SEM_MENCOES
 
 def _db_conn():
     url = urlparse(os.environ.get('DATABASE_URL', ''))
@@ -115,7 +116,8 @@ class EnergyNotifications(commands.Cog):
             if ch:
                 await ch.send(
                     f'⚠️ **[energy_notifications]** `{key}` falhando: {detail}\n'
-                    f'Verifique se as tabelas do site (energy_records/site_config/pending_logs) existem.'
+                    f'Verifique se as tabelas do site (energy_records/site_config/pending_logs) existem.',
+                    allowed_mentions=SEM_MENCOES
                 )
         except Exception:
             pass
@@ -189,7 +191,7 @@ class EnergyNotifications(commands.Cog):
 
             msg = message_template.replace('{player}', d['player']).replace('{divida}', str(d['debt']))
             try:
-                await member.send(msg)
+                await member.send(msg, allowed_mentions=SEM_MENCOES)
                 sent += 1
                 print(f'[energy] DM enviada: {d["player"]} (dívida: {d["debt"]})')
             except discord.Forbidden:
@@ -273,7 +275,7 @@ class EnergyNotifications(commands.Cog):
 
             for row in rows:
                 try:
-                    await channel.send(row[1])
+                    await channel.send(row[1], allowed_mentions=SEM_MENCOES)
                     print(f'[logs] Log postado: {row[1][:50]}...')
                 except Exception as e:
                     print(f'[logs] Erro ao postar: {e}')
@@ -324,7 +326,7 @@ class EnergyNotifications(commands.Cog):
                 if member.bot:
                     continue
                 try:
-                    await member.send(msg)
+                    await member.send(msg, allowed_mentions=SEM_MENCOES)
                     sent += 1
                     print(f'[broadcast] DM enviada: {member.display_name}')
                 except discord.Forbidden:
@@ -348,7 +350,10 @@ class EnergyNotifications(commands.Cog):
                 if ch and ch[0]:
                     channel = guild.get_channel(int(ch[0]))
                     if channel:
-                        await channel.send(f'**Broadcast enviado**\nMensagem: {msg[:200]}\nEnviadas: {sent} | Falharam: {failed}')
+                        await channel.send(
+                            f'**Broadcast enviado**\nMensagem: {msg[:200]}\n'
+                            f'Enviadas: {sent} | Falharam: {failed}',
+                            allowed_mentions=SEM_MENCOES)
             except Exception:
                 pass
 

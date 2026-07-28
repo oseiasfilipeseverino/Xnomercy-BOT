@@ -13,6 +13,7 @@ from discord.ext import commands, tasks
 from datetime import datetime, timezone, timedelta
 
 import database
+from discord_utils import SEM_MENCOES, mencoes_do_ping
 
 BRT = timezone(timedelta(hours=-3))
 
@@ -295,7 +296,7 @@ class ScheduledEventsCog(commands.Cog):
             if novos:
                 aviso += ("\n✅ " + str(novos) + " inscricao(oes) que tinham sido perdidas "
                           "foram recuperadas do historico.")
-            await thread.send(aviso)
+            await thread.send(aviso, allowed_mentions=SEM_MENCOES)
         except Exception as e:
             print("[reopen] Evento " + str(event_id) + " falha ao avisar no topico: " + repr(e))
 
@@ -339,8 +340,12 @@ class ScheduledEventsCog(commands.Cog):
 
             content = (ping_str + " " + event["title"] + " -- " + time_str).strip()
 
-            # Envia a mensagem no canal (único ping)
-            msg = await channel.send(content=content, embed=embed)
+            # Envia a mensagem no canal (único ping). O allowed_mentions libera só
+            # o que quem criou o evento escolheu no ping_type — sem ele, um
+            # `@everyone` escrito dentro do TÍTULO pingava o servidor inteiro,
+            # mesmo com ping_type='none' e sem passar por permissão nenhuma.
+            msg = await channel.send(content=content, embed=embed,
+                                     allowed_mentions=mencoes_do_ping(ping_type))
 
             # Cria tópico para inscrições
             thread = await msg.create_thread(

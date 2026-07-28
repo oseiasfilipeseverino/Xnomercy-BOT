@@ -10,6 +10,7 @@ LoggedView em vez de discord.ui.View direto.
 
 import discord
 import database
+from discord_utils import SEM_MENCOES
 
 
 class LoggedView(discord.ui.View):
@@ -21,7 +22,11 @@ class LoggedView(discord.ui.View):
             if ch_id and interaction.guild:
                 ch = interaction.guild.get_channel(int(ch_id))
                 if ch:
-                    await ch.send(f'⚠️ Erro em `{type(self).__name__}` (item `{custom_id}`): {error}')
+                    # A mensagem da excecao vai crua pro canal — se ela carregar
+                    # um `@everyone` vindo de um dado de fora, o bot pingaria a
+                    # guild inteira ao reportar um erro.
+                    await ch.send(f'⚠️ Erro em `{type(self).__name__}` (item `{custom_id}`): {error}',
+                                  allowed_mentions=SEM_MENCOES)
         except Exception:
             pass
         try:

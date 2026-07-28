@@ -11,6 +11,7 @@ import database
 from permissions import can_manage_events, is_member, is_financial, has_permission
 from bank import parse_prata   # aceita 1.200.000 / 1200000 / 1,200,000
 from view_utils import LoggedView
+from discord_utils import log_channel
 
 
 def fmt(v: float) -> str:
@@ -20,10 +21,8 @@ def is_staff_up(member: discord.Member) -> bool:
     return is_financial(member) or has_permission(member, 'support_tickets')
 
 async def _log(guild, message: str):
-    ch_id = database.get_config('channel_logs')
-    if not ch_id: return
-    ch = guild.get_channel(int(ch_id))
-    if ch: await ch.send(message)
+    # Ver discord_utils.log_channel — texto de log nunca pinga ninguem.
+    await log_channel(guild, message)
 
 async def _get_aguardando(guild):
     ch_id = database.get_config('voice_aguardando')

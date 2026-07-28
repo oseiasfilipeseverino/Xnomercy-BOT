@@ -353,8 +353,11 @@ class ScheduledEventsCog(commands.Cog):
                 auto_archive_duration=1440
             )
 
-            # Instrucoes no tópico
-            await thread.send(INSTRUCTIONS)
+            # Instrucoes no tópico. INSTRUCTIONS é constante fixa, então hoje não
+            # tem como pingar ninguém — o allowed_mentions vai junto pra regra ser
+            # a mesma em todo send de texto, e uma edição futura nesse texto não
+            # reabrir a brecha sem querer.
+            await thread.send(INSTRUCTIONS, allowed_mentions=SEM_MENCOES)
 
             # Salva IDs e atualiza status para "waiting"
             database.update_scheduled_event_thread(event["id"], str(thread.id), str(msg.id))

@@ -8,6 +8,7 @@ Notificacoes via DM 30min e 15min antes
 import asyncio
 import json
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 from datetime import datetime, timezone, timedelta
 
@@ -101,6 +102,77 @@ class ScheduledEventsCog(commands.Cog):
     def cog_unload(self):
         self.post_pending_task.cancel()
         self.notification_task.cancel()
+
+    # ── Conferencia de quem fechou ────────────────────────────────────────────
+    @app_commands.command(
+        name='conferencia',
+        description='Confere quem fechou os slots do evento deste topico.')
+    @app_commands.describe(
+        publico='Posta a conferencia no topico pra todos verem (padrao: so voce ve)')
+    async def conferencia(self, interaction: discord.Interaction, publico: bool = False):
+        if not isinstance(interaction.channel, discord.Thread):
+            await interaction.response.send_message(
+                '❌ Use este comando dentro do topico do evento.', ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=not publico)
+
+        event = await database.run_db(
+            database.get_scheduled_event_by_thread_any_status, str(interaction.channel.id))
+        if not event:
+            await interaction.followup.send(
+                '❌ Este topico nao pertence a nenhum evento.', ephemeral=True)
+            return
+
+        assignments = await database.run_db(database.get_slot_assignments, event['id'])
+        slots       = parse_slots(event['slots'])
+        por_slot    = {a['slot_number']: a for a in assignments}
+
+        fechados, vazios = [], []
+        for i, slot in enumerate(slots, 1):
+            nome_slot = slot.get('name') or ('Slot ' + str(i))
+            a = por_slot.get(i)
+            if a:
+                fechados.append('**' + str(i) + '.** ' + nome_slot
+                                + ' — <@' + str(a['discord_id']) + '>')
+            else:
+                vazios.append('**' + str(i) + '.** ' + nome_slot)
+
+        embed = discord.Embed(
+            title='📋 Conferencia — ' + str(event.get('title', 'Evento')),
+            description='**' + str(len(fechados)) + '/' + str(len(slots)) + '** slots fechados',
+            color=discord.Color.green() if not vazios else discord.Color.orange(),
+        )
+
+        # Campo de embed estoura em 1024 caracteres: com 20+ slots a lista passa
+        # disso e o Discord rejeita a mensagem inteira. Quebra em varios campos.
+        def add_lista(titulo, linhas, vazio_txt):
+            if not linhas:
+                embed.add_field(name=titulo, value=vazio_txt, inline=False)
+                return
+            bloco, primeiro = '', True
+            for linha in linhas:
+                if len(bloco) + len(linha) + 1 > 1000:
+                    embed.add_field(name=titulo if primeiro else '​',
+                                    value=bloco, inline=False)
+                    bloco, primeiro = '', False
+                bloco += linha + '\n'
+            if bloco:
+                embed.add_field(name=titulo if primeiro else '​',
+                                value=bloco, inline=False)
+
+        add_lista('✅ Fecharam (' + str(len(fechados)) + ')', fechados,
+                  '_Ninguem fechou ainda._')
+        add_lista('⬜ Em aberto (' + str(len(vazios)) + ')', vazios,
+                  '_Todos os slots fechados!_')
+
+        status = str(event.get('status', ''))
+        if status in ('finished', 'cancelled', 'split_done'):
+            embed.set_footer(text='Evento encerrado (status: ' + status + ') — inscricoes fechadas')
+
+        # Menções dentro de embed não pingam ninguém (o Discord só notifica pelo
+        # `content`), então a conferência pública não vira spam de ping.
+        await interaction.followup.send(embed=embed, ephemeral=not publico)
 
     # ── Task: posta eventos pendentes ─────────────────────────────────────────
     @tasks.loop(seconds=10)
@@ -213,6 +285,31 @@ class ScheduledEventsCog(commands.Cog):
             return
 
         if not event:
+            # Antes daqui saía um `return` mudo, e era exatamente esse o problema
+            # relatado: gente digitando o número do slot numa thread cujo evento já
+            # foi finalizado/cancelado/splitado, sem reação nem resposta — parecia
+            # bot quebrado. Só avisa se a thread REALMENTE for de um evento; num
+            # tópico qualquer o silêncio continua sendo o certo.
+            try:
+                encerrado = await database.run_db(
+                    database.get_scheduled_event_by_thread_any_status, str(message.channel.id))
+            except Exception as db_err:
+                print("[slots] ERRO DB (any_status): " + str(db_err))
+                return
+
+            if not encerrado:
+                return
+
+            print("[slots] Evento " + str(encerrado["id"]) + " ENCERRADO (status="
+                  + str(encerrado.get("status")) + ") — inscricao recusada")
+            reply = await message.reply(
+                "🔒 As inscricoes de **" + str(encerrado.get("title", "evento"))
+                + "** ja foram encerradas, seu numero nao foi registrado.",
+                mention_author=False
+            )
+            await asyncio.sleep(10)
+            try: await reply.delete()
+            except Exception: pass
             return
 
         print("[slots] Evento OK id=" + str(event["id"]))

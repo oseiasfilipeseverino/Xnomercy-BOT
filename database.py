@@ -1131,6 +1131,23 @@ def get_scheduled_event_by_thread(thread_id):
     finally:
         release(conn)
 
+def get_scheduled_event_by_thread_any_status(thread_id):
+    """Igual ao de cima, mas SEM filtrar por status.
+
+    Serve pra distinguir dois casos que antes eram tratados igual (silêncio):
+    thread de um evento já encerrado x thread que não é de evento nenhum. No
+    primeiro, a pessoa digitou o número do slot e merece saber por que nada
+    aconteceu; no segundo, o bot não deve dizer nada."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT * FROM scheduled_events WHERE thread_id=%s", (thread_id,))
+        return _row_to_dict(c.fetchone(), SCHED_KEYS)
+    except Exception:
+        return None
+    finally:
+        release(conn)
+
 
 # ── Slot Assignments ───────────────────────────────────────────────────────────
 SLOT_KEYS = ['id','scheduled_event_id','slot_number','discord_id','username','assigned_at']

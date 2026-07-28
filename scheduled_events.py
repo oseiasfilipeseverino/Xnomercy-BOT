@@ -117,8 +117,15 @@ class ScheduledEventsCog(commands.Cog):
 
         await interaction.response.defer(ephemeral=not publico)
 
-        event = await database.run_db(
-            database.get_scheduled_event_by_thread_any_status, str(interaction.channel.id))
+        try:
+            event = await database.run_db(
+                database.get_scheduled_event_by_thread_any_status, str(interaction.channel.id))
+        except Exception as db_err:
+            print("[conferencia] ERRO DB: " + repr(db_err))
+            await interaction.followup.send(
+                '⚠️ Falha ao consultar o banco. Tente de novo em instantes.', ephemeral=True)
+            return
+
         if not event:
             await interaction.followup.send(
                 '❌ Este topico nao pertence a nenhum evento.', ephemeral=True)
@@ -281,7 +288,19 @@ class ScheduledEventsCog(commands.Cog):
             event = await database.run_db(
                 database.get_scheduled_event_by_thread, str(message.channel.id))
         except Exception as db_err:
-            print("[slots] ERRO DB: " + str(db_err))
+            # Falha de banco não pode mais sumir em silêncio: a pessoa precisa
+            # saber que o número dela NÃO foi registrado, senão ela acha que
+            # fechou o slot e ninguém percebe até a hora do evento.
+            print("[slots] ERRO DB: " + repr(db_err))
+            try:
+                reply = await message.reply(
+                    "⚠️ Falha ao registrar seu slot agora. **Digite o numero de novo.**",
+                    mention_author=False)
+                await asyncio.sleep(10)
+                try: await reply.delete()
+                except Exception: pass
+            except Exception:
+                pass
             return
 
         if not event:

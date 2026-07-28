@@ -6,6 +6,7 @@ OTIMIZADO: todas as funcoes protegidas contra vazamento de conexao
 import asyncio
 import functools
 import os, threading
+from concurrent.futures import ThreadPoolExecutor
 import pg8000.dbapi
 from urllib.parse import urlparse
 from datetime import datetime
@@ -21,10 +22,18 @@ async def run_db(fn, *args, **kwargs):
     mensagem faz várias consultas e ninguém mais é atendido no meio.
 
     Usar nos caminhos de alto tráfego:  await database.run_db(database.assign_slot, ...)
+
+    Roda num executor PRÓPRIO e limitado a _MAX_POOL threads, não no executor
+    padrão do asyncio (que vai a 32). Com o executor padrão, uma rajada — 20
+    pessoas digitando o número do slot no mesmo segundo — dispara mais consultas
+    simultâneas do que o pool tem conexões, e cada thread sobrando abre uma
+    conexão nova direto no Postgres. Passando do limite do servidor, a conexão é
+    recusada e a consulta falha. Limitando o executor ao tamanho do pool, a
+    rajada vira fila e as conexões são reaproveitadas.
     """
     loop = asyncio.get_running_loop()
     call = functools.partial(fn, *args, **kwargs) if kwargs else functools.partial(fn, *args)
-    return await loop.run_in_executor(None, call)
+    return await loop.run_in_executor(_db_executor, call)
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
@@ -32,17 +41,23 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 _pool = []
 _pool_lock = threading.Lock()
 _MAX_POOL = 5
+_db_executor = ThreadPoolExecutor(max_workers=_MAX_POOL, thread_name_prefix='db')
 
 def get_connection():
-    with _pool_lock:
-        if _pool:
+    while True:
+        with _pool_lock:
+            if not _pool:
+                break
             conn = _pool.pop()
-            try:
-                conn.cursor().execute('SELECT 1')
-                return conn
-            except Exception:
-                try: conn.close()
-                except Exception: pass
+        # O teste de saúde é uma ida à rede — feito fora do lock, senão todas as
+        # threads de banco ficam serializadas esperando o round-trip de uma só.
+        try:
+            conn.cursor().execute('SELECT 1')
+            return conn
+        except Exception:
+            try: conn.close()
+            except Exception: pass
+
     url = urlparse(DATABASE_URL)
     return pg8000.dbapi.connect(
         host=url.hostname, port=url.port or 5432,
@@ -1121,13 +1136,17 @@ def resolve_member_departure(departure_id, status):
 
 
 def get_scheduled_event_by_thread(thread_id):
+    """PROPAGA a exceção de propósito (não retorna None em erro).
+
+    Antes um `except Exception: return None` engolia falha de banco, e quem
+    chamava não tinha como distinguir "deu erro" de "não existe evento nessa
+    thread" — o bot tratava as duas como a segunda e ficava mudo. Numa rajada de
+    inscrições, era exatamente esse o sintoma. Quem chama trata o erro."""
     conn = get_connection()
     try:
         c = conn.cursor()
         c.execute("SELECT * FROM scheduled_events WHERE thread_id=%s AND status NOT IN ('finished','cancelled','split_done')", (thread_id,))
         return _row_to_dict(c.fetchone(), SCHED_KEYS)
-    except Exception:
-        return None
     finally:
         release(conn)
 
@@ -1137,14 +1156,14 @@ def get_scheduled_event_by_thread_any_status(thread_id):
     Serve pra distinguir dois casos que antes eram tratados igual (silêncio):
     thread de um evento já encerrado x thread que não é de evento nenhum. No
     primeiro, a pessoa digitou o número do slot e merece saber por que nada
-    aconteceu; no segundo, o bot não deve dizer nada."""
+    aconteceu; no segundo, o bot não deve dizer nada.
+
+    Também propaga a exceção, pelo mesmo motivo do de cima."""
     conn = get_connection()
     try:
         c = conn.cursor()
         c.execute("SELECT * FROM scheduled_events WHERE thread_id=%s", (thread_id,))
         return _row_to_dict(c.fetchone(), SCHED_KEYS)
-    except Exception:
-        return None
     finally:
         release(conn)
 

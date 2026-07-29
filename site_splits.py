@@ -47,7 +47,37 @@ def _build_embed(split, title_prefix='⏳ Split Pendente (via site)'):
     embed.add_field(name='🏛️ Taxa Guild', value=f'{split["guild_tax_pct"]}%', inline=True)
     embed.add_field(name='🛒 Taxa Vendedor', value=f'{split["vendor_tax_pct"]}%', inline=True)
     embed.add_field(name='✅ Líquido', value=f'{_fmt(max(0, net))} prata', inline=True)
-    embed.add_field(name='💰 Distribuição', value='\n'.join(lines), inline=False)
+
+    # Campo de embed estoura em 1024 caracteres, e cada linha daqui gasta ~53
+    # (mention de 18 dígitos + porcentagem + valor formatado). A partir de 20
+    # participantes o campo passava do limite e o Discord recusava a mensagem
+    # INTEIRA com "400 Invalid Form Body" — ou seja, split de CTA cheia nunca
+    # chegava pra aprovar no Discord, e o loop ficava tentando de novo a cada 20s
+    # pra sempre. Quebrar em vários campos resolve; mesma solução do /conferencia.
+    # O embed inteiro também tem teto (6000 chars / 25 campos). Quebrar em vários
+    # campos aguenta ~108 participantes; acima disso voltaria a estourar, com o
+    # mesmo sintoma de antes. Aqui a lista é CORTADA e o resto vira um resumo — a
+    # aprovação continua funcionando, que é o que importa. Nenhum split real chega
+    # perto disso (CTA tem 20), mas falhar calado é justo o que não pode repetir.
+    LIMITE = 1000                      # margem sobre os 1024 do Discord
+    MAX_LINHAS = 100                   # folga sobre o teto medido de ~108
+    cortadas = max(0, len(lines) - MAX_LINHAS)
+    if cortadas:
+        lines = lines[:MAX_LINHAS]
+
+    bloco, primeiro = '', True
+    for linha in lines:
+        if len(bloco) + len(linha) + 1 > LIMITE:
+            embed.add_field(name='💰 Distribuição' if primeiro else '​',
+                            value=bloco, inline=False)
+            bloco, primeiro = '', False
+        bloco += linha + '\n'
+    if cortadas:
+        bloco += f'_… e mais {cortadas} participante(s). Lista completa em /gestao/splits._'
+    if bloco:
+        embed.add_field(name='💰 Distribuição' if primeiro else '​',
+                        value=bloco, inline=False)
+
     embed.set_footer(text='Split criado pelo site — clique abaixo pra aprovar ou recusar')
     return embed
 
@@ -177,8 +207,13 @@ class SitePendingSplitView(LoggedView):
 
 
 class SiteSplitsCog(commands.Cog):
+    # Quantas vezes insistir num split antes de avisar a liderança. 3 cobre falha
+    # passageira (rate limit, rede) sem deixar erro permanente batendo pra sempre.
+    MAX_TENTATIVAS = 3
+
     def __init__(self, bot):
         self.bot = bot
+        self._falhas = {}          # split_id -> tentativas seguidas que falharam
         self.post_pending_splits.start()
 
     def cog_unload(self):
@@ -211,13 +246,31 @@ class SiteSplitsCog(commands.Cog):
                 if not ch:
                     continue
                 for split in unposted:
+                    sid = split['id']
                     try:
                         embed = _build_embed(split)
-                        view = SitePendingSplitView(split['id'])
+                        view = SitePendingSplitView(sid)
                         msg = await ch.send(embed=embed, view=view)
-                        database.mark_pending_split_posted(split['id'], str(msg.id))
+                        database.mark_pending_split_posted(sid, str(msg.id))
+                        self._falhas.pop(sid, None)
                     except Exception as e:
-                        print(f'[site_splits] erro ao postar split {split["id"]}: {e}')
+                        # Sem contagem, uma falha aqui virava tentativa a cada 20s
+                        # PRA SEMPRE, com um print como único rastro — foi assim
+                        # que um split de 20 pessoas ficou sem chegar no Discord e
+                        # ninguém soube por quê. Avisa uma vez e para de insistir.
+                        n = self._falhas.get(sid, 0) + 1
+                        self._falhas[sid] = n
+                        print(f'[site_splits] erro ao postar split {sid} '
+                              f'(tentativa {n}): {e}')
+                        if n == self.MAX_TENTATIVAS:
+                            await alertar_financeiro(
+                                guild, 'Split não chegou no Discord',
+                                f'**{split.get("event_title", "Evento")}** '
+                                f'({split.get("num_players", "?")} participantes) '
+                                f'falhou {n}x ao ser postado aqui.\n\n'
+                                f'A prata NÃO foi movimentada. Aprove em '
+                                f'**/gestao/splits** no site.\n'
+                                f'Erro: `{str(e)[:250]}`')
                 break  # só o servidor principal tem canal financeiro configurado
         except Exception as e:
             print(f'[site_splits] erro no ciclo de postagem: {e}')

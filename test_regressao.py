@@ -7,6 +7,7 @@ falha, propagação da exceção), não o SQL em si.
 
 Uso:  python test_regressao.py
 """
+import json
 import sys
 import database
 import bank
@@ -327,6 +328,55 @@ print('   ping_type=none deixa @everyone escrito no titulo inerte')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+secao('embed do split — Discord recusa campo acima de 1024 chars')
+# Bug real: o campo "Distribuição" juntava todos os participantes numa string só.
+# Cada linha gasta ~53 chars (mention de 18 dígitos + % + valor), então a partir de
+# 20 participantes passava dos 1024 e o Discord recusava a mensagem INTEIRA com
+# "400 Invalid Form Body". Split de CTA cheia (20 slots) NUNCA chegava pra aprovar,
+# e o loop tentava de novo a cada 20s pra sempre.
+import site_splits
+
+LIM_CAMPO, LIM_TOTAL, LIM_CAMPOS = 1024, 6000, 25
+
+
+def _split_falso(n):
+    parts = [{'name': f'P{i}', 'discord_id': str(700000000000000000 + i),
+              'amount': 1_385_000, 'pct': 100} for i in range(1, n + 1)]
+    return {'id': 4, 'event_id': 2,
+            'event_title': 'GANK DE CRIA 17:40 (indicado ser experiente)',
+            'total_loot': 24_500_000, 'repair_cost': 3_200_000, 'guild_tax_pct': 10,
+            'vendor_tax_pct': 5, 'per_player': 1_385_000, 'num_players': n,
+            'submitted_by': 'Oseias', 'participants_json': json.dumps(parts)}
+
+
+for n in (1, 5, 20, 25, 50, 100, 150, 500):
+    e = site_splits._build_embed(_split_falso(n))
+    maior = max(len(f.value) for f in e.fields)
+    total = (len(e.title or '') + len(e.description or '')
+             + sum(len(f.name) + len(f.value) for f in e.fields)
+             + len(e.footer.text or ''))
+    checar(maior <= LIM_CAMPO, f'{n} participantes: campo com {maior} chars (max {LIM_CAMPO})')
+    checar(total <= LIM_TOTAL, f'{n} participantes: embed com {total} chars (max {LIM_TOTAL})')
+    checar(len(e.fields) <= LIM_CAMPOS, f'{n} participantes: {len(e.fields)} campos (max {LIM_CAMPOS})')
+
+# até o teto, ninguém pode ser perdido no fatiamento
+e = site_splits._build_embed(_split_falso(100))
+juntos = '\n'.join(f.value for f in e.fields)
+perdidos = [i for i in range(1, 101) if str(700000000000000000 + i) not in juntos]
+checar(not perdidos, f'participantes perdidos no fatiamento: {perdidos[:5]}')
+
+# acima do teto, corta E avisa — nunca falha calado
+e = site_splits._build_embed(_split_falso(300))
+checar(any('e mais' in f.value for f in e.fields),
+       'acima do teto tem que avisar quantos ficaram de fora, nao sumir com eles')
+print('  1 a 500 participantes: sempre dentro dos limites, ninguem perdido ate 100,')
+print('  acima disso corta com aviso')
+
+checar(site_splits.SiteSplitsCog.MAX_TENTATIVAS >= 1,
+       'precisa de teto de tentativas — sem ele o loop insiste pra sempre so imprimindo')
+print(f'  para de insistir apos {site_splits.SiteSplitsCog.MAX_TENTATIVAS} falhas e avisa a lideranca')
+
+
 secao('alerta de falha de crédito — a liderança precisa saber')
 # As falhas de credito so apareciam como print no log da Railway, que ninguem le.
 # O alerta nao pode explodir nem pingar o servidor, e tem que degradar em silencio

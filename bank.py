@@ -404,6 +404,14 @@ class BankCog(commands.Cog):
             return
 
         results = []
+        # Defer ANTES do loop que mexe em prata. O Discord exige a 1a resposta em
+        # 3s e estes comandos so respondiam depois de percorrer todos os membros:
+        # com o Postgres um pouco lento, o token expirava COM A PRATA JA MOVIMENTADA,
+        # o lider via 'a aplicacao nao respondeu' e rodava de novo — pagando 2x.
+        # Deferir da 15 minutos no lugar de 3 segundos. As validacoes acima ficam
+        # antes de proposito: continuam usando response.send_message efemero.
+        await interaction.response.defer()
+
         for m in members:
             database.update_player_balance(str(m.id), m.display_name, valor)
             database.add_transaction(str(m.id), valor, 'bonus', motivo, interaction.user.display_name)
@@ -423,7 +431,7 @@ class BankCog(commands.Cog):
         if invalid:
             embed.add_field(name='⚠️ Não encontrados no servidor', value=', '.join(invalid), inline=False)
         embed.set_footer(text=f'Por {interaction.user.display_name}')
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
         nomes = ', '.join(m.display_name for m, _ in results)
         await _log(interaction.guild,
@@ -468,6 +476,14 @@ class BankCog(commands.Cog):
             return
 
         results, insufficient = [], []
+        # Defer ANTES do loop que mexe em prata. O Discord exige a 1a resposta em
+        # 3s e estes comandos so respondiam depois de percorrer todos os membros:
+        # com o Postgres um pouco lento, o token expirava COM A PRATA JA MOVIMENTADA,
+        # o lider via 'a aplicacao nao respondeu' e rodava de novo — pagando 2x.
+        # Deferir da 15 minutos no lugar de 3 segundos. As validacoes acima ficam
+        # antes de proposito: continuam usando response.send_message efemero.
+        await interaction.response.defer()
+
         for m in members:
             # Débito atômico (checa saldo e debita na mesma query) — ler o saldo e
             # só depois debitar deixava dois Líderes pagarem a mesma pessoa ao
@@ -480,7 +496,7 @@ class BankCog(commands.Cog):
             results.append((m, novo))
 
         if not results:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 '❌ Saldo insuficiente pra todo mundo listado:\n' + '\n'.join(insufficient), ephemeral=True)
             return
 
@@ -500,7 +516,7 @@ class BankCog(commands.Cog):
         if insufficient:
             embed.add_field(name='⚠️ Saldo insuficiente (pulado)', value='\n'.join(insufficient), inline=False)
         embed.set_footer(text=f'Por {interaction.user.display_name}')
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
         nomes = ', '.join(m.display_name for m, _ in results)
         await _log(interaction.guild,
@@ -532,6 +548,14 @@ class BankCog(commands.Cog):
             return
 
         results = []
+        # Defer ANTES do loop que mexe em prata. O Discord exige a 1a resposta em
+        # 3s e estes comandos so respondiam depois de percorrer todos os membros:
+        # com o Postgres um pouco lento, o token expirava COM A PRATA JA MOVIMENTADA,
+        # o lider via 'a aplicacao nao respondeu' e rodava de novo — pagando 2x.
+        # Deferir da 15 minutos no lugar de 3 segundos. As validacoes acima ficam
+        # antes de proposito: continuam usando response.send_message efemero.
+        await interaction.response.defer()
+
         for m in members:
             # Zera e devolve o saldo antigo na mesma query — ler e só depois zerar
             # deixava dois admins zerando junto registrarem DUAS transações do
@@ -554,7 +578,7 @@ class BankCog(commands.Cog):
         if invalid:
             embed.add_field(name='⚠️ Não encontrados no servidor', value=', '.join(invalid), inline=False)
         embed.set_footer(text=f'Por {interaction.user.display_name}')
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
         nomes = ', '.join(f'{m.display_name} ({fmt(old)})' for m, old in results)
         await _log(interaction.guild,

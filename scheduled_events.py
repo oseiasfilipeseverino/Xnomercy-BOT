@@ -592,6 +592,22 @@ class ScheduledEventsCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
+        # Destrava eventos que ficaram num estado intermediário porque o bot caiu
+        # no meio do trabalho. 'posting' e 'reopening' são marcados ANTES da
+        # chamada ao Discord (pra não processar duas vezes) — se o processo morre
+        # nesse intervalo, ninguém mais pega o evento: as filas procuram
+        # 'pending_post' e 'pending_reopen'. Devolver pra fila no boot é seguro
+        # porque as duas operações são idempotentes: repostar só acontece se o
+        # post não chegou a salvar thread_id, e a releitura do tópico usa
+        # assign_slot, que não duplica inscrição.
+        try:
+            destravados = database.requeue_stuck_events()
+            if destravados:
+                print("[scheduled_events] " + str(destravados)
+                      + " evento(s) destravado(s) de posting/reopening")
+        except Exception as e:
+            print("[scheduled_events] erro ao destravar eventos: " + repr(e))
+
         events = database.get_active_scheduled_events()
         print("[scheduled_events] " + str(len(events)) + " evento(s) ativo(s)")
 

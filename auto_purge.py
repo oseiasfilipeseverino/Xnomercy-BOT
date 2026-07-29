@@ -206,7 +206,7 @@ class AutoPurgeCog(commands.Cog):
 
                 # Ainda esta na guild? Testa todos os candidatos (cru, sem emoji, etc).
                 if any(c.lower() in albion_members for c in candidatos):
-                    database.purge_strike_clear(str(member.id))
+                    await database.run_db(database.purge_strike_clear, str(member.id))
                     continue
 
                 # Nenhum candidato casou. Se o apelido nao permite isolar um nome de
@@ -219,7 +219,11 @@ class AutoPurgeCog(commands.Cog):
                 # Confirmacao em multiplas verificacoes: a API do Albion as vezes
                 # devolve lista incompleta, e agir na primeira observacao ja rebaixou
                 # gente que estava na guild. So entra na fila apos STRIKES_TO_PURGE.
-                strikes = database.purge_strike_add(str(member.id), candidatos[0])
+                # run_db: este loop percorre TODOS os membros da guild (99+). Chamada
+                # sincrona aqui trava o event loop por ~1 round-trip de banco por
+                # membro — vários segundos de bot mudo por ciclo. Mesma familia do
+                # congelamento de 15-20s do requests.get que ja corrigimos aqui.
+                strikes = await database.run_db(database.purge_strike_add, str(member.id), candidatos[0])
                 if strikes < STRIKES_TO_PURGE:
                     print(f'[auto_purge] {candidatos[0]}: ausente na API '
                           f'({strikes}/{STRIKES_TO_PURGE}) — aguardando confirmacao')

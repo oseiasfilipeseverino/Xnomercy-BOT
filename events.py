@@ -430,17 +430,29 @@ class ApproveDepositView(LoggedView):
             await interaction.response.send_message('❌ Já processado.', ephemeral=True)
             return
 
+        # Crédito tudo-ou-nada numa transação só. Antes era um commit por
+        # participante, com `continue` no erro: falha no meio pagava metade e o
+        # evento já estava 'approved', sem forma de completar. E como saldo e
+        # extrato eram duas chamadas separadas, dava pra creditar sem deixar
+        # rastro em `transactions`.
+        creditos = [(p['discord_id'], p['username'], valor)
+                    for p in self.participants
+                    if (valor := self.distribution.get(p['discord_id'], 0)) > 0]
+        try:
+            database.credit_event_participants(
+                self.event_id, event["title"], creditos, interaction.user.display_name)
+        except Exception as e:
+            print(f'[events] FALHA ao creditar evento #{self.event_id}: {e!r}')
+            database.revert_event_approval(self.event_id)
+            await interaction.response.send_message(
+                '❌ Falha ao creditar — **nenhuma prata foi movimentada**. '
+                'O evento voltou pra pendente, pode clicar em Aprovar de novo.',
+                ephemeral=True)
+            return
+
         for p in self.participants:
             valor = self.distribution.get(p['discord_id'], 0)
             if valor > 0:
-                try:
-                    database.update_player_balance(p['discord_id'], p['username'], valor)
-                    database.add_transaction(p['discord_id'], valor, 'loot',
-                        f'Evento #{self.event_id:04d}: {event["title"]}', interaction.user.display_name)
-                except Exception as e:
-                    print(f'[events] erro ao creditar {p.get("username","?")} no evento #{self.event_id}: {e}')
-                    continue
-
                 # Mention dentro do embed não notifica ninguém (Discord só pinga
                 # mention em `content`) — igual ao /adicionar_saldo, avisa por DM em
                 # vez de pingar o canal inteiro (evitando ping-storm com N participantes).

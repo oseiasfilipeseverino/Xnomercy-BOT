@@ -1020,13 +1020,28 @@ def save_split_participants(event_id, participants, event_title=''):
     """Credita o saldo de cada participante — só chamado depois que o split foi
     aprovado (botão Aprovar no Discord). participants: [{'name','discord_id',
     'amount','pct'}]. Espelha o save_split do site (mesma tabela event_participants
-    compartilhada), incluindo o registro em `transactions` pro /extrato mostrar."""
+    compartilhada), incluindo o registro em `transactions` pro /extrato mostrar.
+
+    TUDO NUMA TRANSAÇÃO SÓ — ou todo mundo recebe, ou ninguém recebe.
+
+    Antes havia um commit POR PARTICIPANTE e um except que só imprimia no log e
+    seguia em frente. Se o banco falhasse no meio do lote, metade recebia e
+    metade não; e como o split já tinha sido marcado 'approved' pela
+    reivindicação atômica, ninguém conseguia reaprovar (o WHERE status='pending'
+    não achava mais linha). A prata dos que faltaram simplesmente sumia, com um
+    print no log como único rastro. Refazer na mão também não resolvia: o
+    crédito é `balance + EXCLUDED.balance`, aditivo, então quem já tinha
+    recebido recebia de novo.
+
+    Agora a exceção PROPAGA: quem chama devolve o split pra 'pending' (ver
+    revert_pending_split) e o botão volta a funcionar, sem nada creditado.
+    """
     desc = f'Evento: {event_title}' if event_title else f'Evento #{event_id}'
-    for p in participants:
-        amount = int(p.get('amount', 0))
-        conn = get_connection()
-        try:
-            c = conn.cursor()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        for p in participants:
+            amount = int(p.get('amount', 0))
             c.execute('''INSERT INTO event_participants (event_id, discord_id, username, share)
                          VALUES (%s, %s, %s, %s)
                          ON CONFLICT (event_id, discord_id) DO UPDATE SET share=EXCLUDED.share, username=EXCLUDED.username''',
@@ -1042,21 +1057,95 @@ def save_split_participants(event_id, participants, event_title=''):
                 c.execute('''INSERT INTO transactions (discord_id, amount, type, description, created_by)
                              VALUES (%s, %s, 'loot', %s, %s)''',
                           (p['discord_id'], amount, desc, 'Split (site)'))
-            conn.commit()
-        except Exception as e:
-            print(f'[pending_splits] erro ao creditar {p.get("name","?")}: {e}')
-        finally:
-            release(conn)
 
-    conn2 = get_connection()
-    try:
-        c2 = conn2.cursor()
-        c2.execute("UPDATE scheduled_events SET status='split_done' WHERE id=%s", (event_id,))
-        conn2.commit()
-    except Exception as e:
-        print(f'[pending_splits] erro ao marcar evento {event_id}: {e}')
+        # Marcar o evento entra na MESMA transação: sem isso dava pra creditar
+        # todo mundo e mesmo assim o evento continuar aparecendo como pendente.
+        c.execute("UPDATE scheduled_events SET status='split_done' WHERE id=%s", (event_id,))
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
     finally:
-        release(conn2)
+        release(conn)
+
+
+def credit_event_participants(event_id, event_title, creditos, created_by):
+    """Credita o lote do /depositar_evento numa TRANSAÇÃO SÓ.
+
+    creditos: [(discord_id, username, valor)] com valor > 0.
+
+    Antes o cog fazia update_player_balance + add_transaction por participante,
+    cada um com commit próprio e um except que só logava e seguia (`continue`).
+    Dois problemas: falha no meio pagava metade e o evento já estava 'approved'
+    pela reivindicação atômica, então não dava pra completar; e como eram DUAS
+    chamadas separadas, dava pra creditar a prata e falhar só o registro em
+    `transactions`, deixando o dinheiro sem rastro nenhum no extrato.
+
+    Propaga a exceção — quem chama devolve o evento pra 'pending'."""
+    desc = f'Evento #{event_id:04d}: {event_title}'
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        for discord_id, username, valor in creditos:
+            c.execute('''INSERT INTO players (discord_id, username, balance, total_earned)
+                         VALUES (%s, %s, %s, %s)
+                         ON CONFLICT (discord_id) DO UPDATE SET
+                         balance = players.balance + EXCLUDED.balance,
+                         total_earned = players.total_earned + EXCLUDED.total_earned,
+                         username = EXCLUDED.username''',
+                      (discord_id, username, valor, valor))
+            c.execute('''INSERT INTO transactions (discord_id, amount, type, description, created_by)
+                         VALUES (%s, %s, 'loot', %s, %s)''',
+                      (discord_id, valor, desc, created_by))
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        release(conn)
+
+
+def revert_event_approval(event_id):
+    """Devolve um evento de 'approved' pra 'pending' quando o crédito falhou."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE events SET status='pending', approved_by='', approved_at='' "
+                  "WHERE id=%s AND status='approved'", (event_id,))
+        ok = c.rowcount > 0
+        conn.commit()
+        return ok
+    except Exception as e:
+        print(f'[revert_event_approval] {e!r}')
+        return False
+    finally:
+        release(conn)
+
+
+def revert_pending_split(split_id):
+    """Devolve um split de 'approved' pra 'pending' quando o crédito falhou.
+
+    Sem isso o split ficava preso em 'approved' com ninguém creditado e sem
+    nenhuma tela pra tentar de novo."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE pending_splits SET status='pending', reviewed_by='', reviewed_at=NULL "
+                  "WHERE id=%s AND status='approved'", (split_id,))
+        ok = c.rowcount > 0
+        conn.commit()
+        return ok
+    except Exception as e:
+        print(f'[revert_pending_split] {e!r}')
+        return False
+    finally:
+        release(conn)
 
 
 # ── Auto-purge: confirmação em múltiplas verificações ──────────────────────────
@@ -1260,6 +1349,49 @@ def get_pending_post_events():
     except Exception as e:
         print(f'[get_pending_post_events] {e!r}')
         return []
+    finally:
+        release(conn)
+
+def requeue_stuck_events():
+    """Devolve pra fila eventos presos em estado intermediario. Chamado no boot.
+
+    'posting' e 'reopening' sao marcados ANTES da chamada ao Discord justamente
+    pra nao processar duas vezes. O efeito colateral e que, se o processo morre
+    nesse intervalo, o evento nao volta sozinho: post_pending_task procura
+    'pending_post' e reopen_pending_task procura 'pending_reopen'.
+
+    Rodar so no boot e' o que torna isso seguro — nenhum ciclo esta no meio do
+    trabalho nesse momento, entao nao ha risco de roubar um evento que outra
+    execucao esteja processando agora.
+
+    O 'posting' precisa de cuidado extra por causa da ordem em _post_event:
+    manda a mensagem -> cria o topico -> salva thread_id -> marca 'waiting'.
+
+    - Com thread_id preenchido, o post JA deu certo e so o ultimo passo se
+      perdeu: vai direto pra 'waiting'. Repostar aqui criaria um evento
+      duplicado no canal.
+    - Sem thread_id, nao da pra saber se a mensagem chegou a sair (a janela e' de
+      milissegundos). Escolha consciente: repostar. Um evento duplicado da pra
+      cancelar em dois cliques; um evento que nunca e' postado fica invisivel
+      pra quem precisa se inscrever."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE scheduled_events SET status='waiting' "
+                  "WHERE status='posting' AND COALESCE(thread_id,'') <> ''")
+        n = c.rowcount
+        c.execute("UPDATE scheduled_events SET status='pending_post' "
+                  "WHERE status='posting' AND COALESCE(thread_id,'') = ''")
+        n += c.rowcount
+        # A releitura do topico e' idempotente (assign_slot devolve 'has_slot' /
+        # 'already_taken'), entao devolver pra fila nao duplica inscricao.
+        c.execute("UPDATE scheduled_events SET status='pending_reopen' WHERE status='reopening'")
+        n += c.rowcount
+        conn.commit()
+        return n
+    except Exception as e:
+        print(f'[requeue_stuck_events] {e!r}')
+        return 0
     finally:
         release(conn)
 

@@ -86,7 +86,21 @@ class SitePendingSplitView(LoggedView):
         event = database.get_scheduled_event(split['event_id'])
         event_title = event.get('title', '') if event else ''
         participants = json.loads(split['participants_json'])
-        database.save_split_participants(split['event_id'], participants, event_title)
+
+        # O crédito é tudo-ou-nada (uma transação só). Se falhar, NADA foi
+        # creditado — então devolve o split pra 'pending' pra dar pra tentar de
+        # novo. Antes, uma falha no meio do lote deixava metade paga e o split
+        # preso em 'approved', sem nenhuma forma de completar o pagamento.
+        try:
+            database.save_split_participants(split['event_id'], participants, event_title)
+        except Exception as e:
+            print(f'[site_splits] FALHA ao creditar split {self.split_id}: {e!r}')
+            database.revert_pending_split(self.split_id)
+            await interaction.response.send_message(
+                '❌ Falha ao creditar — **nenhuma prata foi movimentada**. '
+                'O split voltou pra pendente, pode clicar em Aprovar de novo.',
+                ephemeral=True)
+            return
 
         # Mention dentro do embed não notifica ninguém (Discord só pinga mention em
         # `content`) — avisa por DM em vez de pingar o canal inteiro com N pessoas.

@@ -15,6 +15,7 @@ import discord
 from discord.ext import commands, tasks
 
 import database
+from discord_utils import alertar_financeiro
 from permissions import is_financial
 from view_utils import LoggedView
 
@@ -96,6 +97,13 @@ class SitePendingSplitView(LoggedView):
         except Exception as e:
             print(f'[site_splits] FALHA ao creditar split {self.split_id}: {e!r}')
             database.revert_pending_split(self.split_id)
+            await alertar_financeiro(
+                interaction.guild,
+                'Falha ao creditar split',
+                f'**{split.get("event_title", "Evento")}** — {len(participants)} participante(s).\n'
+                f'Aprovado por {interaction.user.display_name}, mas o crédito falhou.\n\n'
+                f'O split voltou para **pendente** — basta clicar em Aprovar de novo.\n'
+                f'Erro: `{str(e)[:300]}`')
             await interaction.response.send_message(
                 '❌ Falha ao creditar — **nenhuma prata foi movimentada**. '
                 'O split voltou pra pendente, pode clicar em Aprovar de novo.',

@@ -11,7 +11,7 @@ import database
 from permissions import can_manage_events, is_member, is_financial, has_permission
 from bank import parse_prata   # aceita 1.200.000 / 1200000 / 1,200,000
 from view_utils import LoggedView
-from discord_utils import log_channel
+from discord_utils import log_channel, alertar_financeiro
 
 
 def fmt(v: float) -> str:
@@ -444,6 +444,13 @@ class ApproveDepositView(LoggedView):
         except Exception as e:
             print(f'[events] FALHA ao creditar evento #{self.event_id}: {e!r}')
             database.revert_event_approval(self.event_id)
+            await alertar_financeiro(
+                interaction.guild,
+                'Falha ao creditar evento',
+                f'**Evento #{self.event_id:04d} — {event["title"]}** com {len(creditos)} participante(s).\n'
+                f'Aprovado por {interaction.user.display_name}, mas o crédito falhou.\n\n'
+                f'O evento voltou para **pendente** — basta clicar em Aprovar de novo.\n'
+                f'Erro: `{str(e)[:300]}`')
             await interaction.response.send_message(
                 '❌ Falha ao creditar — **nenhuma prata foi movimentada**. '
                 'O evento voltou pra pendente, pode clicar em Aprovar de novo.',

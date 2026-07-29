@@ -37,6 +37,10 @@ async def run_db(fn, *args, **kwargs):
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
+# Marcador de reserva de ticket: a linha existe no banco antes do canal existir
+# no Discord (ver reservar_ticket). Quem le channel_id precisa ignorar esses.
+RESERVA_PREFIXO = 'reservando:'
+
 # ── Connection Pool ───────────────────────────────────────────────────────────
 _pool = []
 _pool_lock = threading.Lock()
@@ -133,6 +137,24 @@ def init_db():
             discord_id TEXT NOT NULL, username TEXT NOT NULL,
             ticket_type TEXT NOT NULL, status TEXT DEFAULT 'open',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+        # Um ticket aberto por pessoa+tipo. É o que faz a reserva em
+        # reservar_ticket ser atômica: o 2º clique perde no banco em vez de
+        # criar um canal órfão.
+        #
+        # Num commit separado e com except próprio: se já existirem duplicados de
+        # antes desta correção, o CREATE falha, e ele NÃO pode derrubar o resto do
+        # init_db nem impedir o bot de subir. Sem o índice, tickets seguem
+        # funcionando — só sem a proteção contra duplo clique.
+        try:
+            c.execute('''CREATE UNIQUE INDEX IF NOT EXISTS tickets_um_aberto
+                         ON tickets (discord_id, ticket_type) WHERE status='open' ''')
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            print('[DB] indice tickets_um_aberto NAO criado: ' + repr(e))
+            print('[DB] provavelmente ha tickets abertos duplicados. Consulta pra achar:')
+            print("[DB]   SELECT discord_id, ticket_type, COUNT(*) FROM tickets "
+                  "WHERE status='open' GROUP BY 1,2 HAVING COUNT(*) > 1;")
         c.execute('''CREATE TABLE IF NOT EXISTS ticket_messages (
             ticket_type TEXT PRIMARY KEY, title TEXT NOT NULL, message TEXT NOT NULL)''')
         c.execute('''CREATE TABLE IF NOT EXISTS welcome_config (
@@ -772,14 +794,89 @@ def get_ticket_type_by_channel(channel_id):
         release(conn)
 
 def get_open_ticket(discord_id, ticket_type):
+    """PROPAGA a exceção (não devolve None em erro).
+
+    Devolver None numa falha significava "não tem ticket aberto", e quem chamava
+    seguia criando outro. Erro de banco virava ticket duplicado."""
     conn = get_connection()
     try:
         c = conn.cursor()
         c.execute("SELECT channel_id FROM tickets WHERE discord_id=%s AND ticket_type=%s AND status='open'", (discord_id, ticket_type))
         row = c.fetchone()
         return {'channel_id': row[0]} if row else None
-    except Exception:
+    finally:
+        release(conn)
+
+
+def reservar_ticket(discord_id, username, ticket_type):
+    """Reserva a vaga do ticket ANTES de criar o canal. Devolve o id ou None.
+
+    Antes o fluxo era: consultar se já tem ticket aberto -> criar o canal no
+    Discord -> gravar no banco. Entre a consulta e a gravação havia um await de
+    rede de 200-500ms, e o botão não deferia — então quem clicava não via nada
+    acontecer e clicava de novo, que é o gatilho natural. Os dois cliques
+    passavam pela consulta e nasciam DOIS canais; o banco só ficava com o
+    último, e o primeiro virava canal órfão que o botão Fechar não reconhecia.
+
+    O índice parcial único abaixo faz o banco decidir: a segunda reserva viola a
+    restrição e volta None, sem precisar de lock na aplicação."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        # O índice único é criado no init_db, NÃO aqui. Se ele falhar (porque já
+        # existem duplicados de antes da correção), tickets continuam funcionando
+        # sem a proteção de corrida — degradado, não quebrado. Criar aqui faria
+        # a falha do índice bloquear TODA abertura de ticket.
+        #
+        # channel_id é UNIQUE na tabela, então a reserva não pode usar '' — dois
+        # usuários reservando ao mesmo tempo colidiriam entre si. O marcador leva
+        # o dono e o tipo, e o índice parcial acima já garante que não existem
+        # dois abertos do mesmo par.
+        c.execute("INSERT INTO tickets (channel_id, discord_id, username, ticket_type, status) "
+                  "VALUES (%s, %s, %s, %s, 'open') RETURNING id",
+                  (f'{RESERVA_PREFIXO}{discord_id}:{ticket_type}', discord_id, username, ticket_type))
+        tid = c.fetchone()[0]
+        conn.commit()
+        return tid
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f'[reservar_ticket] {discord_id}/{ticket_type}: {e!r}')
         return None
+    finally:
+        release(conn)
+
+
+def confirmar_ticket(ticket_id, channel_id):
+    """Preenche o channel_id depois que o canal foi criado de verdade."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('UPDATE tickets SET channel_id=%s WHERE id=%s', (str(channel_id), ticket_id))
+        conn.commit()
+        return c.rowcount > 0
+    except Exception as e:
+        print(f'[confirmar_ticket] {e!r}')
+        return False
+    finally:
+        release(conn)
+
+
+def cancelar_reserva_ticket(ticket_id):
+    """Libera a reserva quando a criação do canal falhou — senão a pessoa ficaria
+    permanentemente sem conseguir abrir esse tipo de ticket."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('DELETE FROM tickets WHERE id=%s AND channel_id LIKE %s',
+                  (ticket_id, RESERVA_PREFIXO + '%'))
+        conn.commit()
+        return c.rowcount > 0
+    except Exception as e:
+        print(f'[cancelar_reserva_ticket] {e!r}')
+        return False
     finally:
         release(conn)
 

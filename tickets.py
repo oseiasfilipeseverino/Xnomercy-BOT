@@ -67,6 +67,17 @@ class CloseTicketView(LoggedView):
             if not category:
                 category = await guild.create_category(archive_name)
                 database.set_config(archive_key, str(category.id))
+                # Dois tickets fechados quase juntos passavam os dois pelas
+                # checagens acima e criavam duas categorias com o mesmo nome.
+                # Reconsulta depois de gravar: quem perdeu a corrida adota a
+                # categoria do outro e apaga a sua, que está vazia.
+                vencedora = database.get_config(archive_key)
+                if vencedora and vencedora != str(category.id):
+                    perdedora, category = category, guild.get_channel(int(vencedora)) or category
+                    try:
+                        await perdedora.delete(reason='Categoria de arquivo duplicada')
+                    except Exception:
+                        pass
  
             # Remove botão de fechar e bloqueia envio de mensagens
             for item in self.children:
@@ -112,16 +123,37 @@ class TicketButton(discord.ui.Button):
         guild = interaction.guild
         user  = interaction.user
  
-        # Verifica ticket já aberto
-        existing = database.get_open_ticket(str(user.id), self.ticket_type)
-        if existing:
-            ch = guild.get_channel(int(existing['channel_id']))
-            mention = ch.mention if ch else 'canal não encontrado'
-            await interaction.response.send_message(
+        # Defer imediato: criar o canal no Discord leva 200-500ms e o botão ficava
+        # mudo esse tempo todo. Quem clicava achava que não funcionou e clicava de
+        # novo — e os dois cliques criavam um canal cada.
+        await interaction.response.defer(ephemeral=True)
+
+        # Reserva a vaga no banco ANTES de criar o canal. O índice parcial único
+        # (um aberto por pessoa+tipo) faz o segundo clique perder aqui, em vez de
+        # perder depois — quando já teria criado um canal órfão.
+        try:
+            ticket_id = database.reservar_ticket(str(user.id), user.display_name, self.ticket_type)
+        except Exception as e:
+            print(f'[tickets] erro ao reservar ticket de {user.id}: {e!r}')
+            await interaction.followup.send(
+                '⚠️ Não consegui abrir o ticket agora. Tente de novo em instantes.', ephemeral=True)
+            return
+
+        if ticket_id is None:
+            # Perdeu a reserva: ou já tinha um aberto, ou foi o 2º clique.
+            try:
+                existing = database.get_open_ticket(str(user.id), self.ticket_type)
+            except Exception:
+                existing = None
+            mention = 'já existe'
+            if existing and not existing['channel_id'].startswith(database.RESERVA_PREFIXO):
+                ch = guild.get_channel(int(existing['channel_id']))
+                mention = ch.mention if ch else 'canal não encontrado'
+            await interaction.followup.send(
                 f'❌ Você já tem um ticket aberto: {mention}', ephemeral=True
             )
             return
- 
+
         # Categoria do ticket (mesma onde o painel foi postado)
         category = get_ticket_category(guild, self.ticket_type)
         if not category:
@@ -146,14 +178,24 @@ class TicketButton(discord.ui.Button):
             if role:
                 overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
  
-        ch = await guild.create_text_channel(
-            name=f'🎫│{self.ticket_type}-{user.name[:15].lower()}',
-            overwrites=overwrites,
-            category=category,
-            topic=f'Ticket de {self.ticket_type} | {user.display_name}'
-        )
- 
-        database.create_ticket(str(ch.id), str(user.id), user.display_name, self.ticket_type)
+        try:
+            ch = await guild.create_text_channel(
+                name=f'🎫│{self.ticket_type}-{user.name[:15].lower()}',
+                overwrites=overwrites,
+                category=category,
+                topic=f'Ticket de {self.ticket_type} | {user.display_name}'
+            )
+        except Exception as e:
+            # Sem soltar a reserva, a pessoa ficaria travada sem conseguir abrir
+            # esse tipo de ticket pra sempre — o índice único barraria toda
+            # tentativa seguinte por causa de uma linha que não virou canal.
+            print(f'[tickets] falha ao criar canal de {user.id}: {e!r}')
+            database.cancelar_reserva_ticket(ticket_id)
+            await interaction.followup.send(
+                '⚠️ Não consegui criar o canal do ticket. Avise a liderança.', ephemeral=True)
+            return
+
+        database.confirmar_ticket(ticket_id, ch.id)
 
         # Mensagem editavel do ticket - get_ticket_message() volta None se ninguem
         # configurou esse tipo ainda (/configurar_ticket) OU se o banco teve um
@@ -177,14 +219,14 @@ class TicketButton(discord.ui.Button):
 
         try:
             await ch.send(content=user.mention, embed=embed, view=CloseTicketView())
-            await interaction.response.send_message(f'✅ Ticket criado! {ch.mention}', ephemeral=True)
+            await interaction.followup.send(f'✅ Ticket criado! {ch.mention}', ephemeral=True)
         except Exception as e:
             # Canal ja existe e esta registrado no banco -- mesmo se o envio da
             # mensagem falhar (rate limit, permissao), avisa quem abriu em vez de
             # deixar a interacao simplesmente "falhar" sem explicacao nenhuma.
             print(f'[tickets] Erro ao enviar mensagem inicial do ticket {ch.id}: {e}')
             try:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f'⚠️ Ticket criado em {ch.mention}, mas houve um erro ao postar a mensagem inicial. '
                     f'Avise a lideranca.', ephemeral=True)
             except Exception:

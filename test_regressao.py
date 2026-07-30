@@ -339,25 +339,50 @@ import site_splits
 LIM_CAMPO, LIM_TOTAL, LIM_CAMPOS = 1024, 6000, 25
 
 
-def _split_falso(n):
+def _split_falso(n, titulo='GANK DE CRIA 17:40 (indicado ser experiente)', autor='Oseias'):
     parts = [{'name': f'P{i}', 'discord_id': str(700000000000000000 + i),
               'amount': 1_385_000, 'pct': 100} for i in range(1, n + 1)]
-    return {'id': 4, 'event_id': 2,
-            'event_title': 'GANK DE CRIA 17:40 (indicado ser experiente)',
+    return {'id': 4, 'event_id': 2, 'event_title': titulo,
             'total_loot': 24_500_000, 'repair_cost': 3_200_000, 'guild_tax_pct': 10,
             'vendor_tax_pct': 5, 'per_player': 1_385_000, 'num_players': n,
-            'submitted_by': 'Oseias', 'participants_json': json.dumps(parts)}
+            'submitted_by': autor, 'participants_json': json.dumps(parts)}
 
 
-for n in (1, 5, 20, 25, 50, 100, 150, 500):
-    e = site_splits._build_embed(_split_falso(n))
-    maior = max(len(f.value) for f in e.fields)
+LIM_TITULO, LIM_DESCR = 256, 4096
+
+
+def _conferir_embed(e, rotulo):
+    """Todos os tetos do Discord de uma vez. Passar de QUALQUER um faz a API
+    recusar a mensagem inteira, entao nao basta olhar o campo que estourou
+    naquele dia — foi assim que a correcao do campo de participantes deixou o
+    titulo de evento longo como a mesma falha por outro caminho."""
+    checar(len(e.title or '') <= LIM_TITULO,
+           f'{rotulo}: title com {len(e.title or "")} chars (max {LIM_TITULO})')
+    checar(len(e.description or '') <= LIM_DESCR, f'{rotulo}: description longa demais')
+    for f in e.fields:
+        checar(len(f.name) <= LIM_TITULO, f'{rotulo}: nome de campo longo demais')
+        checar(len(f.value) <= LIM_CAMPO,
+               f'{rotulo}: campo com {len(f.value)} chars (max {LIM_CAMPO})')
+    checar(len(e.fields) <= LIM_CAMPOS, f'{rotulo}: {len(e.fields)} campos (max {LIM_CAMPOS})')
     total = (len(e.title or '') + len(e.description or '')
              + sum(len(f.name) + len(f.value) for f in e.fields)
              + len(e.footer.text or ''))
-    checar(maior <= LIM_CAMPO, f'{n} participantes: campo com {maior} chars (max {LIM_CAMPO})')
-    checar(total <= LIM_TOTAL, f'{n} participantes: embed com {total} chars (max {LIM_TOTAL})')
-    checar(len(e.fields) <= LIM_CAMPOS, f'{n} participantes: {len(e.fields)} campos (max {LIM_CAMPOS})')
+    checar(total <= LIM_TOTAL, f'{rotulo}: embed com {total} chars (max {LIM_TOTAL})')
+
+
+for n in (1, 5, 20, 25, 50, 100, 150, 500):
+    _conferir_embed(site_splits._build_embed(_split_falso(n)), f'{n} participantes')
+
+# Titulo de evento e nome de quem enviou sao texto livre digitado no site. O
+# titulo com 300 chars estourava o teto de 256 do embed — mesma falha, campo
+# diferente, e o site nao limitava nada.
+for rotulo, kw in (('titulo 300 chars', {'n': 20, 'titulo': 'X' * 300}),
+                   ('titulo 5000 chars', {'n': 20, 'titulo': 'X' * 5000}),
+                   ('autor 5000 chars', {'n': 20, 'autor': 'N' * 5000}),
+                   ('titulo vazio', {'n': 20, 'titulo': ''}),
+                   ('pior caso combinado', {'n': 500, 'titulo': 'X' * 5000})):
+    _conferir_embed(site_splits._build_embed(_split_falso(**kw)), rotulo)
+print('  titulo/autor gigantes e 500 participantes: nenhum estoura os tetos')
 
 # até o teto, ninguém pode ser perdido no fatiamento
 e = site_splits._build_embed(_split_falso(100))

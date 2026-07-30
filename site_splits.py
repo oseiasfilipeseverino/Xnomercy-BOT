@@ -24,6 +24,22 @@ def _fmt(v) -> str:
     return f'{int(v):,}'
 
 
+# Tetos do Discord por parte do embed. Passar de qualquer um deles faz a API
+# recusar a mensagem INTEIRA com "400 Invalid Form Body" — foi assim que split de
+# CTA cheia parou de chegar. Corrigir só o campo que estourou não bastava: o
+# título de evento é texto livre digitado no site, sem limite nenhum lá, e 300
+# caracteres nele reproduziam exatamente o mesmo sintoma.
+LIM_TITULO = 256
+LIM_DESCRICAO = 4096
+LIM_CAMPO = 1024
+
+
+def _cortar(texto: str, limite: int) -> str:
+    """Garante que o texto cabe no limite do Discord, com reticências se cortar."""
+    t = str(texto or '')
+    return t if len(t) <= limite else t[:limite - 1] + '…'
+
+
 def _build_embed(split, title_prefix='⏳ Split Pendente (via site)'):
     participants = json.loads(split['participants_json'])
     lines = []
@@ -37,8 +53,8 @@ def _build_embed(split, title_prefix='⏳ Split Pendente (via site)'):
 
     net = split['total_loot'] - split['repair_cost']
     embed = discord.Embed(
-        title=f'{title_prefix} — {split.get("event_title", "Evento")}',
-        description=f'Enviado por: **{split["submitted_by"]}**',
+        title=_cortar(f'{title_prefix} — {split.get("event_title", "Evento")}', LIM_TITULO),
+        description=_cortar(f'Enviado por: **{split["submitted_by"]}**', LIM_DESCRICAO),
         color=discord.Color.orange(),
     )
     embed.add_field(name='📦 Loot Total', value=f'{_fmt(split["total_loot"])} prata', inline=True)

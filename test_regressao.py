@@ -384,6 +384,27 @@ for rotulo, kw in (('titulo 300 chars', {'n': 20, 'titulo': 'X' * 300}),
     _conferir_embed(site_splits._build_embed(_split_falso(**kw)), rotulo)
 print('  titulo/autor gigantes e 500 participantes: nenhum estoura os tetos')
 
+# O bot confere os tetos ANTES de mandar. Pro detector valer algo, ele precisa
+# ACUSAR um embed invalido — teste que só vê caso bom não prova detector nenhum.
+import discord as _d
+
+_mau = _d.Embed(title='T' * 300, description='D')
+_mau.add_field(name='x', value='V' * 2000, inline=False)
+_achou = site_splits._violacoes(_mau)
+checar(any('title' in v for v in _achou), f'o detector nao viu o title de 300 chars: {_achou}')
+checar(any('campo' in v for v in _achou), f'o detector nao viu o campo de 2000 chars: {_achou}')
+checar(not site_splits._violacoes(site_splits._build_embed(_split_falso(20))),
+       'embed normal nao pode ser acusado de violacao')
+print(f'  detector acusa embed invalido: {_achou}')
+
+# Se o completo nao couber, o enxuto tem que caber SEMPRE — e' o que garante que
+# o split chega pra aprovar mesmo no pior caso.
+for kw in ({'n': 20}, {'n': 500, 'titulo': 'X' * 5000}, {'n': 1, 'titulo': ''}):
+    e = site_splits._embed_minimo(_split_falso(**kw), 'motivo ' * 200)
+    checar(not site_splits._violacoes(e),
+           f'o embed enxuto tem que caber sempre, mas estourou com {kw}')
+print('  embed enxuto de fallback cabe em todos os casos')
+
 # até o teto, ninguém pode ser perdido no fatiamento
 e = site_splits._build_embed(_split_falso(100))
 juntos = '\n'.join(f.value for f in e.fields)

@@ -32,12 +32,60 @@ def _fmt(v) -> str:
 LIM_TITULO = 256
 LIM_DESCRICAO = 4096
 LIM_CAMPO = 1024
+LIM_NOME_CAMPO = 256
+LIM_CAMPOS = 25
+LIM_TOTAL = 6000
 
 
 def _cortar(texto: str, limite: int) -> str:
     """Garante que o texto cabe no limite do Discord, com reticências se cortar."""
     t = str(texto or '')
     return t if len(t) <= limite else t[:limite - 1] + '…'
+
+
+def _violacoes(embed) -> list:
+    """Lista o que estoura os tetos do Discord neste embed. Vazio = pode enviar.
+
+    Serve de conferência ANTES do send. O bug do split que não chegava era
+    justamente o Discord recusando por tamanho, e a gente só descobria pelo 400
+    que voltava — checar aqui transforma isso em algo que o bot vê e trata."""
+    p = []
+    if len(embed.title or '') > LIM_TITULO:
+        p.append(f'title {len(embed.title)}>{LIM_TITULO}')
+    if len(embed.description or '') > LIM_DESCRICAO:
+        p.append(f'description {len(embed.description)}>{LIM_DESCRICAO}')
+    if len(embed.fields) > LIM_CAMPOS:
+        p.append(f'{len(embed.fields)} campos>{LIM_CAMPOS}')
+    for i, f in enumerate(embed.fields, 1):
+        if len(f.name or '') > LIM_NOME_CAMPO:
+            p.append(f'nome do campo {i}: {len(f.name)}>{LIM_NOME_CAMPO}')
+        if len(f.value or '') > LIM_CAMPO:
+            p.append(f'campo {i}: {len(f.value)}>{LIM_CAMPO}')
+    total = (len(embed.title or '') + len(embed.description or '')
+             + sum(len(f.name or '') + len(f.value or '') for f in embed.fields)
+             + len((embed.footer.text if embed.footer else '') or ''))
+    if total > LIM_TOTAL:
+        p.append(f'total {total}>{LIM_TOTAL}')
+    return p
+
+
+def _embed_minimo(split, motivo):
+    """Embed enxuto que SEMPRE cabe nos limites, pra usar se o completo não couber.
+
+    Aprovar o split é o que importa; a lista bonita é secundária. Antes, um embed
+    grande demais fazia o Discord recusar a mensagem inteira e o split
+    simplesmente não chegava — melhor chegar sem a lista do que não chegar."""
+    e = discord.Embed(
+        title='⏳ Split Pendente (via site)',
+        description=(f'**{_cortar(str(split.get("event_title", "Evento")), 120)}**\n'
+                     f'{split.get("num_players", "?")} participante(s) · '
+                     f'{_fmt(split.get("per_player", 0))} prata em média\n\n'
+                     f'_A lista completa não caberia aqui ({_cortar(motivo, 200)}) — '
+                     f'confira em /gestao/splits no site._'),
+        color=discord.Color.orange(),
+    )
+    e.set_footer(text='Split criado pelo site — clique abaixo pra aprovar ou recusar')
+    return e
 
 
 def _build_embed(split, title_prefix='⏳ Split Pendente (via site)'):
@@ -265,10 +313,26 @@ class SiteSplitsCog(commands.Cog):
                     sid = split['id']
                     try:
                         embed = _build_embed(split)
+                        # Confere os tetos ANTES de mandar. Se por algum motivo o
+                        # embed completo não couber, manda a versão enxuta em vez de
+                        # tomar 400 e o split não chegar — aprovar é o que importa.
+                        ruins = _violacoes(embed)
+                        if ruins:
+                            print(f'[site_splits] split {sid}: embed completo nao cabe '
+                                  f'({"; ".join(ruins)}) — usando versao enxuta')
+                            embed = _embed_minimo(split, '; '.join(ruins))
+
                         view = SitePendingSplitView(sid)
                         msg = await ch.send(embed=embed, view=view)
                         database.mark_pending_split_posted(sid, str(msg.id))
                         self._falhas.pop(sid, None)
+                        # Sucesso também vira log. Antes só o erro aparecia, então
+                        # "não chegou" e "chegou" eram indistinguíveis no log — foi
+                        # parte do motivo de eu ter precisado do relato pra achar
+                        # este bug.
+                        print(f'[site_splits] split {sid} postado no financeiro '
+                              f'({split.get("num_players", "?")} participantes, '
+                              f'msg {msg.id})')
                     except Exception as e:
                         # Sem contagem, uma falha aqui virava tentativa a cada 20s
                         # PRA SEMPRE, com um print como único rastro — foi assim

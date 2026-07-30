@@ -8,6 +8,7 @@ falha, propagação da exceção), não o SQL em si.
 Uso:  python test_regressao.py
 """
 import json
+import re
 import sys
 import database
 import bank
@@ -421,6 +422,65 @@ print('  acima disso corta com aviso')
 checar(site_splits.SiteSplitsCog.MAX_TENTATIVAS >= 1,
        'precisa de teto de tentativas — sem ele o loop insiste pra sempre so imprimindo')
 print(f'  para de insistir apos {site_splits.SiteSplitsCog.MAX_TENTATIVAS} falhas e avisa a lideranca')
+
+
+secao('TODOS os embeds do fluxo de evento aguentam a guild crescendo')
+# A guild vai passar de 70 players nos pings. Nessa escala, 4 dos 5 embeds do
+# fluxo de evento estouravam os limites do Discord — cada um seria um "nao
+# chegou" diferente. Este bloco fixa o contrato: qualquer tamanho tem que caber.
+import discord as _dd
+import discord_utils as _du
+import scheduled_events as _se
+
+_NOMES = ['[REC]⚔️LKMAJOR', '[🌸][Officer]SPOKS777 Sombra', '[STAFF]LapreoTheKing']
+
+
+def _ok(e, rotulo):
+    v = _du.violacoes(e)
+    checar(not v, f'{rotulo}: {v}')
+
+
+for N in (0, 1, 20, 70, 100, 300):
+    ev = {'id': 1, 'title': 'Z' * 300, 'description': 'P' * 9000, 'link_url': '',
+          'slots': json.dumps([{'name': 'SUSSURANTE/BESTA DO TIRÃO'} for _ in range(N)]),
+          'scheduled_time': '2026-07-30T20:00'}
+    asg = [{'slot_number': i, 'username': _NOMES[i % 3],
+            'discord_id': str(700000000000000000 + i)} for i in range(1, N + 1)]
+    _ok(_se.build_embed(ev, asg), f'painel do evento com {N} slots')
+
+    _ok(site_splits._build_embed(_split_falso(N or 1)), f'split com {N} participantes')
+
+    e = _dd.Embed(title='Loot Aprovado', description='X')
+    _du.add_lista(e, '💰 Distribuição',
+                  [f'• <@{700000000000000000+i}> → **2,000,000 prata**' for i in range(N)])
+    _ok(e, f'resumo do deposito com {N}')
+
+    e = _dd.Embed(title='Evento', description='X')
+    _du.add_lista(e, '📋 Lista de Participação',
+                  [f'• **{_NOMES[i % 3]}** — 100%' for i in range(N)])
+    _ok(e, f'lista de participacao com {N}')
+
+    e = _dd.Embed(title='Conferencia', description=f'{N}/{N}')
+    _du.add_lista(e, '✅ Fecharam',
+                  [f'**{i}.** SLOT — <@{700000000000000000+i}>' for i in range(N)], orcamento=2600)
+    _du.add_lista(e, '⬜ Em aberto', [], orcamento=5000)
+    _ok(e, f'/conferencia com {N}')
+
+print('  painel, split, deposito, participacao e conferencia: OK de 0 a 300 players')
+
+# Botao de dinheiro nao pode mandar DM antes de responder: sao ~250ms cada, e com
+# 70 participantes dao 18s contra os 3s que o Discord permite.
+for arq, fn in (('site_splits.py', '_aprovar'), ('events.py', 'aprovar')):
+    corpo = re.search(rf'    async def {fn}\(self.*?(?=\n    @discord\.ui|\n    async def |\nclass )',
+                      open(arq, encoding='utf-8').read(), re.S).group(0)
+    d = corpo.find('response.defer')
+    r = corpo.find('Aprovado! Saldos')
+    dm = corpo.find('membro.send')
+    checar(d > 0, f'{arq}/{fn} precisa de defer — sem ele o prazo de 3s estoura')
+    checar(0 < r < dm, f'{arq}/{fn} tem que RESPONDER antes de mandar as DMs')
+    checar('interaction.response.send_message' not in corpo[d:],
+           f'{arq}/{fn}: response.send_message depois do defer (tem que ser followup)')
+print('  os 2 botoes de aprovacao: defer + resposta antes das DMs')
 
 
 secao('alerta de falha de crédito — a liderança precisa saber')

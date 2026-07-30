@@ -168,14 +168,20 @@ class SitePendingSplitView(LoggedView):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
 
+        # Defer imediato. O Discord exige a 1a resposta em 3s, e daqui pra baixo
+        # tem transacao de banco + uma DM POR PARTICIPANTE (~250ms cada). Com uma
+        # CTA de 20 isso passava de 5s, e com 70 passa de 18s: a prata era
+        # creditada certo, mas quem clicou via "a aplicacao nao respondeu".
+        await interaction.response.defer(ephemeral=True)
+
         split = database.get_pending_split(self.split_id)
         if not split or split['status'] != 'pending':
-            await interaction.response.send_message('❌ Já processado.', ephemeral=True)
+            await interaction.followup.send('❌ Já processado.', ephemeral=True)
             return
 
         # Atômico — se o site aprovou primeiro (tela /gestao/splits), perde a corrida aqui.
         if not database.approve_pending_split(self.split_id, interaction.user.display_name):
-            await interaction.response.send_message('❌ Já processado por outra pessoa.', ephemeral=True)
+            await interaction.followup.send('❌ Já processado por outra pessoa.', ephemeral=True)
             return
 
         event = database.get_scheduled_event(split['event_id'])
@@ -198,14 +204,38 @@ class SitePendingSplitView(LoggedView):
                 f'Aprovado por {interaction.user.display_name}, mas o crédito falhou.\n\n'
                 f'O split voltou para **pendente** — basta clicar em Aprovar de novo.\n'
                 f'Erro: `{str(e)[:300]}`')
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 '❌ Falha ao creditar — **nenhuma prata foi movimentada**. '
                 'O split voltou pra pendente, pode clicar em Aprovar de novo.',
                 ephemeral=True)
             return
 
+        # Saldo já foi creditado acima — daqui pra baixo é só feedback visual/log,
+        # não pode deixar a aprovação parecendo travada se o Discord falhar aqui.
+        try:
+            embed = interaction.message.embeds[0]
+            embed.color = discord.Color.green()
+            embed.title = _cortar(
+                f'✅ Split Aprovado — {split.get("event_title", event_title)}', LIM_TITULO)
+            embed.set_footer(text=f'Aprovado por {interaction.user.display_name}')
+            for item in self.children:
+                item.disabled = True
+            await interaction.message.edit(embed=embed, view=self)
+        except Exception as e:
+            print(f'[site_splits] erro ao editar embed de aprovação do split {self.split_id}: {e}')
+
+        # RESPONDE ANTES das DMs. Elas custam ~250ms cada e antes vinham primeiro:
+        # com 20 participantes eram 5s, com 70 são 18s — muito além dos 3s que o
+        # Discord dá pra 1a resposta. A prata era creditada certo, mas quem clicou
+        # via "a aplicacao nao respondeu" e ficava sem saber se tinha funcionado.
+        try:
+            await interaction.followup.send('✅ Aprovado! Saldos distribuídos.', ephemeral=True)
+        except Exception as e:
+            print(f'[site_splits] erro ao responder aprovação do split {self.split_id}: {e}')
+
         # Mention dentro do embed não notifica ninguém (Discord só pinga mention em
         # `content`) — avisa por DM em vez de pingar o canal inteiro com N pessoas.
+        # Agora rodam DEPOIS da resposta: podem demorar o quanto for.
         for p in participants:
             amt = p.get('amount', 0)
             if amt > 0 and p.get('discord_id'):
@@ -214,30 +244,14 @@ class SitePendingSplitView(LoggedView):
                     if membro:
                         dm = discord.Embed(
                             title='💰 Você recebeu prata!',
-                            description=f'**{_fmt(amt)}** do split de **{split.get("event_title", event_title)}**.',
+                            description=_cortar(
+                                f'**{_fmt(amt)}** do split de '
+                                f'**{split.get("event_title", event_title)}**.', LIM_DESCRICAO),
                             color=discord.Color.gold()
                         )
                         await membro.send(embed=dm)
                 except Exception:
                     pass
-
-        # Saldo já foi creditado acima — daqui pra baixo é só feedback visual/log,
-        # não pode deixar a aprovação parecendo travada se o Discord falhar aqui.
-        try:
-            embed = interaction.message.embeds[0]
-            embed.color = discord.Color.green()
-            embed.title = f'✅ Split Aprovado — {split.get("event_title", event_title)}'
-            embed.set_footer(text=f'Aprovado por {interaction.user.display_name}')
-            for item in self.children:
-                item.disabled = True
-            await interaction.message.edit(embed=embed, view=self)
-        except Exception as e:
-            print(f'[site_splits] erro ao editar embed de aprovação do split {self.split_id}: {e}')
-
-        try:
-            await interaction.response.send_message('✅ Aprovado! Saldos distribuídos.', ephemeral=True)
-        except Exception as e:
-            print(f'[site_splits] erro ao responder aprovação do split {self.split_id}: {e}')
 
     async def _recusar(self, interaction: discord.Interaction):
         if not is_financial(interaction.user):

@@ -13,7 +13,8 @@ from discord.ext import commands, tasks
 from datetime import datetime, timezone, timedelta
 
 import database
-from discord_utils import SEM_MENCOES, mencoes_do_ping
+from discord_utils import (SEM_MENCOES, mencoes_do_ping, cortar, add_lista,
+                           violacoes, LIM_TITULO, LIM_DESCRICAO, LIM_CAMPO)
 
 BRT = timezone(timedelta(hours=-3))
 
@@ -47,12 +48,15 @@ def build_embed(event, assignments):
         time_str = str(event["scheduled_time"])
 
     embed = discord.Embed(
-        title="Evento: " + event["title"],
+        title=cortar("Evento: " + event["title"], LIM_TITULO),
         color=discord.Color.purple()
     )
 
     if event.get("description"):
-        embed.description = "📍 " + event["description"]
+        # A descrição é um textarea livre no site — a pessoa cola briefing, lista
+        # de build, instruções. Acima de ~4090 chars o Discord recusava o post
+        # INTEIRO e o evento nunca aparecia pra guild se inscrever.
+        embed.description = cortar("📍 " + event["description"], LIM_DESCRICAO)
 
     embed.add_field(name="Horario", value=time_str, inline=True)
     embed.add_field(name="Slots", value=str(filled) + "/" + str(total), inline=True)
@@ -65,30 +69,32 @@ def build_embed(event, assignments):
         embed.add_field(name="Link", value="[Abrir](" + link + ")", inline=False)
 
     if slots:
-        col1, col2, col3 = [], [], []
         id_map = {a["slot_number"]: a["discord_id"] for a in assignments}
+        entradas = []
         for i, slot in enumerate(slots, 1):
             player     = assign_map.get(i)
             discord_id = id_map.get(i)
             slot_name  = (slot.get("name") or "Slot " + str(i))
-            if player and discord_id:
-                status = "<@" + str(discord_id) + ">"
-            else:
-                status = "`Vazio`"
-            entry = "**" + str(i) + ".** " + slot_name + "\n" + status
-            if i % 3 == 1:
-                col1.append(entry)
-            elif i % 3 == 2:
-                col2.append(entry)
-            else:
-                col3.append(entry)
+            status = "<@" + str(discord_id) + ">" if (player and discord_id) else "`Vazio`"
+            entradas.append("**" + str(i) + ".** " + slot_name + "\n" + status)
 
-        if col1:
-            embed.add_field(name="\u200b", value="\n\n".join(col1), inline=True)
-        if col2:
-            embed.add_field(name="\u200b", value="\n\n".join(col2), inline=True)
-        if col3:
-            embed.add_field(name="\u200b", value="\n\n".join(col3), inline=True)
+        # Tr\u00eas colunas ficam bonitas e continuam sendo o padr\u00e3o \u2014 mas cada coluna
+        # \u00e9 um campo, e campo estoura em 1024. Com nome de slot longo isso quebra
+        # a partir de ~60 slots, e a\u00ed o Discord recusa o post INTEIRO: o evento
+        # simplesmente n\u00e3o aparece, e o bot fica repostando a cada 10s pra sempre.
+        #
+        # Ent\u00e3o: monta em 3 colunas, confere se coube, e s\u00f3 se n\u00e3o couber cai pra
+        # lista \u00fanica em v\u00e1rios campos (que aguenta qualquer tamanho). Composi\u00e7\u00e3o
+        # de CTA mant\u00e9m o visual; ZvZ de 70 pessoas passa a funcionar.
+        colunas = [entradas[i::3] for i in range(3)]
+        cabe = all(len("\n\n".join(c)) <= LIM_CAMPO for c in colunas if c)
+
+        if cabe:
+            for c in colunas:
+                if c:
+                    embed.add_field(name="\u200b", value="\n\n".join(c), inline=True)
+        else:
+            add_lista(embed, "Composi\u00e7\u00e3o", entradas, vazio="_Sem slots._")
 
     embed.set_footer(text="ID: " + str(event["id"]) + " | XnoMercy Guild")
     return embed
@@ -154,27 +160,14 @@ class ScheduledEventsCog(commands.Cog):
             color=discord.Color.green() if not vazios else discord.Color.orange(),
         )
 
-        # Campo de embed estoura em 1024 caracteres: com 20+ slots a lista passa
-        # disso e o Discord rejeita a mensagem inteira. Quebra em varios campos.
-        def add_lista(titulo, linhas, vazio_txt):
-            if not linhas:
-                embed.add_field(name=titulo, value=vazio_txt, inline=False)
-                return
-            bloco, primeiro = '', True
-            for linha in linhas:
-                if len(bloco) + len(linha) + 1 > 1000:
-                    embed.add_field(name=titulo if primeiro else '​',
-                                    value=bloco, inline=False)
-                    bloco, primeiro = '', False
-                bloco += linha + '\n'
-            if bloco:
-                embed.add_field(name=titulo if primeiro else '​',
-                                value=bloco, inline=False)
-
-        add_lista('✅ Fecharam (' + str(len(fechados)) + ')', fechados,
-                  '_Ninguem fechou ainda._')
-        add_lista('⬜ Em aberto (' + str(len(vazios)) + ')', vazios,
-                  '_Todos os slots fechados!_')
+        # Usa o add_lista compartilhado (discord_utils): a versao local que ficava
+        # aqui cuidava do teto de 1024 por campo, mas nao do teto de 6000 do embed
+        # inteiro — com 70 slots as duas listas juntas passavam disso. O
+        # compartilhado divide o orcamento e corta avisando se nao couber.
+        add_lista(embed, '✅ Fecharam (' + str(len(fechados)) + ')', fechados,
+                  vazio='_Ninguem fechou ainda._', orcamento=2600)
+        add_lista(embed, '⬜ Em aberto (' + str(len(vazios)) + ')', vazios,
+                  vazio='_Todos os slots fechados!_', orcamento=5000)
 
         status = str(event.get('status', ''))
         if status in ('finished', 'cancelled', 'split_done'):

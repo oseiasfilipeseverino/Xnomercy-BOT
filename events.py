@@ -11,7 +11,8 @@ import database
 from permissions import can_manage_events, is_member, is_financial, has_permission
 from bank import parse_prata   # aceita 1.200.000 / 1200000 / 1,200,000
 from view_utils import LoggedView
-from discord_utils import log_channel, alertar_financeiro
+from discord_utils import (log_channel, alertar_financeiro, cortar,
+                           add_lista, LIM_TITULO, LIM_DESCRICAO)
 
 
 def fmt(v: float) -> str:
@@ -292,7 +293,10 @@ def _build_event_embed(event_id, title, creator, participants):
         lines = [f'• **{p["username"]}** — {float(p["share"] or 0):.0f}%' for p in ativos]
         if inativos:
             lines += [f'• ~~{p["username"]}~~ — 0% (excluído)' for p in inativos]
-        embed.add_field(name='📋 Lista de Participação', value='\n'.join(lines) if lines else '_Nenhum_', inline=False)
+        # add_lista (discord_utils): campo de embed estoura em 1024, e com os
+        # nomes reais da guild isso acontece por volta de 34 participantes — o
+        # Discord recusa a mensagem INTEIRA. Mesmo defeito do split.
+        add_lista(embed, '📋 Lista de Participação', lines, vazio='_Nenhum_')
     else:
         embed.add_field(name='📋 Lista', value='_Nenhum participante ainda_', inline=False)
 
@@ -421,13 +425,19 @@ class ApproveDepositView(LoggedView):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
 
+        # Defer imediato — daqui pra baixo tem transacao de banco e uma DM POR
+        # PARTICIPANTE (~250ms cada). Com 20 pessoas passava dos 3s que o Discord
+        # da pra 1a resposta; com 70 sao 18s. A prata era creditada certo, mas o
+        # lider via "a aplicacao nao respondeu".
+        await interaction.response.defer(ephemeral=True)
+
         event = database.get_event(self.event_id)
         # approve_event agora é um UPDATE condicional atômico (WHERE status='pending')
         # — a checagem antiga (ler status, depois decidir) deixava uma janela onde 2
         # cliques quase simultâneos passavam os dois e creditavam a prata em dobro.
         # Só segue se ESTE clique venceu a corrida.
         if not database.approve_event(self.event_id, interaction.user.display_name):
-            await interaction.response.send_message('❌ Já processado.', ephemeral=True)
+            await interaction.followup.send('❌ Já processado.', ephemeral=True)
             return
 
         # Crédito tudo-ou-nada numa transação só. Antes era um commit por
@@ -451,29 +461,11 @@ class ApproveDepositView(LoggedView):
                 f'Aprovado por {interaction.user.display_name}, mas o crédito falhou.\n\n'
                 f'O evento voltou para **pendente** — basta clicar em Aprovar de novo.\n'
                 f'Erro: `{str(e)[:300]}`')
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 '❌ Falha ao creditar — **nenhuma prata foi movimentada**. '
                 'O evento voltou pra pendente, pode clicar em Aprovar de novo.',
                 ephemeral=True)
             return
-
-        for p in self.participants:
-            valor = self.distribution.get(p['discord_id'], 0)
-            if valor > 0:
-                # Mention dentro do embed não notifica ninguém (Discord só pinga
-                # mention em `content`) — igual ao /adicionar_saldo, avisa por DM em
-                # vez de pingar o canal inteiro (evitando ping-storm com N participantes).
-                try:
-                    membro = interaction.guild.get_member(int(p['discord_id']))
-                    if membro:
-                        dm = discord.Embed(
-                            title='💰 Você recebeu prata!',
-                            description=f'**{fmt(valor)}** do **Evento #{self.event_id:04d} — {event["title"]}**.',
-                            color=discord.Color.gold()
-                        )
-                        await membro.send(embed=dm)
-                except Exception:
-                    pass
 
         # A prata já foi creditada acima — daqui pra baixo é só feedback visual/log,
         # então nada disso pode deixar o clique parecendo travado ou sem resposta
@@ -495,9 +487,29 @@ class ApproveDepositView(LoggedView):
             print(f'[events] erro ao logar aprovação do evento #{self.event_id}: {e}')
 
         try:
-            await interaction.response.send_message('✅ Aprovado! Saldos distribuídos.', ephemeral=True)
+            await interaction.followup.send('✅ Aprovado! Saldos distribuídos.', ephemeral=True)
         except Exception as e:
             print(f'[events] erro ao responder aprovação do evento #{self.event_id}: {e}')
+
+        # DMs por ULTIMO: sao lentas (~250ms cada) e nao podem atrasar a
+        # resposta ao clique. Ver o defer la em cima.
+        for p in self.participants:
+            valor = self.distribution.get(p['discord_id'], 0)
+            if valor > 0:
+                # Mention dentro do embed não notifica ninguém (Discord só pinga
+                # mention em `content`) — igual ao /adicionar_saldo, avisa por DM em
+                # vez de pingar o canal inteiro (evitando ping-storm com N participantes).
+                try:
+                    membro = interaction.guild.get_member(int(p['discord_id']))
+                    if membro:
+                        dm = discord.Embed(
+                            title='💰 Você recebeu prata!',
+                            description=f'**{fmt(valor)}** do **Evento #{self.event_id:04d} — {event["title"]}**.',
+                            color=discord.Color.gold()
+                        )
+                        await membro.send(embed=dm)
+                except Exception:
+                    pass
 
         # Resumo no canal do próprio evento — quem participou não tem acesso ao
         # canal financeiro (staff-only) então não via se/quanto recebeu sem
@@ -512,15 +524,14 @@ class ApproveDepositView(LoggedView):
                         if valor > 0:
                             lines.append(f'• <@{p["discord_id"]}> → **{fmt(valor)} prata**')
                     resumo = discord.Embed(
-                        title=f'✅ Loot Aprovado — Evento #{self.event_id:04d}',
-                        description=f'**{event["title"]}**',
+                        title=cortar(f'✅ Loot Aprovado — Evento #{self.event_id:04d}', LIM_TITULO),
+                        description=cortar(f'**{event["title"]}**', LIM_DESCRICAO),
                         color=discord.Color.green()
                     )
-                    resumo.add_field(
-                        name='💰 Distribuição',
-                        value='\n'.join(lines) if lines else 'Ninguém recebeu prata nessa divisão.',
-                        inline=False
-                    )
+                    # add_lista: com 25+ participantes esta lista passava dos 1024
+                    # e o resumo do deposito nao era postado. Com 70 dá 3.219.
+                    add_lista(resumo, '💰 Distribuição', lines,
+                              vazio='Ninguém recebeu prata nessa divisão.')
                     resumo.set_footer(text=f'Aprovado por {interaction.user.display_name}')
                     await event_ch.send(embed=resumo)
             except Exception as e:

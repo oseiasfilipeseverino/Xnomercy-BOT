@@ -66,7 +66,10 @@ def build_embed(event, assignments):
     # ocupavam espaco e empurravam a composicao pra baixo.
     link = (event.get("link_url") or "").strip()
     if link:
-        embed.add_field(name="Link", value="[Abrir](" + link + ")", inline=False)
+        # URL crua em vez de "[Abrir](url)": o Discord linka sozinho, e assim dá
+        # pra ver PRA ONDE vai antes de clicar (e copiar sem abrir). O cortar é
+        # só teto de seguranca — URL nesse tamanho ja nao funcionaria mesmo.
+        embed.add_field(name="Link", value=cortar(link, LIM_CAMPO), inline=False)
 
     if slots:
         id_map = {a["slot_number"]: a["discord_id"] for a in assignments}

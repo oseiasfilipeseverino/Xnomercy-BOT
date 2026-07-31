@@ -12,6 +12,7 @@ import re
 import sys
 import database
 import bank
+import discord_utils as _du
 
 falhas = []
 
@@ -391,26 +392,35 @@ import discord as _d
 
 _mau = _d.Embed(title='T' * 300, description='D')
 _mau.add_field(name='x', value='V' * 2000, inline=False)
-_achou = site_splits._violacoes(_mau)
+_achou = _du.violacoes(_mau)
 checar(any('title' in v for v in _achou), f'o detector nao viu o title de 300 chars: {_achou}')
 checar(any('campo' in v for v in _achou), f'o detector nao viu o campo de 2000 chars: {_achou}')
-checar(not site_splits._violacoes(site_splits._build_embed(_split_falso(20))),
+checar(not _du.violacoes(site_splits._build_embed(_split_falso(20))),
        'embed normal nao pode ser acusado de violacao')
 print(f'  detector acusa embed invalido: {_achou}')
 
-# Se o completo nao couber, o enxuto tem que caber SEMPRE — e' o que garante que
-# o split chega pra aprovar mesmo no pior caso.
-for kw in ({'n': 20}, {'n': 500, 'titulo': 'X' * 5000}, {'n': 1, 'titulo': ''}):
-    e = site_splits._embed_minimo(_split_falso(**kw), 'motivo ' * 200)
-    checar(not site_splits._violacoes(e),
-           f'o embed enxuto tem que caber sempre, mas estourou com {kw}')
-print('  embed enxuto de fallback cabe em todos os casos')
+# Se a lista nao couber, add_lista corta E avisa — nunca deixa o embed
+# invalido, que era o que fazia a mensagem inteira ser recusada.
+for _n in (20, 500, 5000):
+    _e = site_splits._build_embed(_split_falso(_n))
+    checar(not _du.violacoes(_e), f'split com {_n} participantes estourou')
+checar(any('e mais' in f.value for f in site_splits._build_embed(_split_falso(500)).fields),
+       'acima do teto tem que avisar quantos ficaram de fora')
+print('  add_lista corta com aviso em vez de invalidar o embed')
 
-# até o teto, ninguém pode ser perdido no fatiamento
-e = site_splits._build_embed(_split_falso(100))
+# A guild vai passar de 70 nos pings. Até 80 ninguém pode ser perdido — o teto
+# real é 81, limitado pelos 6 campos fixos do embed (loot, reparo, taxas...).
+# Acima disso corta COM aviso, que é o comportamento certo: aprovar continua
+# funcionando e a lista completa fica no site.
+e = site_splits._build_embed(_split_falso(80))
 juntos = '\n'.join(f.value for f in e.fields)
-perdidos = [i for i in range(1, 101) if str(700000000000000000 + i) not in juntos]
-checar(not perdidos, f'participantes perdidos no fatiamento: {perdidos[:5]}')
+perdidos = [i for i in range(1, 81) if str(700000000000000000 + i) not in juntos]
+checar(not perdidos, f'participantes perdidos com 80 (guild vai a 70): {perdidos[:5]}')
+
+e200 = site_splits._build_embed(_split_falso(200))
+checar(any('e mais' in f.value for f in e200.fields),
+       'acima do teto tem que avisar quantos ficaram de fora, nao sumir com eles')
+checar(not _du.violacoes(e200), 'mesmo cortando, o embed tem que continuar valido')
 
 # acima do teto, corta E avisa — nunca falha calado
 e = site_splits._build_embed(_split_falso(300))
@@ -429,7 +439,6 @@ secao('TODOS os embeds do fluxo de evento aguentam a guild crescendo')
 # fluxo de evento estouravam os limites do Discord — cada um seria um "nao
 # chegou" diferente. Este bloco fixa o contrato: qualquer tamanho tem que caber.
 import discord as _dd
-import discord_utils as _du
 import scheduled_events as _se
 
 _NOMES = ['[REC]⚔️LKMAJOR', '[🌸][Officer]SPOKS777 Sombra', '[STAFF]LapreoTheKing']

@@ -137,6 +137,25 @@ def init_db():
             discord_id TEXT NOT NULL, username TEXT NOT NULL,
             ticket_type TEXT NOT NULL, status TEXT DEFAULT 'open',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+        # Índices das consultas quentes. As tabelas de preço e energia já tinham;
+        # as do fluxo de evento não. thread_id é consultada TODA vez que alguém
+        # escreve em qualquer tópico do servidor, e scheduled_event_id a cada
+        # inscrição — sem índice é varredura completa. Hoje são poucas centenas de
+        # linhas e não muda nada, mas transactions cresce ~29 mil linhas/ano, e
+        # quando pesar vai parecer "o bot está lento" sem causa aparente.
+        for idx, tbl, col in (
+            ('idx_sched_thread',  'scheduled_events',  'thread_id'),
+            ('idx_slot_event',    'slot_assignments',  'scheduled_event_id'),
+            ('idx_tx_discord',    'transactions',      'discord_id'),
+            ('idx_perm_name',     'permissions',       'permission'),
+        ):
+            try:
+                c.execute(f'CREATE INDEX IF NOT EXISTS {idx} ON {tbl} ({col})')
+            except Exception as e:
+                # Índice ausente degrada desempenho, não quebra nada — não pode
+                # impedir o bot de subir.
+                print(f'[DB] indice {idx} nao criado: {e!r}')
+
         # Um ticket aberto por pessoa+tipo. É o que faz a reserva em
         # reservar_ticket ser atômica: o 2º clique perde no banco em vez de
         # criar um canal órfão.

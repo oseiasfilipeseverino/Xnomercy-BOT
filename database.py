@@ -337,7 +337,8 @@ def get_all_permissions():
         for row in c.fetchall():
             result.setdefault(row[0], []).append(row[1])
         return result
-    except Exception:
+    except Exception as e:
+        print(f'[get_all_permissions] {e!r}')
         return {}
     finally:
         release(conn)
@@ -766,7 +767,8 @@ def get_ticket_message(ticket_type):
         c.execute('SELECT ticket_type, title, message FROM ticket_messages WHERE ticket_type=%s', (ticket_type,))
         row = c.fetchone()
         return {'ticket_type': row[0], 'title': row[1], 'message': row[2]} if row else None
-    except Exception:
+    except Exception as e:
+        print(f'[get_ticket_message] {e!r}')
         return None
     finally:
         release(conn)
@@ -807,7 +809,8 @@ def get_ticket_type_by_channel(channel_id):
         c.execute('SELECT ticket_type FROM tickets WHERE channel_id=%s', (channel_id,))
         row = c.fetchone()
         return row[0] if row else None
-    except Exception:
+    except Exception as e:
+        print(f'[get_ticket_type_by_channel] {e!r}')
         return None
     finally:
         release(conn)

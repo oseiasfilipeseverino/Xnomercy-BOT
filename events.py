@@ -690,7 +690,9 @@ class EventsCog(commands.Cog):
             w     = float(p['share'] or 100)
             valor = distribution[p['discord_id']]
             lines.append(f'• <@{p["discord_id"]}> ({w:.0f}%) → **{fmt(valor)} prata**')
-        embed.add_field(name='💰 Distribuição Proporcional', value='\n'.join(lines), inline=False)
+        # add_lista: com 70 players esta lista passa dos 1024 e o Discord recusa
+        # a mensagem inteira — /simular_evento nao mostraria nada.
+        add_lista(embed, '💰 Distribuição Proporcional', lines)
         embed.set_footer(text='Use /depositar_evento para enviar para aprovação')
 
         await interaction.response.send_message(embed=embed)
@@ -773,7 +775,9 @@ class EventsCog(commands.Cog):
         ativos = [p for p in participants if float(p['share'] or 0) > 0]
         qtd_txt = str(len(ativos)) if len(ativos) == len(participants) else f'{len(ativos)} (+{len(participants)-len(ativos)} sem %)'
         embed.add_field(name='👥 Participantes', value=qtd_txt, inline=True)
-        embed.add_field(name='💰 Distribuição',  value='\n'.join(lines),                      inline=False)
+        # add_lista: este e' o embed de APROVACAO, com os botoes. Se estourar, o
+        # deposito nao chega pra aprovar — mesma falha do split.
+        add_lista(embed, '💰 Distribuição', lines)
 
         view = ApproveDepositView(event['id'], distribution, [dict(p) for p in participants])
         if fin_ch:

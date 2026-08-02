@@ -661,7 +661,8 @@ class BankCog(commands.Cog):
             try:
                 await member.move_to(destino)
                 moved += 1
-            except Exception:
+            except Exception as e:
+                print(f'[mover membro] {e!r}')
                 failed += 1
 
         msg = f'✅ **{moved} player(s)** movidos de **{origem.name}** → **{destino.name}**!'

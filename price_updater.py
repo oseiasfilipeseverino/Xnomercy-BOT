@@ -356,7 +356,8 @@ def _get_item_name(item_id):
             c.execute('SELECT name_pt FROM items_catalog WHERE unique_name=%s', (item_id,))
             row = c.fetchone()
             return row[0] if row and row[0] else item_id
-    except Exception:
+    except Exception as e:
+        print(f'[nome_pt] {e!r}')
         return item_id
 
 

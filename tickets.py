@@ -209,7 +209,8 @@ class TicketButton(discord.ui.Button):
             # Perdeu a reserva: ou já tinha um aberto, ou foi o 2º clique.
             try:
                 existing = database.get_open_ticket(str(user.id), self.ticket_type)
-            except Exception:
+            except Exception as e:
+                print(f'[ticket aberto] {e!r}')
                 existing = None
             mention = 'já existe'
             if existing and not existing['channel_id'].startswith(database.RESERVA_PREFIXO):

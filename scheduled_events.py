@@ -29,7 +29,8 @@ INSTRUCTIONS = (
 def parse_slots(slots_json):
     try:
         return json.loads(slots_json)
-    except Exception:
+    except Exception as e:
+        print(f'[parse_slots] {e!r}')
         return []
 
 
@@ -44,7 +45,8 @@ def build_embed(event, assignments):
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=BRT)
         time_str = dt.astimezone(BRT).strftime("%d/%m/%Y as %H:%M BRT")
-    except Exception:
+    except Exception as e:
+        print(f'[hora do evento] {e!r}')
         time_str = str(event["scheduled_time"])
 
     embed = discord.Embed(
@@ -318,7 +320,8 @@ class ScheduledEventsCog(commands.Cog):
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=BRT)
                 time_str = dt.astimezone(BRT).strftime("%d/%m/%Y as %H:%M BRT")
-            except Exception:
+            except Exception as e:
+                print(f'[hora do evento] {e!r}')
                 time_str = str(event["scheduled_time"])
 
             # Monta o ping
@@ -466,6 +469,14 @@ class ScheduledEventsCog(commands.Cog):
                 except Exception: pass
                 try: await message.delete()
                 except Exception: pass
+                return
+            elif result == "erro":
+                # falha de banco NAO pode virar "ocupado" — o jogador ficaria
+                # tentando outro slot achando que o problema e' ele
+                await message.reply(
+                    "Nao consegui registrar agora (falha no banco). Tente de novo em instantes.",
+                    mention_author=False
+                )
                 return
             else:
                 reply = await message.reply("Slot **" + str(num) + "** ja esta ocupado!", mention_author=False)

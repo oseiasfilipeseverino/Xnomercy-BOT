@@ -555,6 +555,131 @@ checar('response.defer' in re.search(r'async def reabrir\(self.*?(?=\n    async 
 print('  botao Reabrir registrado e com defer')
 
 
+
+secao('SQL literal — sintaxe intacta')
+# O bug do COALESCE: `'... COALESCE(link_url, '') '` — o '' fechava a string do
+# Python e o SQL ia pro banco como "COALESCE(link_url, )". Invalido. Como o
+# except devolvia [] sem log, o sintoma foi "os templates foram apagados".
+#
+# Valida o valor JA CONCATENADO de cada SQL literal, que e' o que chega no banco
+# — no codigo-fonte a linha parece certa, o estrago so aparece depois de montada.
+import ast as _ast
+
+
+def _defeitos(sql):
+    s = ' '.join(sql.split())
+    p = []
+    if s.count('(') != s.count(')'):
+        p.append(f"parenteses {s.count('(')}x{s.count(')')}")
+    if s.count("'") % 2:
+        p.append('aspas simples impares')
+    for pad, desc in ((r',\s*\)', 'argumento faltando'), (r'\(\s*,', '( seguido de ,'),
+                      (r',\s*,', 'virgula dupla')):
+        if re.search(pad, s):
+            p.append(desc)
+    for kw in ('FROM', 'WHERE', 'VALUES', 'ORDER BY', 'GROUP BY', 'LIMIT'):
+        if re.search(rf'[A-Za-z0-9_]{kw}', s) or re.search(rf'{kw}[A-Za-z0-9_]', s):
+            p.append(f'{kw} colado (falta espaco na concatenacao)')
+            break
+    if re.search(r"'%s'", s):
+        p.append("'%s' entre aspas — vira texto, nao parametro")
+    return p
+
+
+_arv = _ast.parse(open('database.py', encoding='utf-8').read())
+_n = 0
+for _no in _ast.walk(_arv):
+    if not (isinstance(_no, _ast.Call) and isinstance(_no.func, _ast.Attribute)
+            and _no.func.attr == 'execute' and _no.args):
+        continue
+    _a = _no.args[0]
+    if not (isinstance(_a, _ast.Constant) and isinstance(_a.value, str)):
+        continue
+    if not any(k in _a.value.upper() for k in
+               ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER')):
+        continue
+    _n += 1
+    _d = _defeitos(_a.value)
+    checar(not _d, f'database.py:{_no.lineno} SQL invalido ({_d}): {" ".join(_a.value.split())[:70]}')
+
+# o validador so vale se ACUSA o bug real — teste que so ve caso bom nao prova nada
+checar(_defeitos("SELECT COALESCE(x, ) FROM t"), 'o validador nao pegou o bug do COALESCE')
+checar(_defeitos("SELECT a FROM t WHERE x='ab"), 'nao pegou aspas sem fechar')
+checar(not _defeitos("SELECT COUNT(*), NOW() FROM t WHERE a=%s"),
+       'acusou SQL valido (NOW()/COUNT(*) tem parenteses vazio legitimo)')
+print(f'  {_n} comandos SQL conferidos; validador acusa quebrado e aceita valido')
+
+
+secao('falha de banco nao pode virar resposta normal')
+# A outra metade do bug do COALESCE: sem log, "deu erro" e "nao tem nada" ficam
+# indistinguiveis. Pior caso encontrado: assign_slot devolvia 'already_taken'
+# pra QUALQUER falha, entao banco fora do ar dizia "slot ja esta ocupado".
+_LIMPEZA = ('pass', 'try', 'except', 'finally', 'conn.close()', 'conn.rollback()',
+            'c.close()', 'cur.close()')
+
+
+def _engole(h):
+    t = _ast.unparse(h)
+    if any(k in t for k in ('print', 'raise', 'log', 'str(e)')):
+        return False   # a falha aparece em algum lugar
+    linhas = [ln.strip().rstrip(':')
+              for ln in _ast.unparse(_ast.Module(body=h.body, type_ignores=[])).splitlines()
+              if ln.strip()]
+    return not all(any(ln == p or ln.startswith(p) for p in _LIMPEZA) for ln in linhas)
+
+
+_mudo = []
+for _no in _ast.walk(_ast.parse(open('database.py', encoding='utf-8').read())):
+    if not isinstance(_no, _ast.FunctionDef) or 'execute(' not in _ast.unparse(_no):
+        continue
+    for _h in _ast.walk(_no):
+        if isinstance(_h, _ast.ExceptHandler) and _engole(_h):
+            _mudo.append(f'database.py:{_h.lineno} {_no.name}')
+checar(not _mudo, f'except de banco engolindo a falha: {_mudo}')
+
+# `e` usado sem `as e` estoura NameError justo na hora do erro — pior momento
+# possivel, porque troca a falha original por outra e some com o motivo. Vale pro
+# projeto inteiro, nao so pro modulo de banco.
+import pathlib as _pl
+_sem_bind = []
+for _p in sorted(_pl.Path('.').glob('*.py')):
+    for _h in _ast.walk(_ast.parse(_p.read_text(encoding='utf-8'))):
+        if (isinstance(_h, _ast.ExceptHandler) and _h.name is None
+                and any(k in _ast.unparse(_h) for k in ('{e!r}', '{e}', 'repr(e)', 'str(e)'))):
+            _sem_bind.append(f'{_p.name}:{_h.lineno}')
+checar(not _sem_bind, f'handler usa `e` sem capturar: {_sem_bind}')
+
+# o detector so vale se ACUSA um caso mudo e ACEITA os legitimos
+_ruim = _ast.parse('''
+try:
+    c.execute('x')
+except Exception:
+    return []
+''').body[0]
+checar(_engole(_ruim.handlers[0]), 'o detector nao pegou um except que devolve [] calado')
+
+_bom = _ast.parse('''
+try:
+    c.execute('x')
+except Exception:
+    conn.rollback()
+    raise
+''').body[0]
+checar(not _engole(_bom.handlers[0]), 'o detector acusou rollback+raise, que esta correto')
+print('   nenhum handler de banco engole a falha; detector aferido')
+
+# assign_slot: so a colisao do indice unico pode virar 'already_taken'
+_src = open('database.py', encoding='utf-8').read()
+_fn = _src[_src.index('def assign_slot('):]
+_fn = _fn[:_fn.index(chr(10) + 'def ', 1)]
+checar('IntegrityError' in _fn,
+       "assign_slot precisa separar IntegrityError — senao banco fora do ar vira 'slot ocupado'")
+checar("return 'erro'" in _fn, 'assign_slot precisa de um retorno proprio pra falha real')
+checar('"erro"' in open('scheduled_events.py', encoding='utf-8').read(),
+       'quem chama assign_slot tem que tratar o retorno de falha')
+print("   assign_slot: colisao -> 'already_taken', falha real -> 'erro' avisado ao jogador")
+
+
 secao('alerta de falha de crédito — a liderança precisa saber')
 # As falhas de credito so apareciam como print no log da Railway, que ninguem le.
 # O alerta nao pode explodir nem pingar o servidor, e tem que degradar em silencio

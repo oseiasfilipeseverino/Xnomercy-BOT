@@ -237,7 +237,8 @@ class AddPlayerModal(discord.ui.Modal, title='Adicionar Player'):
     async def on_submit(self, interaction: discord.Interaction):
         try:
             member = await interaction.guild.fetch_member(int(self.user_id.value))
-        except Exception:
+        except Exception as e:
+            print(f'[fetch_member] {e!r}')
             await interaction.response.send_message('❌ Membro não encontrado.', ephemeral=True)
             return
 

@@ -272,7 +272,8 @@ def get_config(key):
         c.execute('SELECT value FROM guild_config WHERE key=%s', (key,))
         row = c.fetchone()
         return row[0] if row else ''
-    except Exception:
+    except Exception as e:
+        print(f'[get_config] {key}: {e!r}')
         return ''
     finally:
         release(conn)
@@ -364,7 +365,8 @@ def get_player(discord_id):
         c.execute('SELECT discord_id, username, balance FROM players WHERE discord_id=%s', (discord_id,))
         row = c.fetchone()
         return {'discord_id': row[0], 'username': row[1], 'balance': float(row[2])} if row else None
-    except Exception:
+    except Exception as e:
+        print(f'[get_player] {e!r}')
         return None
     finally:
         release(conn)
@@ -584,7 +586,8 @@ def get_event(event_id):
         c = conn.cursor()
         c.execute('SELECT * FROM events WHERE id=%s', (event_id,))
         return _row_to_dict(c.fetchone(), EVENT_KEYS)
-    except Exception:
+    except Exception as e:
+        print(f'[get_event] {e!r}')
         return None
     finally:
         release(conn)
@@ -595,7 +598,8 @@ def get_event_by_channel(channel_id):
         c = conn.cursor()
         c.execute('SELECT * FROM events WHERE channel_id=%s ORDER BY id DESC LIMIT 1', (channel_id,))
         return _row_to_dict(c.fetchone(), EVENT_KEYS)
-    except Exception:
+    except Exception as e:
+        print(f'[get_event_by_channel] {e!r}')
         return None
     finally:
         release(conn)
@@ -606,7 +610,8 @@ def get_active_events(guild_id):
         c = conn.cursor()
         c.execute("SELECT * FROM events WHERE guild_id=%s AND status='active' ORDER BY id DESC", (guild_id,))
         return [_row_to_dict(r, EVENT_KEYS) for r in c.fetchall()]
-    except Exception:
+    except Exception as e:
+        print(f'[get_active_events] {e!r}')
         return []
     finally:
         release(conn)
@@ -704,7 +709,8 @@ def add_event_participant(event_id, discord_id, username, weight=100.0):
             c.execute('INSERT INTO event_participants (event_id,discord_id,username,share) VALUES (%s,%s,%s,%s)', (event_id, discord_id, username, weight))
             conn.commit()
             return True
-        except pg8000.dbapi.IntegrityError:
+        except pg8000.dbapi.IntegrityError as e:
+            print(f'[add_event_participant] ja existia, atualizando nome: {e!r}')
             conn.rollback()
             c.execute('UPDATE event_participants SET username=%s WHERE event_id=%s AND discord_id=%s', (username, event_id, discord_id))
             conn.commit()
@@ -733,7 +739,8 @@ def get_event_participants(event_id):
         c = conn.cursor()
         c.execute('SELECT * FROM event_participants WHERE event_id=%s', (event_id,))
         return [_row_to_dict(r, PART_KEYS) for r in c.fetchall()]
-    except Exception:
+    except Exception as e:
+        print(f'[get_event_participants] {e!r}')
         return []
     finally:
         release(conn)
@@ -976,7 +983,8 @@ def get_welcome_config():
         c.execute('SELECT id, title, message, channel_id FROM welcome_config WHERE id=1')
         row = c.fetchone()
         return {'id': row[0], 'title': row[1], 'message': row[2], 'channel_id': row[3]} if row else None
-    except Exception:
+    except Exception as e:
+        print(f'[get_welcome_config] {e!r}')
         return None
     finally:
         release(conn)
@@ -1007,7 +1015,8 @@ def get_event_templates():
         c = conn.cursor()
         c.execute('SELECT id, name, title, description, slots FROM event_templates ORDER BY name')
         return [{'id':r[0],'name':r[1],'title':r[2],'description':r[3],'slots':r[4]} for r in c.fetchall()]
-    except Exception:
+    except Exception as e:
+        print(f'[get_event_templates] {e!r}')
         return []
     finally:
         release(conn)
@@ -1400,7 +1409,8 @@ def get_member_departure(departure_id):
         r = c.fetchone()
         if not r: return None
         return {'id': r[0], 'discord_id': r[1], 'username': r[2], 'balance': r[3], 'status': r[4]}
-    except Exception:
+    except Exception as e:
+        print(f'[get_member_departure] {e!r}')
         return None
     finally:
         release(conn)
@@ -1493,9 +1503,17 @@ def assign_slot(event_id, slot_number, discord_id, username):
                       (event_id, slot_number, discord_id, username))
             conn.commit()
             return 'ok'
-        except Exception:
+        except pg8000.dbapi.IntegrityError as e:
+            # colisão no índice único = alguém pegou o slot primeiro. Só ESTE
+            # caso é "ocupado"; qualquer outro erro tem que aparecer, senão uma
+            # queda do banco vira "slot já está ocupado" pro jogador.
+            print(f'[assign_slot] slot {slot_number} do evento {event_id} ja ocupado: {e!r}')
             conn.rollback()
             return 'already_taken'
+        except Exception as e:
+            print(f'[assign_slot] evento={event_id} slot={slot_number} {e!r}')
+            conn.rollback()
+            return 'erro'
     finally:
         release(conn)
 

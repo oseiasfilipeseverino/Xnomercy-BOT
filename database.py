@@ -800,6 +800,71 @@ def close_ticket_db(channel_id):
     finally:
         release(conn)
 
+def reopen_ticket_db(channel_id):
+    """Volta o ticket pra 'open'. Devolve False se a pessoa ja tem outro aberto.
+
+    O indice parcial unico (discord_id, ticket_type) WHERE status='open' e' quem
+    decide: se o dono ja abriu outro ticket do mesmo tipo depois deste ser
+    fechado, reabrir criaria dois abertos e o UPDATE viola a restricao. Melhor
+    recusar aqui do que deixar o banco em estado que a reserva nao previu."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE tickets SET status='open' WHERE channel_id=%s AND status='closed'",
+                  (channel_id,))
+        ok = c.rowcount > 0
+        conn.commit()
+        return ok
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f'[reopen_ticket_db] {channel_id}: {e!r}')
+        return False
+    finally:
+        release(conn)
+
+
+def get_closed_tickets():
+    """Tickets fechados, pro /arquivar saber quais canais apagar."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT channel_id, username, ticket_type FROM tickets "
+                  "WHERE status='closed' AND channel_id <> '' ORDER BY id")
+        return [{'channel_id': r[0], 'username': r[1], 'ticket_type': r[2]}
+                for r in c.fetchall()]
+    except Exception as e:
+        print(f'[get_closed_tickets] {e!r}')
+        return []
+    finally:
+        release(conn)
+
+
+def delete_tickets(channel_ids):
+    """Apaga os registros dos tickets arquivados. Devolve quantos saíram."""
+    if not channel_ids:
+        return 0
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        ph = ','.join(['%s'] * len(channel_ids))
+        c.execute(f'DELETE FROM tickets WHERE channel_id IN ({ph})', list(channel_ids))
+        n = c.rowcount
+        conn.commit()
+        return n
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f'[delete_tickets] {e!r}')
+        return 0
+    finally:
+        release(conn)
+
+
 def get_ticket_type_by_channel(channel_id):
     """Tipo real do ticket, registrado no banco na criação — usado no fechamento
     em vez de adivinhar pelo nome do canal (que quebra se alguém renomear)."""

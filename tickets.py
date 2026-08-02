@@ -9,6 +9,7 @@ from discord import app_commands
 from discord.ext import commands
  
 import database
+from discord_utils import SEM_MENCOES, log_channel
 from permissions import is_financial
 from view_utils import LoggedView
 
@@ -28,6 +29,71 @@ def get_ticket_category(guild: discord.Guild, ticket_type: str) -> discord.Categ
     return None
  
  
+class ReopenTicketView(LoggedView):
+    """Substitui o botao Fechar depois que o ticket e' arquivado.
+
+    Antes o Fechar so ficava desabilitado e o canal ficava trancado pra sempre —
+    se alguem fechasse por engano, ou o assunto voltasse, so um Lider mexendo nas
+    permissoes do canal na mao resolvia."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label='🔓 Reabrir Ticket', style=discord.ButtonStyle.success,
+                       custom_id='xnm:reabrir_ticket')
+    async def reabrir(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_financial(interaction.user):
+            await interaction.response.send_message(
+                '❌ Apenas Líder ou Vice Líder pode reabrir tickets.', ephemeral=True)
+            return
+
+        # Mexer em canal e' chamada de rede; defer antes pra nao correr contra os 3s.
+        await interaction.response.defer(ephemeral=True)
+
+        if not database.reopen_ticket_db(str(interaction.channel.id)):
+            await interaction.followup.send(
+                '❌ Não consegui reabrir. Provavelmente esta pessoa já tem outro '
+                'ticket aberto deste tipo — feche o outro primeiro.', ephemeral=True)
+            return
+
+        guild = interaction.guild
+        try:
+            # Devolve a escrita a quem tinha acesso e tira o ✅ do nome.
+            overwrites = dict(interaction.channel.overwrites)
+            for alvo, ow in overwrites.items():
+                if alvo == guild.default_role:
+                    continue
+                overwrites[alvo] = discord.PermissionOverwrite(
+                    read_messages=ow.read_messages, send_messages=True)
+
+            # Volta pra categoria original do tipo (mesmo helper da criação). Se
+            # não estiver configurada, fica onde está — melhor que sumir.
+            tipo = database.get_ticket_type_by_channel(str(interaction.channel.id))
+            categoria = (get_ticket_category(guild, tipo) if tipo else None) \
+                or interaction.channel.category
+
+            await interaction.channel.edit(
+                category=categoria,
+                overwrites=overwrites,
+                name=interaction.channel.name.replace('✅│', '', 1),
+            )
+        except Exception as e:
+            print(f'[tickets] erro ao reabrir canal {interaction.channel.id}: {e!r}')
+            await interaction.followup.send(
+                '⚠️ O ticket voltou pra aberto no banco, mas não consegui destravar '
+                'o canal. Avise a liderança.', ephemeral=True)
+            return
+
+        try:
+            await interaction.message.edit(view=CloseTicketView())
+        except Exception as e:
+            print(f'[tickets] erro ao restaurar botao Fechar: {e!r}')
+
+        await interaction.channel.send(
+            f'🔓 Ticket reaberto por **{interaction.user.display_name}**.',
+            allowed_mentions=SEM_MENCOES)
+        await interaction.followup.send('✅ Ticket reaberto.', ephemeral=True)
+
+
 class CloseTicketView(LoggedView):
     def __init__(self):
         super().__init__(timeout=None)
@@ -79,10 +145,10 @@ class CloseTicketView(LoggedView):
                     except Exception:
                         pass
  
-            # Remove botão de fechar e bloqueia envio de mensagens
-            for item in self.children:
-                item.disabled = True
-            await interaction.message.edit(view=self)
+            # Troca o Fechar pelo Reabrir. Antes o botao so ficava desabilitado e
+            # o canal ficava trancado pra sempre — fechar por engano exigia um
+            # Lider ajustando permissao na mao.
+            await interaction.message.edit(view=ReopenTicketView())
  
             # Move para arquivo
             overwrites = dict(interaction.channel.overwrites)
@@ -266,6 +332,74 @@ class TicketsCog(commands.Cog):
         bot.add_view(SaquePanel())
         bot.add_view(TicketPanel())
         bot.add_view(CloseTicketView())
+        # Sem registrar aqui, o botao Reabrir das mensagens antigas fica mudo
+        # depois de um restart do bot — clicar nao faz nada, sem erro nem aviso.
+        bot.add_view(ReopenTicketView())
+
+    @app_commands.command(
+        name='arquivar',
+        description='[LÍDER] Apaga os canais dos tickets já fechados.')
+    @app_commands.describe(
+        confirmar='Digite APAGAR para confirmar — a ação não tem volta.')
+    async def arquivar(self, interaction: discord.Interaction, confirmar: str = ''):
+        if not is_financial(interaction.user):
+            await interaction.response.send_message(
+                '❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            return
+
+        fechados = database.get_closed_tickets()
+        if not fechados:
+            await interaction.response.send_message(
+                'ℹ️ Nenhum ticket fechado pra arquivar.', ephemeral=True)
+            return
+
+        # Confirmacao por digitacao: apagar canal e' irreversivel e leva junto todo
+        # o historico da conversa. Um clique errado nao pode bastar.
+        if confirmar.strip().upper() != 'APAGAR':
+            exemplos = ', '.join(f'{t["username"]} ({t["ticket_type"]})'
+                                 for t in fechados[:5])
+            await interaction.response.send_message(
+                f'⚠️ Isso vai **apagar {len(fechados)} canal(is)** de ticket fechado, '
+                f'com todo o histórico — não tem volta.\n'
+                f'Exemplos: {exemplos}{"…" if len(fechados) > 5 else ""}\n\n'
+                f'Pra confirmar, rode `/arquivar confirmar:APAGAR`.',
+                ephemeral=True)
+            return
+
+        # Apagar N canais e' N chamadas ao Discord (~300ms cada): defer antes.
+        await interaction.response.defer(ephemeral=True)
+
+        apagados, nao_achados, erros = [], 0, 0
+        for t in fechados:
+            ch = interaction.guild.get_channel(int(t['channel_id'])) \
+                if t['channel_id'].isdigit() else None
+            if ch is None:
+                # Canal ja nao existe (apagado na mao) — o registro sai junto,
+                # senao ficaria pra sempre na lista de fechados.
+                nao_achados += 1
+                apagados.append(t['channel_id'])
+                continue
+            try:
+                await ch.delete(reason=f'/arquivar por {interaction.user.display_name}')
+                apagados.append(t['channel_id'])
+            except Exception as e:
+                erros += 1
+                print(f'[tickets] erro ao apagar canal {t["channel_id"]}: {e!r}')
+
+        # So remove do banco o que realmente saiu — o que falhou continua na
+        # lista pra tentar de novo.
+        removidos = database.delete_tickets(apagados)
+
+        resumo = f'🗑️ **{removidos}** ticket(s) arquivado(s).'
+        if nao_achados:
+            resumo += f'\n• {nao_achados} canal(is) já não existia(m) — registro limpo.'
+        if erros:
+            resumo += f'\n• ⚠️ {erros} falhou/falharam (sem permissão?) e continuam na lista.'
+        await interaction.followup.send(resumo, ephemeral=True)
+
+        await log_channel(
+            interaction.guild,
+            f'🗑️ **{interaction.user.display_name}** arquivou {removidos} ticket(s) fechado(s).')
  
     @app_commands.command(
         name='postar_painel',

@@ -492,6 +492,69 @@ for arq, fn in (('site_splits.py', '_aprovar'), ('events.py', 'aprovar')):
 print('  os 2 botoes de aprovacao: defer + resposta antes das DMs')
 
 
+secao('reabrir e arquivar ticket')
+# Reabrir precisa recusar quando a pessoa ja abriu outro do mesmo tipo — o indice
+# parcial unico barra, e a funcao tem que devolver False em vez de estourar.
+# Arquivar apaga canal COM historico: so pode remover do banco o que saiu mesmo.
+
+class _ConnTicket(ConexaoFalsa):
+    def __init__(self, rc=1, estourar=False):
+        super().__init__()
+        self._rc, self._estourar = rc, estourar
+
+    def execute(self, sql, args=None):
+        if self._estourar:
+            raise RuntimeError('viola indice unico: ja tem ticket aberto')
+        self.executados.append((' '.join(sql.split())[:70], args))
+
+    def fetchall(self):
+        return [('111', 'ana', 'suporte'), ('222', 'bob', 'saque')]
+
+    @property
+    def rowcount(self):
+        return self._rc
+
+
+com_conexao_falsa(_ConnTicket(rc=1))
+checar(database.reopen_ticket_db('111') is True, 'ticket fechado tem que reabrir')
+com_conexao_falsa(_ConnTicket(rc=0))
+checar(database.reopen_ticket_db('111') is False, 'ticket ja aberto nao pode "reabrir"')
+com_conexao_falsa(_ConnTicket(estourar=True))
+checar(database.reopen_ticket_db('111') is False,
+       'colisao com outro ticket aberto tem que devolver False, nao estourar')
+restaurar()
+print('  reopen recusa quando a pessoa ja tem outro aberto, sem estourar')
+
+com_conexao_falsa(_ConnTicket())
+checar(len(database.get_closed_tickets()) == 2, 'get_closed_tickets devia listar os 2')
+restaurar()
+
+com_conexao_falsa(_ConnTicket(rc=2))
+checar(database.delete_tickets(['111', '222']) == 2, 'delete_tickets devia remover 2')
+c = _ConnTicket(rc=2)
+com_conexao_falsa(c)
+database.delete_tickets(['111', '222'])
+checar(any('%s,%s' in sql for sql, _ in c.executados),
+       'delete_tickets tem que usar placeholder, nao montar SQL com os ids')
+com_conexao_falsa(_ConnTicket(rc=9))
+checar(database.delete_tickets([]) == 0, 'lista vazia nao pode nem tocar no banco')
+restaurar()
+print('  arquivar usa placeholder e ignora lista vazia')
+
+# O botao Reabrir precisa estar registrado, senao fica mudo apos restart do bot —
+# mesmo defeito ja corrigido nas views de confisco e de split.
+import tickets as _tk
+checar(hasattr(_tk, 'ReopenTicketView'), 'ReopenTicketView precisa existir')
+_src_tk = open('tickets.py', encoding='utf-8').read()
+checar('bot.add_view(ReopenTicketView())' in _src_tk,
+       'ReopenTicketView tem que ser registrada no __init__ do cog, senao o botao '
+       'fica mudo depois de um restart')
+checar('response.defer' in re.search(r'async def reabrir\(self.*?(?=\n    async def |\nclass )',
+                                     _src_tk, re.S).group(0),
+       'reabrir mexe em canal (rede) — precisa de defer')
+print('  botao Reabrir registrado e com defer')
+
+
 secao('alerta de falha de crédito — a liderança precisa saber')
 # As falhas de credito so apareciam como print no log da Railway, que ninguem le.
 # O alerta nao pode explodir nem pingar o servidor, e tem que degradar em silencio

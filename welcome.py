@@ -8,6 +8,11 @@ from discord.ext import commands
  
 import database
 from permissions import is_financial
+
+# Endereço do site. O valor que vale é o `site_url` do guild_config (dá pra
+# trocar sem deploy); isto aqui é só o socorro pra quando o banco não responde.
+# Ficava repetido em quatro lugares — na troca de domínio um deles escapava.
+SITE_PADRAO = 'https://xnomercy.com'
  
  
 class WelcomeCog(commands.Cog):
@@ -24,7 +29,7 @@ class WelcomeCog(commands.Cog):
                 return
  
             title   = cfg['title']
-            site_url = database.get_config('site_url') or 'https://nome-xnomercy-site-production.up.railway.app'
+            site_url = database.get_config('site_url') or SITE_PADRAO
             message = (cfg['message']
                        .replace('{mention}', member.mention)
                        .replace('{nome}', member.display_name)
@@ -73,7 +78,7 @@ class WelcomeCog(commands.Cog):
                 '{nome} saiu do XnoMercy. Obrigado por ter feito parte da guild — '
                 'as portas ficam abertas se um dia quiser voltar.'
             )
-            site_url = database.get_config('site_url') or 'https://nome-xnomercy-site-production.up.railway.app'
+            site_url = database.get_config('site_url') or SITE_PADRAO
             message = (raw_msg
                        .replace('{mention}', member.mention)
                        .replace('{nome}', member.display_name)
@@ -137,7 +142,7 @@ class WelcomeCog(commands.Cog):
             '{nome} saiu do XnoMercy. Obrigado por ter feito parte da guild — '
             'as portas ficam abertas se um dia quiser voltar.'
         )
-        site_url = database.get_config('site_url') or 'https://nome-xnomercy-site-production.up.railway.app'
+        site_url = database.get_config('site_url') or SITE_PADRAO
         message = (raw_msg
                    .replace('{mention}', target.mention)
                    .replace('{nome}', target.display_name)
@@ -174,7 +179,7 @@ class WelcomeCog(commands.Cog):
             return
  
         title   = cfg['title']
-        site_url = database.get_config('site_url') or 'https://nome-xnomercy-site-production.up.railway.app'
+        site_url = database.get_config('site_url') or SITE_PADRAO
         message = (cfg['message']
                    .replace('{mention}', target.mention)
                    .replace('{nome}', target.display_name)

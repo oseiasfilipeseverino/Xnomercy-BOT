@@ -702,6 +702,64 @@ checar("== 'erro'" in open('tickets.py', encoding='utf-8').read(),
 print("   reservar_ticket: colisao -> None, falha real -> 'erro' avisado")
 
 
+secao('interacao: defer e followup andam juntos')
+# Depois de `interaction.response.defer()`, o Discord recusa
+# `response.send_message` — a interacao ja foi reconhecida. O comando estoura e
+# a pessoa fica olhando o "..." pra sempre. E' o erro classico de converter
+# comando bloqueante em deferido, e foi cometido nessa conversao mesmo.
+import ast as _a2
+
+
+def _send_apos_defer(fn):
+    defer_ln, depois = None, []
+    for n in _a2.walk(fn):
+        if not (isinstance(n, _a2.Call) and isinstance(n.func, _a2.Attribute)):
+            continue
+        alvo = _a2.unparse(n.func)
+        if alvo.endswith('response.defer') and defer_ln is None:
+            defer_ln = n.lineno
+        elif alvo.endswith('response.send_message') and defer_ln and n.lineno > defer_ln:
+            depois.append(n.lineno)
+    if not defer_ln:
+        return []
+    # `if not interaction.response.is_done(): response.send_message(...)` e' o
+    # padrao CORRETO pra tratar erro sem saber se ja respondeu — nao acusa.
+    guardadas = set()
+    for n in _a2.walk(fn):
+        if isinstance(n, _a2.If) and 'is_done()' in _a2.unparse(n.test):
+            guardadas.update(x.lineno for x in _a2.walk(n)
+                             if isinstance(x, _a2.Call))
+    return [ln for ln in depois if ln not in guardadas]
+
+
+_erros = []
+for _p in sorted(_pl.Path('.').glob('*.py')):
+    if _p.name.startswith('test_'):
+        continue
+    for _no in _a2.walk(_a2.parse(_p.read_text(encoding='utf-8'))):
+        if isinstance(_no, _a2.AsyncFunctionDef):
+            for _ln in _send_apos_defer(_no):
+                _erros.append(f'{_p.name}:{_ln} ({_no.name})')
+checar(not _erros, f'response.send_message depois do defer (use followup.send): {_erros}')
+
+# o detector so vale se acusa o caso ruim e aceita o guardado
+_ruim = _a2.parse("""
+async def f(interaction):
+    await interaction.response.defer()
+    await interaction.response.send_message('oi')
+""").body[0]
+checar(_send_apos_defer(_ruim), 'nao pegou send_message depois do defer')
+
+_bom = _a2.parse("""
+async def f(interaction):
+    await interaction.response.defer()
+    if not interaction.response.is_done():
+        await interaction.response.send_message('oi')
+""").body[0]
+checar(not _send_apos_defer(_bom), 'acusou o padrao guardado por is_done(), que esta correto')
+print('   nenhum handler responde duas vezes; detector aferido')
+
+
 secao('falha de banco nao pode virar resposta normal')
 # A outra metade do bug do COALESCE: sem log, "deu erro" e "nao tem nada" ficam
 # indistinguiveis. Pior caso encontrado: assign_slot devolvia 'already_taken'

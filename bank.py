@@ -153,16 +153,21 @@ class BankCog(commands.Cog):
     @app_commands.command(name='meu-saldo', description='Veja seu saldo e ranking na guild.')
     async def meu_saldo(self, interaction: discord.Interaction):
         user = interaction.user
-        database.ensure_player(str(user.id), user.display_name)
+        # defer + run_db: as tres consultas abaixo rodavam DIRETO no laço de
+        # eventos. Enquanto duravam, o bot inteiro ficava parado — inclusive
+        # botões de outras pessoas — e passando de 3s o Discord já tinha
+        # desistido da interação.
+        await interaction.response.defer()
+        await database.run_db(database.ensure_player, str(user.id), user.display_name)
         try:
-            balance = database.get_player_balance(str(user.id))
+            balance = await database.run_db(database.get_player_balance, str(user.id))
         except Exception as e:
             print(f'[bank] erro ao ler saldo de {user.id}: {e!r}')
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 '⚠️ Nao consegui consultar o saldo agora. Tente de novo em instantes.',
                 ephemeral=True)
             return
-        rank    = database.get_player_rank(str(user.id))
+        rank    = await database.run_db(database.get_player_rank, str(user.id))
 
         embed = discord.Embed(title='💰 Saldo do Membro', color=discord.Color.gold())
         embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
@@ -171,14 +176,15 @@ class BankCog(commands.Cog):
         embed.add_field(name='Ranking',     value=f'#{rank}' if rank else 'N/A', inline=True)
         embed.set_thumbnail(url=user.display_avatar.url)
         embed.set_footer(text='XnoMercy Guild')
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     # ── /extrato ───────────────────────────────────────────────────────────────
     @app_commands.command(name='extrato', description='Veja seu histórico de créditos e débitos na guild.')
     async def extrato(self, interaction: discord.Interaction):
         user = interaction.user
-        database.ensure_player(str(user.id), user.display_name)
-        txs = database.get_player_transactions(str(user.id), limit=15)
+        await interaction.response.defer(ephemeral=True)
+        await database.run_db(database.ensure_player, str(user.id), user.display_name)
+        txs = await database.run_db(database.get_player_transactions, str(user.id), 15)
 
         embed = discord.Embed(title='📜 Extrato de Saldo', color=discord.Color.gold())
         embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
@@ -192,8 +198,9 @@ class BankCog(commands.Cog):
                 desc = t['description'] or t['type']
                 lines.append(f"`{data}` **{sign}{fmt(t['amount'])}** — {desc}")
             embed.description = '\n'.join(lines)
-            embed.set_footer(text=f'Últimas {len(txs)} movimentações · saldo atual: {fmt_saldo(str(user.id))}')
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+            saldo = await database.run_db(fmt_saldo, str(user.id))
+            embed.set_footer(text=f'Últimas {len(txs)} movimentações · saldo atual: {saldo}')
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ── /transferir_saldo ──────────────────────────────────────────────────────
     @app_commands.command(name='transferir_saldo', description='Transfere prata do SEU saldo para outro membro.')
@@ -228,21 +235,25 @@ class BankCog(commands.Cog):
 
         motivo = (motivo or '').strip()[:150]
 
+        # Daqui pra baixo tudo toca o banco: defer antes, followup depois.
+        await interaction.response.defer()
         try:
-            ok, novo = database.transfer_balance(
+            ok, novo = await database.run_db(
+                database.transfer_balance,
                 str(remetente.id), remetente.display_name,
                 str(usuario.id), usuario.display_name,
                 valor, motivo
             )
         except Exception as e:
             print(f'[bank] erro na transferencia {remetente.id} -> {usuario.id}: {e}')
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 '❌ Erro ao transferir. Nada foi alterado no seu saldo — tente de novo.', ephemeral=True)
             return
 
         if not ok:
-            await interaction.response.send_message(
-                f'❌ Saldo insuficiente. Você tem **{fmt_saldo(str(remetente.id))}** e tentou transferir **{fmt(valor)}**.',
+            saldo = await database.run_db(fmt_saldo, str(remetente.id))
+            await interaction.followup.send(
+                f'❌ Saldo insuficiente. Você tem **{saldo}** e tentou transferir **{fmt(valor)}**.',
                 ephemeral=True)
             return
 
@@ -254,7 +265,7 @@ class BankCog(commands.Cog):
         if motivo:
             embed.add_field(name='📝 Motivo', value=motivo, inline=False)
         embed.set_footer(text='XnoMercy Guild')
-        await interaction.response.send_message(content=usuario.mention, embed=embed)
+        await interaction.followup.send(content=usuario.mention, embed=embed)
 
         await _log(interaction.guild,
             f'🔄 **{remetente.display_name}** transferiu **{fmt(valor)}** para **{usuario.display_name}**.'
@@ -280,8 +291,9 @@ class BankCog(commands.Cog):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
 
-        database.ensure_player(str(usuario.id), usuario.display_name)
-        txs = database.get_player_transactions(str(usuario.id), limit=25)
+        await interaction.response.defer(ephemeral=True)
+        await database.run_db(database.ensure_player, str(usuario.id), usuario.display_name)
+        txs = await database.run_db(database.get_player_transactions, str(usuario.id), 25)
 
         embed = discord.Embed(title='📜 Extrato (Auditoria)', color=discord.Color.gold())
         embed.set_author(name=usuario.display_name, icon_url=usuario.display_avatar.url)
@@ -296,8 +308,9 @@ class BankCog(commands.Cog):
                 by = f" (por {t['created_by']})" if t['created_by'] else ''
                 lines.append(f"`{data}` **{sign}{fmt(t['amount'])}** — {desc}{by}")
             embed.description = '\n'.join(lines)
-            embed.set_footer(text=f'Últimas {len(txs)} movimentações · saldo atual: {fmt_saldo(str(usuario.id))}')
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+            saldo = await database.run_db(fmt_saldo, str(usuario.id))
+            embed.set_footer(text=f'Últimas {len(txs)} movimentações · saldo atual: {saldo}')
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ── /saldo_membro ──────────────────────────────────────────────────────────
     @app_commands.command(name='saldo_membro', description='[LÍDER] Ver o saldo de um membro específico.')
@@ -307,16 +320,17 @@ class BankCog(commands.Cog):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
 
-        database.ensure_player(str(usuario.id), usuario.display_name)
+        await interaction.response.defer(ephemeral=True)
+        await database.run_db(database.ensure_player, str(usuario.id), usuario.display_name)
         try:
-            balance = database.get_player_balance(str(usuario.id))
+            balance = await database.run_db(database.get_player_balance, str(usuario.id))
         except Exception as e:
             print(f'[bank] erro ao ler saldo de {usuario.id}: {e!r}')
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 '⚠️ Nao consegui consultar o saldo agora. Tente de novo em instantes.',
                 ephemeral=True)
             return
-        rank    = database.get_player_rank(str(usuario.id))
+        rank    = await database.run_db(database.get_player_rank, str(usuario.id))
 
         embed = discord.Embed(title='💰 Saldo do Membro', color=discord.Color.gold())
         embed.set_author(name=usuario.display_name, icon_url=usuario.display_avatar.url)
@@ -325,7 +339,7 @@ class BankCog(commands.Cog):
         embed.add_field(name='Ranking',     value=f'#{rank}' if rank else 'N/A', inline=True)
         embed.set_thumbnail(url=usuario.display_avatar.url)
         embed.set_footer(text=f'Consultado por {interaction.user.display_name}')
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ── /saldos ────────────────────────────────────────────────────────────────
     @app_commands.command(name='saldos', description='Ver todos os saldos da guild. (Staff e acima)')
@@ -336,9 +350,14 @@ class BankCog(commands.Cog):
             await interaction.response.send_message('❌ Apenas cargo **Staff** ou superior.', ephemeral=True)
             return
 
-        balances = database.get_all_balances()
+        # get_all_balances varre a tabela inteira de players. Rodando direto no
+        # laço de eventos, o bot inteiro parava enquanto a consulta durava — e
+        # foi assim que um /saldos travou o botão de aprovar split de outra
+        # pessoa, que nem chegou a ser respondido dentro dos 3s do Discord.
+        await interaction.response.defer()
+        balances = await database.run_db(database.get_all_balances)
         if not balances:
-            await interaction.response.send_message('📭 Nenhum saldo registrado.', ephemeral=True)
+            await interaction.followup.send('📭 Nenhum saldo registrado.', ephemeral=True)
             return
 
         medals = ['🥇', '🥈', '🥉']
@@ -370,10 +389,7 @@ class BankCog(commands.Cog):
             if i == len(pages) - 1:
                 embed.add_field(name='📊 Total em circulação', value=fmt(total), inline=False)
             embed.set_footer(text=f'XnoMercy Guild | {len(balances)} players com saldo')
-            if i == 0:
-                await interaction.response.send_message(embed=embed)
-            else:
-                await interaction.followup.send(embed=embed)
+            await interaction.followup.send(embed=embed)
 
     # ── /adicionar_saldo ───────────────────────────────────────────────────────
     @app_commands.command(name='adicionar_saldo', description='[LÍDER] Adiciona prata ao saldo de um ou mais players.')
@@ -412,10 +428,15 @@ class BankCog(commands.Cog):
         # antes de proposito: continuam usando response.send_message efemero.
         await interaction.response.defer()
 
+        # run_db em cada uma: sao 3 consultas POR PESSOA, e o comando aceita
+        # varios de uma vez. Rodando no laço de eventos, uma chamada com 20
+        # jogadores travava o bot inteiro por segundos.
         for m in members:
-            database.update_player_balance(str(m.id), m.display_name, valor)
-            database.add_transaction(str(m.id), valor, 'bonus', motivo, interaction.user.display_name)
-            results.append((m, database.get_player_balance_display(str(m.id))[1]))
+            await database.run_db(database.update_player_balance, str(m.id), m.display_name, valor)
+            await database.run_db(database.add_transaction, str(m.id), valor, 'bonus', motivo,
+                                  interaction.user.display_name)
+            ok_saldo = await database.run_db(database.get_player_balance_display, str(m.id))
+            results.append((m, ok_saldo[1]))
 
         if len(results) == 1:
             m, novo = results[0]
@@ -488,11 +509,13 @@ class BankCog(commands.Cog):
             # Débito atômico (checa saldo e debita na mesma query) — ler o saldo e
             # só depois debitar deixava dois Líderes pagarem a mesma pessoa ao
             # mesmo tempo e o saldo ficar NEGATIVO.
-            novo = database.debit_player_balance(str(m.id), m.display_name, valor)
+            novo = await database.run_db(database.debit_player_balance, str(m.id), m.display_name, valor)
             if novo is None:
-                insufficient.append(f'{m.display_name} (tem só {fmt_saldo(str(m.id))})')
+                saldo = await database.run_db(fmt_saldo, str(m.id))
+                insufficient.append(f'{m.display_name} (tem só {saldo})')
                 continue
-            database.add_transaction(str(m.id), -valor, 'payment', motivo, interaction.user.display_name)
+            await database.run_db(database.add_transaction, str(m.id), -valor, 'payment', motivo,
+                                  interaction.user.display_name)
             results.append((m, novo))
 
         if not results:
@@ -560,9 +583,10 @@ class BankCog(commands.Cog):
             # Zera e devolve o saldo antigo na mesma query — ler e só depois zerar
             # deixava dois admins zerando junto registrarem DUAS transações do
             # mesmo valor, inflando o débito no extrato de auditoria.
-            old = database.zero_player_balance(str(m.id), m.display_name)
+            old = await database.run_db(database.zero_player_balance, str(m.id), m.display_name)
             if old:
-                database.add_transaction(str(m.id), -old, 'withdrawal', 'Saldo zerado — pagamento efetuado', interaction.user.display_name)
+                await database.run_db(database.add_transaction, str(m.id), -old, 'withdrawal',
+                                      'Saldo zerado — pagamento efetuado', interaction.user.display_name)
             results.append((m, old))
 
         if len(results) == 1:
@@ -602,19 +626,29 @@ class BankCog(commands.Cog):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
 
-        changed = []
-        if guild_tax  is not None: database.set_config('guild_tax',  str(guild_tax));  changed.append(f'🏛️ Guild: **{guild_tax}%**')
-        if vendor_tax is not None: database.set_config('vendor_tax', str(vendor_tax)); changed.append(f'🛒 Vendedor: **{vendor_tax}%**')
-
-        if not changed:
+        # Esta checagem vem ANTES do defer: não depende do banco, e assim o aviso
+        # continua privado enquanto o defer abaixo precisa ser público.
+        if guild_tax is None and vendor_tax is None:
             await interaction.response.send_message('⚠️ Informe ao menos uma taxa.', ephemeral=True)
             return
+
+        # defer PÚBLICO de propósito — a confirmação lá embaixo é pública, e o
+        # defer tem que combinar com ela. Com defer(ephemeral=True) a resposta
+        # sairia privada e a guild deixaria de ver a mudança de taxa.
+        await interaction.response.defer()
+        changed = []
+        if guild_tax is not None:
+            await database.run_db(database.set_config, 'guild_tax', str(guild_tax))
+            changed.append(f'🏛️ Guild: **{guild_tax}%**')
+        if vendor_tax is not None:
+            await database.run_db(database.set_config, 'vendor_tax', str(vendor_tax))
+            changed.append(f'🛒 Vendedor: **{vendor_tax}%**')
 
         # Público (não ephemeral): muda o payout de TODO evento/split futuro, então a
         # guild toda tem interesse em ver — mesmo critério dos outros comandos
         # financeiros (/adicionar_saldo, /pagar_saldo, /zerar_saldo).
         embed = discord.Embed(title='✅ Taxas Atualizadas', description='\n'.join(changed), color=discord.Color.green())
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
         # Afeta o payout de TODO evento/split futuro — sem log aqui, uma mudança de
         # taxa não deixava rastro nenhum no canal de auditoria (diferente de
@@ -629,11 +663,15 @@ class BankCog(commands.Cog):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
 
+        await interaction.response.defer(ephemeral=True)
+        guild_tax  = await database.run_db(database.get_config, 'guild_tax')
+        vendor_tax = await database.run_db(database.get_config, 'vendor_tax')
+
         embed = discord.Embed(title='⚙️ Taxas Configuradas', color=discord.Color.blurple())
-        embed.add_field(name='🏛️ Taxa da Guild',    value=f'{database.get_config("guild_tax")}%',  inline=True)
-        embed.add_field(name='🛒 Taxa do Vendedor', value=f'{database.get_config("vendor_tax")}%', inline=True)
+        embed.add_field(name='🏛️ Taxa da Guild',    value=f'{guild_tax}%',  inline=True)
+        embed.add_field(name='🛒 Taxa do Vendedor', value=f'{vendor_tax}%', inline=True)
         embed.add_field(name='🔧 Reparo',           value='Informado pelo Puxador por evento',      inline=True)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
     # ── /mover_todos ───────────────────────────────────────────────────────────

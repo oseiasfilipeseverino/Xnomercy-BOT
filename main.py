@@ -88,6 +88,14 @@ async def on_ready():
 # NENHUM registro de o comando ter chegado, entao nao dava pra saber se o
 # problema era a interacao nao chegar ou o handler demorar. Estes dois avisos
 # respondem isso: o primeiro marca a chegada, o segundo denuncia laco travado.
+_contador = {'n': 0}
+
+
+@bot.event
+async def on_socket_event_type(tipo):
+    _contador['n'] += 1
+
+
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
     nome = getattr(interaction.command, 'name', None) or str(interaction.type)
@@ -102,6 +110,7 @@ async def _vigia_do_laco():
     de responder ao Discord dentro dos 3s.
     """
     import time as _t
+    voltas = 0
     await bot.wait_until_ready()
     while not bot.is_closed():
         t0 = _t.perf_counter()
@@ -109,6 +118,14 @@ async def _vigia_do_laco():
         atraso = _t.perf_counter() - t0 - 1
         if atraso > 0.5:
             print(f'[laco] TRAVADO por {atraso:.1f}s', flush=True)
+        voltas += 1
+        if voltas % 60 == 0:
+            # Estado do gateway a cada minuto. Sem isto nao da' pra distinguir
+            # "ninguem usou o bot" de "o Discord parou de entregar eventos" —
+            # os dois aparecem como log vazio.
+            ping = bot.latency
+            print(f'[gateway] ping {ping*1000:.0f}ms | fechado={bot.is_closed()} '
+                  f'| eventos recebidos desde o boot: {_contador["n"]}', flush=True)
 
 
 @bot.tree.error

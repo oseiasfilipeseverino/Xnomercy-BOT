@@ -1101,7 +1101,7 @@ def get_active_scheduled_events():
     conn = get_connection()
     try:
         c = conn.cursor()
-        c.execute("SELECT * FROM scheduled_events WHERE status NOT IN ('finished','cancelled','split_done') ORDER BY scheduled_time")
+        c.execute("SELECT * FROM scheduled_events WHERE status NOT IN ('finished','cancelled','split_done','pending_delete','deleting') ORDER BY scheduled_time")
         return [_row_to_dict(r, SCHED_KEYS) for r in c.fetchall()]
     except Exception as e:
         print(f'[get_active_scheduled_events] {e!r}')
@@ -1476,7 +1476,10 @@ def get_scheduled_event_by_thread(thread_id):
     conn = get_connection()
     try:
         c = conn.cursor()
-        c.execute("SELECT * FROM scheduled_events WHERE thread_id=%s AND status NOT IN ('finished','cancelled','split_done')", (thread_id,))
+        # pending_delete/deleting entram aqui junto com os encerrados: o evento
+        # esta a caminho de ser apagado, entao ninguem mais pode se inscrever
+        # nem receber DM de lembrete dele nesse intervalo.
+        c.execute("SELECT * FROM scheduled_events WHERE thread_id=%s AND status NOT IN ('finished','cancelled','split_done','pending_delete','deleting')", (thread_id,))
         return _row_to_dict(c.fetchone(), SCHED_KEYS)
     finally:
         release(conn)
@@ -1619,6 +1622,12 @@ def requeue_stuck_events():
         # A releitura do topico e' idempotente (assign_slot devolve 'has_slot' /
         # 'already_taken'), entao devolver pra fila nao duplica inscricao.
         c.execute("UPDATE scheduled_events SET status='pending_reopen' WHERE status='reopening'")
+        n += c.rowcount
+        # Apagar também é idempotente: tópico que já sumiu devolve NotFound e é
+        # tratado como sucesso. Sem esta linha, um restart no meio da exclusão
+        # deixava o evento preso em 'deleting' pra sempre — fora da fila do bot
+        # (que procura 'pending_delete') e sem nenhum jeito de destravar.
+        c.execute("UPDATE scheduled_events SET status='pending_delete' WHERE status='deleting'")
         n += c.rowcount
         conn.commit()
         return n

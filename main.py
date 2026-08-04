@@ -82,6 +82,34 @@ async def on_ready():
         _price_updater_started = True
         asyncio.create_task(start_price_updater(bot))  # bot: alertas de preço mandam DM
         print('✅  Price updater iniciado (atualiza a cada 30min)')
+        asyncio.create_task(_vigia_do_laco())
+
+# ── Instrumentacao: o bot ficou preso em "Enviando comando..." e nao havia
+# NENHUM registro de o comando ter chegado, entao nao dava pra saber se o
+# problema era a interacao nao chegar ou o handler demorar. Estes dois avisos
+# respondem isso: o primeiro marca a chegada, o segundo denuncia laco travado.
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    nome = getattr(interaction.command, 'name', None) or str(interaction.type)
+    print(f'[interacao] chegou: {nome} de {interaction.user}', flush=True)
+
+
+async def _vigia_do_laco():
+    """Mede o atraso do laco de eventos.
+
+    Dorme 1s e confere quanto passou de verdade. A diferenca e' o tempo que o
+    laco ficou preso em codigo sincrono — que e' exatamente o que impede o bot
+    de responder ao Discord dentro dos 3s.
+    """
+    import time as _t
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        t0 = _t.perf_counter()
+        await asyncio.sleep(1)
+        atraso = _t.perf_counter() - t0 - 1
+        if atraso > 0.5:
+            print(f'[laco] TRAVADO por {atraso:.1f}s', flush=True)
+
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: Exception):

@@ -610,6 +610,62 @@ checar(not _defeitos("SELECT COUNT(*), NOW() FROM t WHERE a=%s"),
 print(f'  {_n} comandos SQL conferidos; validador acusa quebrado e aceita valido')
 
 
+secao('colisao de slot != falha de banco')
+# Bug de 03/08: `except pg8000.dbapi.IntegrityError` NUNCA casava, porque o
+# pg8000 levanta DatabaseError pra erro vindo do servidor. Dois jogadores
+# disputando o mesmo slot e' operacao normal, mas a colisao caia no ramo de
+# falha e o segundo lia "Nao consegui registrar agora (falha no banco)".
+# O payload abaixo e' o que apareceu no log de producao.
+
+_PG_DUPLICADO = {
+    'S': 'ERROR', 'C': '23505',
+    'M': 'duplicate key value violates unique constraint '
+         '"slot_assignments_scheduled_event_id_slot_number_key"',
+    'D': 'Key (scheduled_event_id, slot_number)=(95, 10) already exists.',
+    't': 'slot_assignments',
+}
+
+
+class _ErroBanco(Exception):
+    pass
+
+
+checar(database.violacao_de_unicidade(_ErroBanco(_PG_DUPLICADO)),
+       'nao reconheceu o 23505 do payload real de producao')
+checar(not database.violacao_de_unicidade(_ErroBanco({'C': '08006', 'M': 'connection failure'})),
+       'queda de conexao (08006) nao pode passar por colisao de slot')
+checar(not database.violacao_de_unicidade(RuntimeError('banco fora do ar')),
+       'erro generico nao pode passar por colisao de slot')
+print('   23505 reconhecido; 08006 e erro generico nao')
+
+
+class ConexaoDuplicada(ConexaoFalsa):
+    """Aceita o SELECT inicial e recusa o INSERT, como o Postgres faz."""
+
+    def execute(self, sql, args=None):
+        if 'INSERT' in sql.upper():
+            raise _ErroBanco(_PG_DUPLICADO)
+        super().execute(sql, args)
+
+    def fetchone(self):
+        return None      # ninguem tem slot ainda
+
+
+com_conexao_falsa(ConexaoDuplicada())
+r = database.assign_slot(95, 10, '123', 'Player')
+restaurar()
+checar(r == 'already_taken',
+       f"colisao tem que devolver 'already_taken', devolveu {r!r} "
+       "(o jogador leria 'falha no banco' em vez de 'slot ocupado')")
+print(f"   slot ocupado -> {r!r}")
+
+com_conexao_falsa(ConexaoQuebrada())
+r = database.assign_slot(95, 10, '123', 'Player')
+restaurar()
+checar(r == 'erro', f"falha real tem que devolver 'erro', devolveu {r!r}")
+print(f"   banco fora do ar -> {r!r}  (nao mente 'slot ocupado')")
+
+
 secao('falha de banco nao pode virar resposta normal')
 # A outra metade do bug do COALESCE: sem log, "deu erro" e "nao tem nada" ficam
 # indistinguiveis. Pior caso encontrado: assign_slot devolvia 'already_taken'
@@ -672,8 +728,12 @@ print('   nenhum handler de banco engole a falha; detector aferido')
 _src = open('database.py', encoding='utf-8').read()
 _fn = _src[_src.index('def assign_slot('):]
 _fn = _fn[:_fn.index(chr(10) + 'def ', 1)]
-checar('IntegrityError' in _fn,
-       "assign_slot precisa separar IntegrityError — senao banco fora do ar vira 'slot ocupado'")
+# Checava `IntegrityError` no codigo — e era justamente esse o bug: o pg8000
+# levanta DatabaseError, entao o except tipado nunca casava. O comportamento
+# real (23505 -> 'already_taken', resto -> 'erro') esta coberto acima, exercitando
+# a funcao. Aqui fica so o que ainda vale olhar no texto.
+checar('violacao_de_unicidade' in _fn,
+       'assign_slot precisa detectar a colisao pelo SQLSTATE, nao pela classe da excecao')
 checar("return 'erro'" in _fn, 'assign_slot precisa de um retorno proprio pra falha real')
 checar('"erro"' in open('scheduled_events.py', encoding='utf-8').read(),
        'quem chama assign_slot tem que tratar o retorno de falha')

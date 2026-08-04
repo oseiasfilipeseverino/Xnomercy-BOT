@@ -41,6 +41,25 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 # no Discord (ver reservar_ticket). Quem le channel_id precisa ignorar esses.
 RESERVA_PREFIXO = 'reservando:'
 
+def violacao_de_unicidade(e) -> bool:
+    """True quando o Postgres recusou por índice único (SQLSTATE 23505).
+
+    Não dá pra usar `except pg8000.dbapi.IntegrityError`: o pg8000 levanta
+    `DatabaseError` pra erro vindo do servidor, então o except tipado nunca
+    casava. O efeito prático foi ruim — dois jogadores disputando o mesmo slot é
+    operação NORMAL, e a colisão caía no ramo de falha, fazendo o segundo ler
+    "falha no banco" em vez de "slot já ocupado".
+
+    O SQLSTATE vem no dicionário da exceção, na chave 'C'. O texto é conferido
+    só como rede de segurança, caso o formato mude entre versões.
+    """
+    args = getattr(e, 'args', None)
+    if args and isinstance(args[0], dict) and args[0].get('C') == '23505':
+        return True
+    t = str(e).lower()
+    return '23505' in t or 'duplicate key' in t
+
+
 # ── Connection Pool ───────────────────────────────────────────────────────────
 _pool = []
 _pool_lock = threading.Lock()
@@ -709,16 +728,14 @@ def add_event_participant(event_id, discord_id, username, weight=100.0):
             c.execute('INSERT INTO event_participants (event_id,discord_id,username,share) VALUES (%s,%s,%s,%s)', (event_id, discord_id, username, weight))
             conn.commit()
             return True
-        except pg8000.dbapi.IntegrityError as e:
-            print(f'[add_event_participant] ja existia, atualizando nome: {e!r}')
+        except Exception as e:
             conn.rollback()
+            if not violacao_de_unicidade(e):
+                print(f'[add_event_participant] erro real (não é duplicata): {e!r}')
+                return None
             c.execute('UPDATE event_participants SET username=%s WHERE event_id=%s AND discord_id=%s', (username, event_id, discord_id))
             conn.commit()
             return False
-        except Exception as e:
-            conn.rollback()
-            print(f'[add_event_participant] erro real (não é duplicata): {e}')
-            return None
     finally:
         release(conn)
 
@@ -1492,28 +1509,36 @@ def get_slot_assignments(event_id):
         release(conn)
 
 def assign_slot(event_id, slot_number, discord_id, username):
+    """Sempre devolve texto: 'ok', 'has_slot', 'already_taken' ou 'erro'.
+
+    Nunca levanta. Quem chama (on_message no scheduled_events) não trata
+    exceção — se uma escapasse daqui, o jogador digitaria o número do slot e não
+    receberia resposta nenhuma, nem sequer um aviso de falha.
+    """
     conn = get_connection()
     try:
         c = conn.cursor()
         c.execute('SELECT slot_number FROM slot_assignments WHERE scheduled_event_id=%s AND discord_id=%s', (event_id, discord_id))
         if c.fetchone():
             return 'has_slot'
+        c.execute('INSERT INTO slot_assignments (scheduled_event_id,slot_number,discord_id,username) VALUES (%s,%s,%s,%s)',
+                  (event_id, slot_number, discord_id, username))
+        conn.commit()
+        return 'ok'
+    except Exception as e:
         try:
-            c.execute('INSERT INTO slot_assignments (scheduled_event_id,slot_number,discord_id,username) VALUES (%s,%s,%s,%s)',
-                      (event_id, slot_number, discord_id, username))
-            conn.commit()
-            return 'ok'
-        except pg8000.dbapi.IntegrityError as e:
-            # colisão no índice único = alguém pegou o slot primeiro. Só ESTE
-            # caso é "ocupado"; qualquer outro erro tem que aparecer, senão uma
-            # queda do banco vira "slot já está ocupado" pro jogador.
-            print(f'[assign_slot] slot {slot_number} do evento {event_id} ja ocupado: {e!r}')
             conn.rollback()
+        except Exception:
+            pass
+        # Colisão no índice único = alguém pegou o slot primeiro, e isso é
+        # tráfego normal. Só ESSE caso é "ocupado"; qualquer outro erro tem que
+        # aparecer, senão uma queda do banco vira "slot já está ocupado" pro
+        # jogador, que fica tentando outro número achando que o problema é ele.
+        if violacao_de_unicidade(e):
+            print(f'[assign_slot] slot {slot_number} do evento {event_id} ja ocupado')
             return 'already_taken'
-        except Exception as e:
-            print(f'[assign_slot] evento={event_id} slot={slot_number} {e!r}')
-            conn.rollback()
-            return 'erro'
+        print(f'[assign_slot] evento={event_id} slot={slot_number} {e!r}')
+        return 'erro'
     finally:
         release(conn)
 

@@ -567,19 +567,21 @@ class ScheduledEventsCog(commands.Cog):
                 except Exception: pass
                 return
         else:
-            # Quem vai sair: eu mesmo, ou o mencionado se quem digitou tem
-            # autoridade pra isso (puxador do evento ou quem gere eventos).
-            alvo_id = discord_id
-            if alvo_mencionado:
-                pode = (str(event.get("created_by", "")) == message.author.display_name
+            # Quem manda no evento: o puxador ou quem gere eventos.
+            organiza = (str(event.get("created_by", "")) == message.author.display_name
                         or can_manage_events(message.author))
-                if not pode:
-                    await self._responder_e_limpar(
-                        message,
-                        "Só o puxador do evento ou a staff pode tirar outra pessoa do slot.")
-                    return
-                alvo_id = alvo_mencionado
 
+            if alvo_mencionado and not organiza:
+                await self._responder_e_limpar(
+                    message, "Só o puxador do evento ou a staff pode tirar outra pessoa do slot.")
+                return
+
+            # SEMPRE tenta tirar quem digitou primeiro. Isso resolve a
+            # ambiguidade do "-13" sem perguntar nada: se você está no slot 13,
+            # o -13 tira VOCÊ, como sempre foi. Só quando você NÃO está nele é
+            # que ele passa a valer pra quem estiver — assim um staff que está
+            # no evento nunca tira outra pessoa achando que está saindo.
+            alvo_id = alvo_mencionado or discord_id
             removed = await database.run_db(database.unassign_slot, event["id"], abs_num, alvo_id)
 
             if removed is None:
@@ -589,8 +591,26 @@ class ScheduledEventsCog(commands.Cog):
                     message, "Não consegui tirar agora (falha no banco). Tente de novo em instantes.")
                 return
 
-            if removed and alvo_mencionado:
+            tirou_outro = bool(alvo_mencionado)
+
+            if not removed and not alvo_mencionado and organiza:
+                # Não era meu slot, e eu posso tirar: tira quem estiver nele.
+                # Sem menção, sem copiar id, sem confirmar nada.
+                dono = await database.run_db(database.get_slot_owner, event["id"], abs_num)
+                if dono:
+                    removed = await database.run_db(
+                        database.unassign_slot, event["id"], abs_num, dono)
+                    if removed is None:
+                        await self._responder_e_limpar(
+                            message, "Não consegui tirar agora (falha no banco). "
+                                     "Tente de novo em instantes.")
+                        return
+                    alvo_id, tirou_outro = dono, True
+
+            if removed and tirou_outro:
                 await message.add_reaction("👋")
+                # Fica registrado no tópico quem tirou quem — tirar alguém da
+                # composição é decisão que a guild precisa conseguir auditar.
                 await message.channel.send(
                     f"<@{alvo_id}> foi tirado do slot **{abs_num}** por "
                     f"**{message.author.display_name}**.",
@@ -601,19 +621,8 @@ class ScheduledEventsCog(commands.Cog):
             if removed:
                 await message.add_reaction("👋")
             else:
-                # Se o slot é de outra pessoa e quem digitou pode tirar, ensina
-                # como — senão a pessoa lê "você não está no slot 13" e conclui
-                # que o bot não deixa tirar ninguém (foi exatamente o que
-                # aconteceu antes desta funcionalidade existir).
-                dono = await database.run_db(database.get_slot_owner, event["id"], abs_num)
-                if dono and dono != discord_id and (
-                        str(event.get("created_by", "")) == message.author.display_name
-                        or can_manage_events(message.author)):
-                    texto = (f"O slot **{abs_num}** é de <@{dono}>. "
-                             f"Digite `-{abs_num} <@{dono}>` para tirar.")
-                else:
-                    texto = f"Voce nao esta no slot **{abs_num}**."
-                await self._responder_e_limpar(message, texto)
+                await self._responder_e_limpar(
+                    message, f"Voce nao esta no slot **{abs_num}**.")
                 return
 
         await self._update_embed(event["id"])

@@ -504,7 +504,12 @@ async def start_price_updater(bot=None):
     print(f'[price_updater] Iniciado — atualiza a cada {INTERVAL_MINUTES} minutos')
     print(f'[price_updater] Total de itens no cache: {len(ALL_ITEMS)}')
 
-    # Primeira execução imediata ao ligar o bot
+    # Espera antes do primeiro ciclo. Ele leva ~180s gravando 100 mil registros,
+    # e começando junto com o boot caía exatamente na janela em que a guild volta
+    # a usar o bot — a hora de menos folga pra disputar o banco. O cache de preço
+    # tolera bem esses 2 minutos a mais; ele já existe do ciclo anterior.
+    await asyncio.sleep(120)
+
     try:
         await update_prices_once(bot)
     except Exception as e:

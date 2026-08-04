@@ -760,6 +760,29 @@ checar(not _send_apos_defer(_bom), 'acusou o padrao guardado por is_done(), que 
 print('   nenhum handler responde duas vezes; detector aferido')
 
 
+secao('banco nunca no laco de eventos')
+# O pg8000 e' SINCRONO. Chamado direto de uma corrotina, ele congela o bot
+# INTEIRO ate' o Postgres responder — nao so quem deu o comando. Em 04/08 um
+# /saldos travou o botao de aprovar split de OUTRA pessoa por isso.
+# `run_db` roda num executor proprio e devolve o laco pro Discord.
+_sincronas = []
+for _p in sorted(_pl.Path('.').glob('*.py')):
+    if _p.name.startswith('test_') or _p.name.startswith('_'):
+        continue
+    for _fn in _ast.walk(_ast.parse(_p.read_text(encoding='utf-8'))):
+        if not isinstance(_fn, _ast.AsyncFunctionDef):
+            continue
+        for _c in _ast.walk(_fn):
+            if (isinstance(_c, _ast.Call) and isinstance(_c.func, _ast.Attribute)
+                    and isinstance(_c.func.value, _ast.Name)
+                    and _c.func.value.id == 'database'
+                    and _c.func.attr != 'run_db'):
+                _sincronas.append(f'{_p.name}:{_c.lineno} {_fn.name} -> database.{_c.func.attr}()')
+checar(not _sincronas,
+       f'chamada sincrona ao banco dentro de corrotina (use await database.run_db): {_sincronas}')
+print(f'   nenhuma chamada sincrona ao banco em corrotina')
+
+
 secao('falha de banco nao pode virar resposta normal')
 # A outra metade do bug do COALESCE: sem log, "deu erro" e "nao tem nada" ficam
 # indistinguiveis. Pior caso encontrado: assign_slot devolvia 'already_taken'

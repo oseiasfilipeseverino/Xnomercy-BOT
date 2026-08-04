@@ -44,7 +44,7 @@ class ConfiscarView(LoggedView):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder podem confiscar.', ephemeral=True)
             return
 
-        dep = database.get_member_departure(self.departure_id)
+        dep = await database.run_db(database.get_member_departure, self.departure_id)
         if not dep:
             await interaction.response.send_message('❌ Registro não encontrado.', ephemeral=True)
             return
@@ -53,16 +53,16 @@ class ConfiscarView(LoggedView):
             return
 
         # Atômico primeiro — evita dois Líderes clicando quase juntos confiscarem em dobro.
-        if not database.resolve_member_departure(self.departure_id, 'confiscated'):
+        if not await database.run_db(database.resolve_member_departure, self.departure_id, 'confiscated'):
             await interaction.response.send_message('❌ Já processado por outra pessoa.', ephemeral=True)
             return
 
         # Zera e devolve o saldo antigo na mesma query (ver database.zero_player_balance):
         # ler e só depois zerar podia registrar a transação com um valor diferente do
         # que realmente saiu, se algo creditasse esse player nesse meio-tempo.
-        balance = database.zero_player_balance(dep['discord_id'], dep['username'])
+        balance = await database.run_db(database.zero_player_balance, dep['discord_id'], dep['username'])
         if balance > 0:
-            database.add_transaction(
+            await database.run_db(database.add_transaction, 
                 dep['discord_id'], -balance, 'confiscation',
                 'Saldo confiscado — membro saiu do servidor',
                 interaction.user.display_name
@@ -98,7 +98,7 @@ class ConfiscarView(LoggedView):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
 
-        dep = database.get_member_departure(self.departure_id)
+        dep = await database.run_db(database.get_member_departure, self.departure_id)
         if not dep:
             await interaction.response.send_message('❌ Registro não encontrado.', ephemeral=True)
             return
@@ -106,7 +106,7 @@ class ConfiscarView(LoggedView):
             await interaction.response.send_message('❌ Já processado.', ephemeral=True)
             return
 
-        if not database.resolve_member_departure(self.departure_id, 'cancelled'):
+        if not await database.run_db(database.resolve_member_departure, self.departure_id, 'cancelled'):
             await interaction.response.send_message('❌ Já processado por outra pessoa.', ephemeral=True)
             return
 
@@ -132,7 +132,7 @@ class MembersCog(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         try:
-            pending = database.get_pending_member_departures()
+            pending = await database.run_db(database.get_pending_member_departures)
             for dep in pending:
                 self.bot.add_view(ConfiscarView(dep['id']))
             print(f'[members] {len(pending)} view(s) de confisco restaurada(s)')
@@ -145,7 +145,7 @@ class MembersCog(commands.Cog):
         # uma saída com prata passava batida, sem aviso e sem log. Se o banco
         # falhar, avisa a liderança pra conferirem na mão.
         try:
-            balance = database.get_player_balance(str(member.id))
+            balance = await database.run_db(database.get_player_balance, str(member.id))
         except Exception as e:
             print(f'[members] ERRO ao ler saldo de {member.display_name} na saida: {e!r}')
             await _log(member.guild,
@@ -157,14 +157,14 @@ class MembersCog(commands.Cog):
         if balance <= 0:
             return
 
-        ch_id = database.get_config('channel_saidas_membros')
+        ch_id = await database.run_db(database.get_config, 'channel_saidas_membros')
         if not ch_id:
             return
         ch = member.guild.get_channel(int(ch_id))
         if not ch:
             return
 
-        departure_id = database.create_member_departure(str(member.id), member.display_name, balance)
+        departure_id = await database.run_db(database.create_member_departure, str(member.id), member.display_name, balance)
 
         embed = discord.Embed(
             title='⚠️ Membro Saiu com Saldo Positivo',
@@ -183,7 +183,7 @@ class MembersCog(commands.Cog):
         view = ConfiscarView(departure_id)
         try:
             msg = await ch.send(embed=embed, view=view)
-            database.set_member_departure_message(departure_id, str(ch.id), str(msg.id))
+            await database.run_db(database.set_member_departure_message, departure_id, str(ch.id), str(msg.id))
         except Exception as e:
             print(f'[members] erro ao postar aviso de saida de {member.display_name}: {e}')
 

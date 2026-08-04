@@ -186,13 +186,13 @@ class ScheduledEventsCog(commands.Cog):
     @tasks.loop(seconds=10)
     async def post_pending_task(self):
         try:
-            pending = database.get_pending_post_events()
+            pending = await database.run_db(database.get_pending_post_events)
             for event in pending:
                 # ╔══════════════════════════════════════════════════════════╗
                 # ║  FIX: Atualiza status ANTES de qualquer chamada Discord  ║
                 # ║  Evita duplo-post quando o loop roda antes de terminar   ║
                 # ╚══════════════════════════════════════════════════════════╝
-                database.set_event_status(event["id"], "posting")
+                await database.run_db(database.set_event_status, event["id"], "posting")
                 await self._post_event(event)
         except Exception as e:
             print("[scheduled_events] Erro post_pending_task: " + str(e))
@@ -205,10 +205,10 @@ class ScheduledEventsCog(commands.Cog):
     @tasks.loop(seconds=10)
     async def reopen_pending_task(self):
         try:
-            for event in database.get_pending_reopen_events():
+            for event in await database.run_db(database.get_pending_reopen_events):
                 # Trava o status ANTES de qualquer chamada ao Discord, senão o
                 # proximo ciclo pega o mesmo evento e reprocessa em paralelo.
-                database.set_event_status(event["id"], "reopening")
+                await database.run_db(database.set_event_status, event["id"], "reopening")
                 await self._reopen_event(event)
         except Exception as e:
             print("[scheduled_events] Erro reopen_pending_task: " + str(e))
@@ -232,7 +232,7 @@ class ScheduledEventsCog(commands.Cog):
 
         if not thread_id:
             print("[reopen] Evento " + str(event_id) + " sem thread_id — abortado")
-            database.set_event_status(event_id, "finished")
+            await database.run_db(database.set_event_status, event_id, "finished")
             return
 
         try:
@@ -243,7 +243,7 @@ class ScheduledEventsCog(commands.Cog):
             # Tópico apagado ou sem acesso — devolve pro estado anterior em vez
             # de deixar o evento preso em "reopening" pra sempre.
             print("[reopen] Evento " + str(event_id) + " topico inacessivel: " + repr(e))
-            database.set_event_status(event_id, "finished")
+            await database.run_db(database.set_event_status, event_id, "finished")
             return
 
         slots   = parse_slots(event["slots"])
@@ -282,7 +282,7 @@ class ScheduledEventsCog(commands.Cog):
         depois = len(await database.run_db(database.get_slot_assignments, event_id))
         novos  = max(0, depois - antes)
 
-        database.set_event_status(event_id, "waiting")
+        await database.run_db(database.set_event_status, event_id, "waiting")
         await self._update_embed(event_id)
 
         print("[reopen] Evento " + str(event_id) + " reaberto — "
@@ -308,7 +308,7 @@ class ScheduledEventsCog(commands.Cog):
             channel = self.bot.get_channel(int(event["channel_id"]))
             if not channel:
                 # Canal não encontrado — reverte para tentar depois
-                database.set_event_status(event["id"], "pending_post")
+                await database.run_db(database.set_event_status, event["id"], "pending_post")
                 print("[scheduled_events] Canal nao encontrado: " + str(event["channel_id"]))
                 return
 
@@ -359,14 +359,14 @@ class ScheduledEventsCog(commands.Cog):
             await thread.send(INSTRUCTIONS, allowed_mentions=SEM_MENCOES)
 
             # Salva IDs e atualiza status para "waiting"
-            database.update_scheduled_event_thread(event["id"], str(thread.id), str(msg.id))
-            database.set_event_status(event["id"], "waiting")
+            await database.run_db(database.update_scheduled_event_thread, event["id"], str(thread.id), str(msg.id))
+            await database.run_db(database.set_event_status, event["id"], "waiting")
 
             print("[scheduled_events] Evento postado: " + event["title"] + " | thread=" + str(thread.id))
 
         except Exception as e:
             # Reverte para pending_post para nova tentativa no próximo ciclo
-            database.set_event_status(event["id"], "pending_post")
+            await database.run_db(database.set_event_status, event["id"], "pending_post")
             print("[scheduled_events] Erro ao postar evento '" + str(event.get("title","?")) + "': " + str(e))
 
     # ── Ouve mensagens nos tópicos ─────────────────────────────────────────────
@@ -523,7 +523,7 @@ class ScheduledEventsCog(commands.Cog):
     @tasks.loop(minutes=1)
     async def notification_task(self):
         try:
-            events = database.get_active_scheduled_events()
+            events = await database.run_db(database.get_active_scheduled_events)
             now    = datetime.now(tz=BRT)
 
             for event in events:
@@ -542,10 +542,10 @@ class ScheduledEventsCog(commands.Cog):
 
                 if 29 <= diff <= 31 and not event["notify_30"]:
                     await self._notify_dm(event, 30)
-                    database.update_scheduled_event_notify(event["id"], notify_30=1)
+                    await database.run_db(database.update_scheduled_event_notify, event["id"], notify_30=1)
                 elif 14 <= diff <= 16 and not event["notify_15"]:
                     await self._notify_dm(event, 15)
-                    database.update_scheduled_event_notify(event["id"], notify_15=1)
+                    await database.run_db(database.update_scheduled_event_notify, event["id"], notify_15=1)
 
         except Exception as e:
             print("[scheduled_events] Erro notification_task: " + str(e))
@@ -565,7 +565,7 @@ class ScheduledEventsCog(commands.Cog):
                     thread_link = "https://discord.com/channels/" + str(guild.id) + "/" + event["thread_id"]
                     break
 
-            site_url = database.get_config("site_url") or ""
+            site_url = await database.run_db(database.get_config, "site_url") or ""
 
             desc = (
                 emoji + " **" + event["title"] + "** comeca em **" + str(minutes) + " minutos!**\n\n"
@@ -582,7 +582,7 @@ class ScheduledEventsCog(commands.Cog):
                 color=color
             )
 
-            assignments = database.get_slot_assignments(event["id"])
+            assignments = await database.run_db(database.get_slot_assignments, event["id"])
             dm_count = 0
             for assignment in assignments:
                 try:
@@ -608,14 +608,14 @@ class ScheduledEventsCog(commands.Cog):
         # post não chegou a salvar thread_id, e a releitura do tópico usa
         # assign_slot, que não duplica inscrição.
         try:
-            destravados = database.requeue_stuck_events()
+            destravados = await database.run_db(database.requeue_stuck_events)
             if destravados:
                 print("[scheduled_events] " + str(destravados)
                       + " evento(s) destravado(s) de posting/reopening")
         except Exception as e:
             print("[scheduled_events] erro ao destravar eventos: " + repr(e))
 
-        events = database.get_active_scheduled_events()
+        events = await database.run_db(database.get_active_scheduled_events)
         print("[scheduled_events] " + str(len(events)) + " evento(s) ativo(s)")
 
 

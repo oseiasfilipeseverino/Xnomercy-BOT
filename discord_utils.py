@@ -180,7 +180,7 @@ async def alertar_financeiro(guild, titulo: str, detalhe: str):
     if guild is None:
         return
     try:
-        ch_id = database.get_config('channel_financeiro') or database.get_config('channel_logs')
+        ch_id = await database.run_db(database.get_config, 'channel_financeiro') or await database.run_db(database.get_config, 'channel_logs')
         if not ch_id:
             print('[alerta] nenhum canal configurado pra avisar: ' + titulo)
             return
@@ -204,7 +204,7 @@ async def log_channel(guild, message: str):
     if guild is None:
         return
     try:
-        ch_id = database.get_config('channel_logs')
+        ch_id = await database.run_db(database.get_config, 'channel_logs')
         if not ch_id:
             return
         ch = guild.get_channel(int(ch_id))

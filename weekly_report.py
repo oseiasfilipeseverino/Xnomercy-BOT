@@ -164,14 +164,14 @@ class WeeklyReportCog(commands.Cog):
                 return
 
             week_key = target.strftime('%Y-%m-%d')
-            if database.get_config('weekly_report_last_sent') == week_key:
+            if await database.run_db(database.get_config, 'weekly_report_last_sent') == week_key:
                 return  # já enviado essa semana
 
             discord_guild = self._get_guild()
             if not discord_guild:
                 return
 
-            ch_id = database.get_config('channel_logs')
+            ch_id = await database.run_db(database.get_config, 'channel_logs')
             if not ch_id:
                 return
 
@@ -182,7 +182,7 @@ class WeeklyReportCog(commands.Cog):
             stats = self._get_stats()
             embed = self._build_report(stats)
             await channel.send(embed=embed)
-            database.set_config('weekly_report_last_sent', week_key)
+            await database.run_db(database.set_config, 'weekly_report_last_sent', week_key)
             print('[weekly_report] Relatorio semanal postado!')
 
         except Exception as e:

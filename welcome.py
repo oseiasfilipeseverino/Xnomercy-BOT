@@ -24,13 +24,13 @@ class WelcomeCog(commands.Cog):
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
         try:
-            cfg = database.get_welcome_config()
+            cfg = await database.run_db(database.get_welcome_config)
             if not cfg:
                 print('[welcome] Configuração não encontrada')
                 return
  
             title   = cfg['title']
-            site_url = database.get_config('site_url') or SITE_PADRAO
+            site_url = await database.run_db(database.get_config, 'site_url') or SITE_PADRAO
             message = (cfg['message']
                        .replace('{mention}', member.mention)
                        .replace('{nome}', member.display_name)
@@ -43,7 +43,7 @@ class WelcomeCog(commands.Cog):
             # Envia no canal de boas-vindas do servidor. A menção vai no CONTENT
             # (fora do embed) — menção dentro de embed não dispara notificação;
             # é assim que a Loritta pinga o novo membro de verdade no canal.
-            ch_id = cfg['channel_id'] or database.get_config('channel_boas_vindas')
+            ch_id = cfg['channel_id'] or await database.run_db(database.get_config, 'channel_boas_vindas')
             if ch_id:
                 ch = member.guild.get_channel(int(ch_id))
                 if ch:
@@ -74,12 +74,12 @@ class WelcomeCog(commands.Cog):
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
         try:
-            title = database.get_config('goodbye_title') or 'Até a próxima!'
-            raw_msg = database.get_config('goodbye_message') or (
+            title = await database.run_db(database.get_config, 'goodbye_title') or 'Até a próxima!'
+            raw_msg = await database.run_db(database.get_config, 'goodbye_message') or (
                 '{nome} saiu do XnoMercy. Obrigado por ter feito parte da guild — '
                 'as portas ficam abertas se um dia quiser voltar.'
             )
-            site_url = database.get_config('site_url') or SITE_PADRAO
+            site_url = await database.run_db(database.get_config, 'site_url') or SITE_PADRAO
             message = (raw_msg
                        .replace('{mention}', member.mention)
                        .replace('{nome}', member.display_name)
@@ -90,7 +90,7 @@ class WelcomeCog(commands.Cog):
             embed.set_footer(text='XnoMercy Guild')
 
             # Aviso no canal de saídas (sempre funciona)
-            ch_id = database.get_config('channel_saidas_membros')
+            ch_id = await database.run_db(database.get_config, 'channel_saidas_membros')
             if ch_id:
                 ch = member.guild.get_channel(int(ch_id))
                 if ch:
@@ -122,8 +122,8 @@ class WelcomeCog(commands.Cog):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
-        database.set_config('goodbye_title', titulo)
-        database.set_config('goodbye_message', mensagem.replace('\\n', '\n'))
+        await database.run_db(database.set_config, 'goodbye_title', titulo)
+        await database.run_db(database.set_config, 'goodbye_message', mensagem.replace('\\n', '\n'))
         embed = discord.Embed(title='✅ Despedida Atualizada', color=discord.Color.green())
         embed.add_field(name='Título',   value=titulo,   inline=False)
         embed.add_field(name='Mensagem', value=mensagem, inline=False)
@@ -138,12 +138,12 @@ class WelcomeCog(commands.Cog):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
         target = usuario or interaction.user
-        title = database.get_config('goodbye_title') or 'Até a próxima!'
-        raw_msg = database.get_config('goodbye_message') or (
+        title = await database.run_db(database.get_config, 'goodbye_title') or 'Até a próxima!'
+        raw_msg = await database.run_db(database.get_config, 'goodbye_message') or (
             '{nome} saiu do XnoMercy. Obrigado por ter feito parte da guild — '
             'as portas ficam abertas se um dia quiser voltar.'
         )
-        site_url = database.get_config('site_url') or SITE_PADRAO
+        site_url = await database.run_db(database.get_config, 'site_url') or SITE_PADRAO
         message = (raw_msg
                    .replace('{mention}', target.mention)
                    .replace('{nome}', target.display_name)
@@ -173,14 +173,14 @@ class WelcomeCog(commands.Cog):
             return
  
         target = usuario or interaction.user
-        cfg    = database.get_welcome_config()
+        cfg    = await database.run_db(database.get_welcome_config)
  
         if not cfg:
             await interaction.response.send_message('❌ Config não encontrada. Rode /setup primeiro.', ephemeral=True)
             return
  
         title   = cfg['title']
-        site_url = database.get_config('site_url') or SITE_PADRAO
+        site_url = await database.run_db(database.get_config, 'site_url') or SITE_PADRAO
         message = (cfg['message']
                    .replace('{mention}', target.mention)
                    .replace('{nome}', target.display_name)
@@ -215,8 +215,8 @@ class WelcomeCog(commands.Cog):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
  
-        ch_id = str(canal.id) if canal else database.get_config('channel_boas_vindas')
-        database.set_welcome_config(titulo, mensagem.replace('\\n', '\n'), ch_id)
+        ch_id = str(canal.id) if canal else await database.run_db(database.get_config, 'channel_boas_vindas')
+        await database.run_db(database.set_welcome_config, titulo, mensagem.replace('\\n', '\n'), ch_id)
  
         embed = discord.Embed(title='✅ Boas-vindas Atualizada', color=discord.Color.green())
         embed.add_field(name='Título',   value=titulo,   inline=False)
@@ -242,7 +242,7 @@ class WelcomeCog(commands.Cog):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
  
-        database.set_config(funcao, str(canal.id))
+        await database.run_db(database.set_config, funcao, str(canal.id))
  
         nomes = {
             'channel_financeiro':      '💰 Financeiro',
@@ -303,7 +303,7 @@ class WelcomeCog(commands.Cog):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
  
-        all_perms = database.get_all_permissions()
+        all_perms = await database.run_db(database.get_all_permissions)
         embed = discord.Embed(title='⚙️ Permissões Configuradas', color=discord.Color.blurple())
  
         labels = {

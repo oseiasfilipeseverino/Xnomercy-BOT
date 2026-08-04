@@ -49,7 +49,7 @@ class ReopenTicketView(LoggedView):
         # Mexer em canal e' chamada de rede; defer antes pra nao correr contra os 3s.
         await interaction.response.defer(ephemeral=True)
 
-        if not database.reopen_ticket_db(str(interaction.channel.id)):
+        if not await database.run_db(database.reopen_ticket_db, str(interaction.channel.id)):
             await interaction.followup.send(
                 '❌ Não consegui reabrir. Provavelmente esta pessoa já tem outro '
                 'ticket aberto deste tipo — feche o outro primeiro.', ephemeral=True)
@@ -67,7 +67,7 @@ class ReopenTicketView(LoggedView):
 
             # Volta pra categoria original do tipo (mesmo helper da criação). Se
             # não estiver configurada, fica onde está — melhor que sumir.
-            tipo = database.get_ticket_type_by_channel(str(interaction.channel.id))
+            tipo = await database.run_db(database.get_ticket_type_by_channel, str(interaction.channel.id))
             categoria = (get_ticket_category(guild, tipo) if tipo else None) \
                 or interaction.channel.category
 
@@ -105,7 +105,7 @@ class CloseTicketView(LoggedView):
             # nome do canal se por algum motivo não achar o registro (canal antigo,
             # criado antes dessa coluna existir). Antes dependia só do nome, que
             # quebrava se alguém renomeasse o canal manualmente.
-            ch_name = (database.get_ticket_type_by_channel(str(interaction.channel.id))
+            ch_name = (await database.run_db(database.get_ticket_type_by_channel, str(interaction.channel.id))
                        or interaction.channel.name).lower()
             if 'recrutamento' in ch_name:
                 ticket_type = 'recrutamento'
@@ -121,23 +121,23 @@ class CloseTicketView(LoggedView):
                 archive_name = '💰 Tickets Saldo Finalizado'
  
             await interaction.response.send_message('🔒 Ticket encerrado! Movendo para o arquivo...')
-            database.close_ticket_db(str(interaction.channel.id))
+            await database.run_db(database.close_ticket_db, str(interaction.channel.id))
  
             # Busca ou cria categoria de arquivo
             guild = interaction.guild
-            cat_id = database.get_config(archive_key)
+            cat_id = await database.run_db(database.get_config, archive_key)
             category = guild.get_channel(int(cat_id)) if cat_id else None
  
             if not category:
                 category = discord.utils.get(guild.categories, name=archive_name)
             if not category:
                 category = await guild.create_category(archive_name)
-                database.set_config(archive_key, str(category.id))
+                await database.run_db(database.set_config, archive_key, str(category.id))
                 # Dois tickets fechados quase juntos passavam os dois pelas
                 # checagens acima e criavam duas categorias com o mesmo nome.
                 # Reconsulta depois de gravar: quem perdeu a corrida adota a
                 # categoria do outro e apaga a sua, que está vazia.
-                vencedora = database.get_config(archive_key)
+                vencedora = await database.run_db(database.get_config, archive_key)
                 if vencedora and vencedora != str(category.id):
                     perdedora, category = category, guild.get_channel(int(vencedora)) or category
                     try:
@@ -198,7 +198,7 @@ class TicketButton(discord.ui.Button):
         # (um aberto por pessoa+tipo) faz o segundo clique perder aqui, em vez de
         # perder depois — quando já teria criado um canal órfão.
         try:
-            ticket_id = database.reservar_ticket(str(user.id), user.display_name, self.ticket_type)
+            ticket_id = await database.run_db(database.reservar_ticket, str(user.id), user.display_name, self.ticket_type)
         except Exception as e:
             print(f'[tickets] erro ao reservar ticket de {user.id}: {e!r}')
             await interaction.followup.send(
@@ -216,7 +216,7 @@ class TicketButton(discord.ui.Button):
         if ticket_id is None:
             # Perdeu a reserva: ou já tinha um aberto, ou foi o 2º clique.
             try:
-                existing = database.get_open_ticket(str(user.id), self.ticket_type)
+                existing = await database.run_db(database.get_open_ticket, str(user.id), self.ticket_type)
             except Exception as e:
                 print(f'[ticket aberto] {e!r}')
                 existing = None
@@ -248,7 +248,7 @@ class TicketButton(discord.ui.Button):
             'suporte':      'support_tickets',
             'saque':        'saque_tickets',
         }
-        for role_name in database.get_permission_roles(perm_map[self.ticket_type]):
+        for role_name in await database.run_db(database.get_permission_roles, perm_map[self.ticket_type]):
             role = discord.utils.get(guild.roles, name=role_name)
             if role:
                 overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
@@ -265,12 +265,12 @@ class TicketButton(discord.ui.Button):
             # esse tipo de ticket pra sempre — o índice único barraria toda
             # tentativa seguinte por causa de uma linha que não virou canal.
             print(f'[tickets] falha ao criar canal de {user.id}: {e!r}')
-            database.cancelar_reserva_ticket(ticket_id)
+            await database.run_db(database.cancelar_reserva_ticket, ticket_id)
             await interaction.followup.send(
                 '⚠️ Não consegui criar o canal do ticket. Avise a liderança.', ephemeral=True)
             return
 
-        database.confirmar_ticket(ticket_id, ch.id)
+        await database.run_db(database.confirmar_ticket, ticket_id, ch.id)
 
         # Mensagem editavel do ticket - get_ticket_message() volta None se ninguem
         # configurou esse tipo ainda (/configurar_ticket) OU se o banco teve um
@@ -279,7 +279,7 @@ class TicketButton(discord.ui.Button):
         # interrompia o codigo antes do ch.send() (mensagem de boas-vindas) E antes
         # do interaction.response (confirmacao pro usuario) - ninguem, nem staff nem
         # quem abriu, ficava sabendo que o ticket "nasceu quebrado".
-        ticket_msg = database.get_ticket_message(self.ticket_type)
+        ticket_msg = await database.run_db(database.get_ticket_message, self.ticket_type)
         cfg        = TICKET_TYPES[self.ticket_type]
 
         title   = ticket_msg['title']   if ticket_msg else f"{cfg['emoji']} {cfg['label']} | XnoMercy"
@@ -356,7 +356,7 @@ class TicketsCog(commands.Cog):
                 '❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
 
-        fechados = database.get_closed_tickets()
+        fechados = await database.run_db(database.get_closed_tickets)
         if not fechados:
             await interaction.response.send_message(
                 'ℹ️ Nenhum ticket fechado pra arquivar.', ephemeral=True)
@@ -397,7 +397,7 @@ class TicketsCog(commands.Cog):
 
         # So remove do banco o que realmente saiu — o que falhou continua na
         # lista pra tentar de novo.
-        removidos = database.delete_tickets(apagados)
+        removidos = await database.run_db(database.delete_tickets, apagados)
 
         resumo = f'🗑️ **{removidos}** ticket(s) arquivado(s).'
         if nao_achados:
@@ -428,7 +428,7 @@ class TicketsCog(commands.Cog):
  
         # Salva a categoria do canal atual como categoria deste tipo de ticket
         if tipo != 'todos' and interaction.channel.category:
-            database.set_config(
+            await database.run_db(database.set_config, 
                 f'ticket_category_{tipo}',
                 str(interaction.channel.category_id)
             )
@@ -473,7 +473,7 @@ class TicketsCog(commands.Cog):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
-        database.set_ticket_message(tipo, titulo, mensagem.replace('\\n', '\n'))
+        await database.run_db(database.set_ticket_message, tipo, titulo, mensagem.replace('\\n', '\n'))
         await interaction.response.send_message(f'✅ Mensagem do ticket **{tipo}** atualizada!', ephemeral=True)
  
  

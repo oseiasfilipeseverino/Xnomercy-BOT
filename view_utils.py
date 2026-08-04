@@ -18,7 +18,7 @@ class LoggedView(discord.ui.View):
         custom_id = getattr(item, 'custom_id', '?')
         print(f'[{type(self).__name__}] erro no item {custom_id}: {error}')
         try:
-            ch_id = database.get_config('channel_logs')
+            ch_id = await database.run_db(database.get_config, 'channel_logs')
             if ch_id and interaction.guild:
                 ch = interaction.guild.get_channel(int(ch_id))
                 if ch:

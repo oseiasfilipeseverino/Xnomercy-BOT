@@ -88,17 +88,17 @@ class SitePendingSplitView(LoggedView):
         # creditada certo, mas quem clicou via "a aplicacao nao respondeu".
         await interaction.response.defer(ephemeral=True)
 
-        split = database.get_pending_split(self.split_id)
+        split = await database.run_db(database.get_pending_split, self.split_id)
         if not split or split['status'] != 'pending':
             await interaction.followup.send('❌ Já processado.', ephemeral=True)
             return
 
         # Atômico — se o site aprovou primeiro (tela /gestao/splits), perde a corrida aqui.
-        if not database.approve_pending_split(self.split_id, interaction.user.display_name):
+        if not await database.run_db(database.approve_pending_split, self.split_id, interaction.user.display_name):
             await interaction.followup.send('❌ Já processado por outra pessoa.', ephemeral=True)
             return
 
-        event = database.get_scheduled_event(split['event_id'])
+        event = await database.run_db(database.get_scheduled_event, split['event_id'])
         event_title = event.get('title', '') if event else ''
         participants = json.loads(split['participants_json'])
 
@@ -107,10 +107,10 @@ class SitePendingSplitView(LoggedView):
         # novo. Antes, uma falha no meio do lote deixava metade paga e o split
         # preso em 'approved', sem nenhuma forma de completar o pagamento.
         try:
-            database.save_split_participants(split['event_id'], participants, event_title)
+            await database.run_db(database.save_split_participants, split['event_id'], participants, event_title)
         except Exception as e:
             print(f'[site_splits] FALHA ao creditar split {self.split_id}: {e!r}')
-            database.revert_pending_split(self.split_id)
+            await database.run_db(database.revert_pending_split, self.split_id)
             await alertar_financeiro(
                 interaction.guild,
                 'Falha ao creditar split',
@@ -172,12 +172,12 @@ class SitePendingSplitView(LoggedView):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
 
-        split = database.get_pending_split(self.split_id)
+        split = await database.run_db(database.get_pending_split, self.split_id)
         if not split or split['status'] != 'pending':
             await interaction.response.send_message('❌ Já processado.', ephemeral=True)
             return
 
-        if not database.reject_pending_split(self.split_id, interaction.user.display_name):
+        if not await database.run_db(database.reject_pending_split, self.split_id, interaction.user.display_name):
             await interaction.response.send_message('❌ Já processado por outra pessoa.', ephemeral=True)
             return
 
@@ -217,7 +217,7 @@ class SiteSplitsCog(commands.Cog):
         # isso, um restart do bot deixava os botões de mensagens antigas mudos
         # (clicar não fazia nada, sem erro nem feedback).
         try:
-            posted = database.get_posted_pending_splits()
+            posted = await database.run_db(database.get_posted_pending_splits)
             for split in posted:
                 self.bot.add_view(SitePendingSplitView(split['id']))
             print(f'[site_splits] {len(posted)} view(s) restaurada(s)')
@@ -227,11 +227,11 @@ class SiteSplitsCog(commands.Cog):
     @tasks.loop(seconds=20)
     async def post_pending_splits(self):
         try:
-            unposted = database.get_pending_splits_unposted()
+            unposted = await database.run_db(database.get_pending_splits_unposted)
             if not unposted:
                 return
             for guild in self.bot.guilds:
-                ch_id = database.get_config('channel_financeiro')
+                ch_id = await database.run_db(database.get_config, 'channel_financeiro')
                 if not ch_id:
                     continue
                 ch = guild.get_channel(int(ch_id))
@@ -261,7 +261,7 @@ class SiteSplitsCog(commands.Cog):
 
                         view = SitePendingSplitView(sid)
                         msg = await ch.send(embed=embed, view=view)
-                        database.mark_pending_split_posted(sid, str(msg.id))
+                        await database.run_db(database.mark_pending_split_posted, sid, str(msg.id))
                         self._falhas.pop(sid, None)
                         # Sucesso também vira log. Antes só o erro aparecia, então
                         # "não chegou" e "chegou" eram indistinguíveis no log — foi

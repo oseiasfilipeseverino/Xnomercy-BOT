@@ -26,7 +26,7 @@ async def _log(guild, message: str):
     await log_channel(guild, message)
 
 async def _get_aguardando(guild):
-    ch_id = database.get_config('voice_aguardando')
+    ch_id = await database.run_db(database.get_config, 'voice_aguardando')
     if ch_id:
         ch = guild.get_channel(int(ch_id))
         if ch: return ch
@@ -72,27 +72,27 @@ class CreateEventModal(discord.ui.Modal, title='Criar Evento'):
         guild = interaction.guild
         title = self.nome.value
 
-        event_id = database.create_event(str(guild.id), str(interaction.user.id), interaction.user.display_name, title)
+        event_id = await database.run_db(database.create_event, str(guild.id), str(interaction.user.id), interaction.user.display_name, title)
 
         # Canal de texto do evento
-        cat_id   = database.get_config('category_eventos_andamento')
+        cat_id   = await database.run_db(database.get_config, 'category_eventos_andamento')
         cat_text = guild.get_channel(int(cat_id)) if cat_id else None
         text_ch  = await guild.create_text_channel(
             name=f'event-{event_id:04d}',
             category=cat_text,
             topic=f'{title} | Evento #{event_id} | Por {interaction.user.display_name}'
         )
-        database.update_event_channel(event_id, str(text_ch.id))
+        await database.run_db(database.update_event_channel, event_id, str(text_ch.id))
 
         # Canal de voz do evento
         voice_ch = await guild.create_voice_channel(
             name=f'⚔️ Event-{event_id:04d} | {title[:30]}',
             category=cat_text
         )
-        database.update_event_voice(event_id, str(voice_ch.id))
+        await database.run_db(database.update_event_voice, event_id, str(voice_ch.id))
 
         # Adiciona o puxador como participante com 100% por padrão
-        database.add_event_participant(event_id, str(interaction.user.id), interaction.user.display_name, 100.0)
+        await database.run_db(database.add_event_participant, event_id, str(interaction.user.id), interaction.user.display_name, 100.0)
 
         # Move criador para a call
         try: await interaction.user.move_to(voice_ch)
@@ -142,12 +142,12 @@ class JoinEventButton(discord.ui.Button):
                 await interaction.response.send_message('❌ Entre em uma **call de voz** primeiro!', ephemeral=True)
                 return
 
-            event = database.get_event(self.event_id)
+            event = await database.run_db(database.get_event, self.event_id)
             if not event or event['status'] != 'active':
                 await interaction.response.send_message('❌ Evento não está mais ativo.', ephemeral=True)
                 return
 
-            added = database.add_event_participant(self.event_id, str(interaction.user.id), interaction.user.display_name)
+            added = await database.run_db(database.add_event_participant, self.event_id, str(interaction.user.id), interaction.user.display_name)
 
             voice_ch = interaction.guild.get_channel(int(self.voice_ch_id)) if self.voice_ch_id else None
             if voice_ch:
@@ -180,7 +180,7 @@ class FinalizeEventButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         try:
-            event = database.get_event(self.event_id)
+            event = await database.run_db(database.get_event, self.event_id)
             if not event or event['status'] != 'active':
                 await interaction.response.send_message('❌ Evento não está mais ativo.', ephemeral=True)
                 return
@@ -247,7 +247,7 @@ class AddPlayerModal(discord.ui.Modal, title='Adicionar Player'):
         except Exception:
             weight = 100.0
 
-        added = database.add_event_participant(self.event_id, str(member.id), member.display_name, weight)
+        added = await database.run_db(database.add_event_participant, self.event_id, str(member.id), member.display_name, weight)
         if added is None:
             # Falha real (conexão caiu etc) — distinto de "já existia" (False).
             # Antes os dois casos eram indistinguíveis e isso tentava um UPDATE
@@ -255,7 +255,7 @@ class AddPlayerModal(discord.ui.Modal, title='Adicionar Player'):
             await interaction.response.send_message('❌ Erro ao adicionar participante. Tente novamente.', ephemeral=True)
             return
         if added is False:
-            database.set_participant_weight(self.event_id, str(member.id), weight)
+            await database.run_db(database.set_participant_weight, self.event_id, str(member.id), weight)
 
         await _update_event_embed(interaction.guild, self.event_id)
         msg = f'✅ **{member.display_name}** adicionado com **{weight:.0f}%** de participação!'
@@ -270,7 +270,7 @@ class RemovePlayerModal(discord.ui.Modal, title='Remover Player'):
         self.event_id = event_id
 
     async def on_submit(self, interaction: discord.Interaction):
-        removed = database.remove_event_participant(self.event_id, self.user_id.value)
+        removed = await database.run_db(database.remove_event_participant, self.event_id, self.user_id.value)
         if removed:
             await _update_event_embed(interaction.guild, self.event_id)
             await interaction.response.send_message('✅ Player removido!', ephemeral=True)
@@ -315,11 +315,11 @@ def _build_event_embed(event_id, title, creator, participants):
 
 
 async def _update_event_embed(guild, event_id):
-    event = database.get_event(event_id)
+    event = await database.run_db(database.get_event, event_id)
     if not event or not event['channel_id']: return
     ch = guild.get_channel(int(event['channel_id']))
     if not ch: return
-    participants = database.get_event_participants(event_id)
+    participants = await database.run_db(database.get_event_participants, event_id)
     embed = _build_event_embed(event_id, event['title'], event['creator_name'], participants)
     async for msg in ch.history(limit=5):
         if msg.author == guild.me and msg.embeds:
@@ -329,7 +329,7 @@ async def _update_event_embed(guild, event_id):
 
 async def _refresh_participar(guild):
     try:
-        ch_id = database.get_config('channel_participar')
+        ch_id = await database.run_db(database.get_config, 'channel_participar')
         if not ch_id:
             print(f'[participar] channel_participar não configurado!')
             return
@@ -338,7 +338,7 @@ async def _refresh_participar(guild):
             print(f'[participar] Canal não encontrado: {ch_id}')
             return
 
-        active = database.get_active_events(str(guild.id))
+        active = await database.run_db(database.get_active_events, str(guild.id))
         embed  = discord.Embed(title='⚔️ Eventos em Andamento | XnoMercy', color=discord.Color.gold())
 
         if active:
@@ -367,8 +367,8 @@ async def _refresh_participar(guild):
 
 async def _do_finalize(guild, event_id, by_name):
     try:
-        event = database.get_event(event_id)
-        database.finish_event(event_id)
+        event = await database.run_db(database.get_event, event_id)
+        await database.run_db(database.finish_event, event_id)
 
         voice_ch_id = event['voice_channel_id'] if event['voice_channel_id'] else ''
         if voice_ch_id:
@@ -383,14 +383,14 @@ async def _do_finalize(guild, event_id, by_name):
                 try: await voice_ch.delete()
                 except Exception: pass
 
-        cat_id = database.get_config('category_eventos_finalizados')
+        cat_id = await database.run_db(database.get_config, 'category_eventos_finalizados')
         cat    = guild.get_channel(int(cat_id)) if cat_id else None
         if event['channel_id']:
             ev_ch = guild.get_channel(int(event['channel_id']))
             if ev_ch and cat:
                 try:
                     # Permissões: só Puxador de Conteúdo e acima podem ver
-                    event_roles = database.get_permission_roles('events')
+                    event_roles = await database.run_db(database.get_permission_roles, 'events')
                     overwrites = {
                         guild.default_role: discord.PermissionOverwrite(read_messages=False),
                         guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
@@ -432,12 +432,12 @@ class ApproveDepositView(LoggedView):
         # lider via "a aplicacao nao respondeu".
         await interaction.response.defer(ephemeral=True)
 
-        event = database.get_event(self.event_id)
+        event = await database.run_db(database.get_event, self.event_id)
         # approve_event agora é um UPDATE condicional atômico (WHERE status='pending')
         # — a checagem antiga (ler status, depois decidir) deixava uma janela onde 2
         # cliques quase simultâneos passavam os dois e creditavam a prata em dobro.
         # Só segue se ESTE clique venceu a corrida.
-        if not database.approve_event(self.event_id, interaction.user.display_name):
+        if not await database.run_db(database.approve_event, self.event_id, interaction.user.display_name):
             await interaction.followup.send('❌ Já processado.', ephemeral=True)
             return
 
@@ -450,11 +450,11 @@ class ApproveDepositView(LoggedView):
                     for p in self.participants
                     if (valor := self.distribution.get(p['discord_id'], 0)) > 0]
         try:
-            database.credit_event_participants(
+            await database.run_db(database.credit_event_participants, 
                 self.event_id, event["title"], creditos, interaction.user.display_name)
         except Exception as e:
             print(f'[events] FALHA ao creditar evento #{self.event_id}: {e!r}')
-            database.revert_event_approval(self.event_id)
+            await database.run_db(database.revert_event_approval, self.event_id)
             await alertar_financeiro(
                 interaction.guild,
                 'Falha ao creditar evento',
@@ -546,7 +546,7 @@ class ApproveDepositView(LoggedView):
 
         # Antes só editava o embed — o evento continuava 'pending' no banco, então
         # dava pra clicar "Aprovar" depois de "Recusar" e creditar a prata mesmo assim.
-        if not database.reject_event(self.event_id, interaction.user.display_name):
+        if not await database.run_db(database.reject_event, self.event_id, interaction.user.display_name):
             await interaction.response.send_message('❌ Já processado.', ephemeral=True)
             return
 
@@ -577,7 +577,7 @@ class EventsCog(commands.Cog):
     async def on_ready(self):
         for guild in self.bot.guilds:
             try:
-                active = database.get_active_events(str(guild.id))
+                active = await database.run_db(database.get_active_events, str(guild.id))
                 for ev in active:
                     self.bot.add_view(EventManageView(ev['id']))
                 if active:
@@ -598,7 +598,7 @@ class EventsCog(commands.Cog):
                 await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
                 return
 
-            event = database.get_event_by_channel(str(interaction.channel_id))
+            event = await database.run_db(database.get_event_by_channel, str(interaction.channel_id))
             if not event:
                 await interaction.response.send_message(
                     '❌ Este canal não é um canal de evento. Use este comando dentro do canal do evento.',
@@ -607,8 +607,8 @@ class EventsCog(commands.Cog):
                 return
 
             valor = max(0, min(100, valor))
-            database.add_event_participant(event['id'], str(usuario.id), usuario.display_name, float(valor))
-            database.set_participant_weight(event['id'], str(usuario.id), float(valor))
+            await database.run_db(database.add_event_participant, event['id'], str(usuario.id), usuario.display_name, float(valor))
+            await database.run_db(database.set_participant_weight, event['id'], str(usuario.id), float(valor))
             await _update_event_embed(interaction.guild, event['id'])
 
             if valor == 0:
@@ -648,18 +648,18 @@ class EventsCog(commands.Cog):
             return
         valor_total, reparo = valor_total_n, reparo_n
 
-        event = database.get_event_by_channel(str(interaction.channel_id))
+        event = await database.run_db(database.get_event_by_channel, str(interaction.channel_id))
         if not event:
             await interaction.response.send_message('❌ Este canal não é um canal de evento.', ephemeral=True)
             return
 
-        participants = database.get_event_participants(event['id'])
+        participants = await database.run_db(database.get_event_participants, event['id'])
         if not participants:
             await interaction.response.send_message('❌ Nenhum participante registrado.', ephemeral=True)
             return
 
-        guild_tax  = float(database.get_config('guild_tax') or 10)
-        vendor_tax = float(database.get_config('vendor_tax') or 5)
+        guild_tax  = float(await database.run_db(database.get_config, 'guild_tax') or 10)
+        vendor_tax = float(await database.run_db(database.get_config, 'vendor_tax') or 5)
         guild_cut  = valor_total * (guild_tax / 100)
         vendor_cut = valor_total * (vendor_tax / 100)
         net        = valor_total - guild_cut - vendor_cut - reparo
@@ -721,7 +721,7 @@ class EventsCog(commands.Cog):
             return
         valor_total, reparo = valor_total_n, reparo_n
 
-        event = database.get_event_by_channel(str(interaction.channel_id))
+        event = await database.run_db(database.get_event_by_channel, str(interaction.channel_id))
         if not event:
             await interaction.response.send_message('❌ Este canal não é um canal de evento.', ephemeral=True)
             return
@@ -730,13 +730,13 @@ class EventsCog(commands.Cog):
             await interaction.response.send_message('❌ Evento já processado.', ephemeral=True)
             return
 
-        participants = database.get_event_participants(event['id'])
+        participants = await database.run_db(database.get_event_participants, event['id'])
         if not participants:
             await interaction.response.send_message('❌ Nenhum participante registrado.', ephemeral=True)
             return
 
-        guild_tax  = float(database.get_config('guild_tax') or 10)
-        vendor_tax = float(database.get_config('vendor_tax') or 5)
+        guild_tax  = float(await database.run_db(database.get_config, 'guild_tax') or 10)
+        vendor_tax = float(await database.run_db(database.get_config, 'vendor_tax') or 5)
         guild_cut  = valor_total * (guild_tax / 100)
         vendor_cut = valor_total * (vendor_tax / 100)
         net        = valor_total - guild_cut - vendor_cut - reparo
@@ -748,13 +748,13 @@ class EventsCog(commands.Cog):
         # Reivindica o evento atomicamente ANTES de montar a mensagem de aprovação —
         # se perder a corrida (já reivindicado por outra chamada quase simultânea),
         # aborta sem postar uma 2ª mensagem de aprovação divergente pro mesmo evento.
-        if not database.deposit_event(event['id'], valor_total, reparo, net):
+        if not await database.run_db(database.deposit_event, event['id'], valor_total, reparo, net):
             await interaction.response.send_message(
                 '❌ Este evento já foi processado ou está aguardando aprovação.', ephemeral=True)
             return
         distribution = _calc_distribution(participants, net)
 
-        ch_id  = database.get_config('channel_financeiro')
+        ch_id  = await database.run_db(database.get_config, 'channel_financeiro')
         fin_ch = interaction.guild.get_channel(int(ch_id)) if ch_id else None
 
         lines = []

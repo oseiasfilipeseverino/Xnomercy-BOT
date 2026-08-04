@@ -6,13 +6,14 @@ Remove Membro, adiciona Amigo, troca [NM] por [AMG].
 
 import asyncio
 import re
+import time
 import unicodedata
 import discord
 from discord.ext import commands, tasks
 import requests
 
 import database
-from discord_utils import SEM_MENCOES
+from discord_utils import SEM_MENCOES, alertar_financeiro
 import config
 
 ALBION_API = 'https://gameinfo.albiononline.com/api/gameinfo'
@@ -61,36 +62,56 @@ class AutoPurgeCog(commands.Cog):
     def _get_guild(self):
         return config.get_home_guild(self.bot)
 
+    def _buscar(self, url, timeout, rotulo, tentativas=3):
+        """GET com repetição. A API do Albion dá timeout com frequência a partir
+        do Railway (do meu PC a mesma chamada volta em 0,9s), provavelmente por
+        vir de datacenter. Uma tentativa só fazia o ciclo inteiro desistir."""
+        ultimo = None
+        for n in range(1, tentativas + 1):
+            try:
+                r = requests.get(url, timeout=timeout,
+                                 headers={'User-Agent': 'XnoMercy-Bot/2.0'})
+                if r.ok:
+                    return r.json()
+                ultimo = f'HTTP {r.status_code}'
+            except Exception as e:
+                ultimo = repr(e)
+            if n < tentativas:
+                time.sleep(2 * n)          # 2s, 4s
+        print(f'[auto_purge] {rotulo} falhou em {tentativas} tentativas: {ultimo}')
+        return None
+
     def _get_albion_guild_id(self):
-        try:
-            r = requests.get(
-                ALBION_API + '/search?q=' + GUILD_NAME,
-                timeout=15,
-                headers={'User-Agent': 'XnoMercy-Bot/2.0'}
-            )
-            if not r.ok:
-                return None
-            guilds = r.json().get('guilds', [])
-            for g in guilds:
-                if g.get('Name', '').lower() == GUILD_NAME.lower():
-                    return g['Id']
-        except Exception as e:
-            print(f'[auto_purge] Erro ao buscar guild ID: {e}')
+        """O id da guild no Albion NUNCA muda, então fica salvo no guild_config.
+
+        Antes era buscado a cada ciclo, e essa busca era justamente a que dava
+        timeout — o auto-purge desistia antes de começar, sempre, e ninguém
+        percebia porque o único sinal era uma linha no log.
+        """
+        salvo = (database.get_config('albion_guild_id') or '').strip()
+        if salvo:
+            return salvo
+
+        dados = self._buscar(ALBION_API + '/search?q=' + GUILD_NAME, 15, 'busca da guild')
+        if not dados:
+            return None
+        for g in dados.get('guilds', []):
+            # Comparação exata (sem acento/caixa): existem `xNoMercyx` e
+            # `xNoMercyy` no jogo, e pegar a guild errada purgaria a guild toda.
+            if g.get('Name', '').lower() == GUILD_NAME.lower():
+                gid = g['Id']
+                database.set_config('albion_guild_id', gid)
+                print(f'[auto_purge] guild id descoberto e salvo: {gid}')
+                return gid
+        print(f'[auto_purge] nenhuma guild com o nome exato "{GUILD_NAME}"')
         return None
 
     def _get_guild_members_albion(self, guild_id):
-        try:
-            r = requests.get(
-                f'{ALBION_API}/guilds/{guild_id}/members',
-                timeout=20,
-                headers={'User-Agent': 'XnoMercy-Bot/2.0'}
-            )
-            if r.ok:
-                members = r.json()
-                return {m.get('Name', '').lower() for m in members if m.get('Name')}
-        except Exception as e:
-            print(f'[auto_purge] Erro ao buscar membros Albion: {e}')
-        return None
+        membros = self._buscar(f'{ALBION_API}/guilds/{guild_id}/members', 20,
+                               'lista de membros')
+        if membros is None:
+            return None
+        return {m.get('Name', '').lower() for m in membros if m.get('Name')}
 
     def _extract_albion_nick(self, discord_member):
         """Extrai o nick do Albion de um apelido "[NM] Nome". Devolve uma tupla
@@ -145,6 +166,28 @@ class AutoPurgeCog(commands.Cog):
         confiavel = bool(re.fullmatch(r'[A-Za-z0-9_]{3,16}', primeiro))
         return candidatos, confiavel
 
+    async def _avisar_parado(self, motivo):
+        """Avisa a liderança quando o auto-purge para de rodar.
+
+        Ficou meses caído sem ninguém saber: o único sinal era uma linha no log
+        que ninguém lê. Enquanto está parado, quem sai da guild no jogo mantém o
+        cargo de Membro no Discord indefinidamente.
+
+        Avisa na 3ª falha seguida (não na 1ª — a API do Albion oscila e um
+        alerta a cada oscilação vira ruído que se aprende a ignorar).
+        """
+        self._falhas = getattr(self, '_falhas', 0) + 1
+        print(f'[auto_purge] parado ({self._falhas}x seguidas): {motivo}')
+        if self._falhas != 3:
+            return
+        guild = self._get_guild()
+        if guild:
+            await alertar_financeiro(
+                guild, '⚠️ Auto-purge parado',
+                f'Não rodou nas últimas {self._falhas} tentativas: {motivo}.\n\n'
+                'Enquanto isso, quem sai da guild no Albion continua com o cargo '
+                'de **Membro** no Discord.')
+
     @tasks.loop(seconds=CHECK_INTERVAL)
     async def purge_check_task(self):
         try:
@@ -156,14 +199,16 @@ class AutoPurgeCog(commands.Cog):
             loop = asyncio.get_event_loop()
             guild_id = await loop.run_in_executor(None, self._get_albion_guild_id)
             if not guild_id:
-                print('[auto_purge] Guild ID nao encontrado')
+                await self._avisar_parado('nao consegui descobrir o id da guild')
                 return
 
             albion_members = await loop.run_in_executor(
                 None, self._get_guild_members_albion, guild_id)
             if albion_members is None:
-                print('[auto_purge] Falha ao buscar membros da API')
+                await self._avisar_parado('a API do Albion nao respondeu')
                 return
+
+            self._falhas = 0
 
             # Resposta vazia/curta demais = glitch da API, nao guild dissolvida.
             if len(albion_members) < MIN_MEMBERS_SANITY:
@@ -236,7 +281,7 @@ class AutoPurgeCog(commands.Cog):
                       f'rebaixados de uma vez — parece falha da API, nao saida real. '
                       f'Nada foi alterado.')
                 try:
-                    ch_id = database.get_config('channel_logs')
+                    ch_id = await database.run_db(database.get_config, 'channel_logs')
                     if ch_id:
                         ch = discord_guild.get_channel(int(ch_id))
                         if ch:
@@ -256,7 +301,7 @@ class AutoPurgeCog(commands.Cog):
             if nao_verificaveis:
                 print(f'[auto_purge] {len(nao_verificaveis)} apelido(s) nao verificavel(is) — nada alterado')
                 try:
-                    ch_id = database.get_config('channel_logs')
+                    ch_id = await database.run_db(database.get_config, 'channel_logs')
                     if ch_id:
                         ch = discord_guild.get_channel(int(ch_id))
                         if ch:
@@ -300,9 +345,9 @@ class AutoPurgeCog(commands.Cog):
                 return
 
             # Posta aviso
-            ch_id = database.get_config('channel_saidas_membros')
+            ch_id = await database.run_db(database.get_config, 'channel_saidas_membros')
             if not ch_id:
-                ch_id = database.get_config('channel_logs')
+                ch_id = await database.run_db(database.get_config, 'channel_logs')
             if not ch_id:
                 return
 

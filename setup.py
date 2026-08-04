@@ -52,9 +52,9 @@ class SetupCog(commands.Cog):
         def find(name):
             return discord.utils.get(guild.roles, name=name)
  
-        all_roles   = database.get_permission_roles('members')
-        fin_roles   = database.get_permission_roles('financial')
-        event_roles = database.get_permission_roles('events')
+        all_roles   = await database.run_db(database.get_permission_roles, 'members')
+        fin_roles   = await database.run_db(database.get_permission_roles, 'financial')
+        event_roles = await database.run_db(database.get_permission_roles, 'events')
  
         def ow_read(roles):
             d = {nobody: discord.PermissionOverwrite(read_messages=False, send_messages=False),
@@ -121,13 +121,13 @@ class SetupCog(commands.Cog):
  
         # ── Salva TUDO no banco ────────────────────────────────────────────────
         config['setup_done'] = '1'
-        database.save_guild_config(config)
+        await database.run_db(database.save_guild_config, config)
  
         # Confirma salvamento
-        saved_part = database.get_config('channel_participar')
+        saved_part = await database.run_db(database.get_config, 'channel_participar')
         print(f'[setup] channel_participar salvo: {saved_part}')
-        print(f'[setup] channel_criar_evento salvo: {database.get_config("channel_criar_evento")}')
-        print(f'[setup] category_eventos_andamento salvo: {database.get_config("category_eventos_andamento")}')
+        print(f'[setup] channel_criar_evento salvo: {await database.run_db(database.get_config, "channel_criar_evento")}')
+        print(f'[setup] category_eventos_andamento salvo: {await database.run_db(database.get_config, "category_eventos_andamento")}')
  
         # ── Posta painel em #criar-evento ──────────────────────────────────────
         from events import CreateEventView

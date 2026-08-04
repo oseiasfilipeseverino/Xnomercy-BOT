@@ -109,7 +109,7 @@ class EnergyNotifications(commands.Cog):
             guild = self._get_guild()
             if not guild:
                 return
-            ch_id = database.get_config('channel_logs')
+            ch_id = await database.run_db(database.get_config, 'channel_logs')
             if not ch_id:
                 return
             ch = guild.get_channel(int(ch_id))

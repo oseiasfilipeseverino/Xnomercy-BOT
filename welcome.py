@@ -7,6 +7,7 @@ from discord import app_commands
 from discord.ext import commands
  
 import database
+import permissions
 from permissions import is_financial
 
 # Endereço do site. O valor que vale é o `site_url` do guild_config (dá pra
@@ -280,14 +281,20 @@ class WelcomeCog(commands.Cog):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
  
+        await interaction.response.defer(ephemeral=True)
         if acao == 'add':
-            database.add_permission_role(permissao, cargo.name)
+            await database.run_db(database.add_permission_role, permissao, cargo.name)
             msg = f'✅ **{cargo.name}** adicionado à permissão **{permissao}**!'
         else:
-            database.remove_permission_role(permissao, cargo.name)
+            await database.run_db(database.remove_permission_role, permissao, cargo.name)
             msg = f'✅ **{cargo.name}** removido da permissão **{permissao}**!'
- 
-        await interaction.response.send_message(msg, ephemeral=True)
+
+        # As permissões ficam em memória (ver permissions.py) — sem isto, a
+        # mudança só valeria quando o cache vencesse, e a pessoa que acabou de
+        # ganhar o cargo continuaria levando "sem permissão".
+        permissions.invalidar()
+
+        await interaction.followup.send(msg, ephemeral=True)
  
     # ── /ver_permissoes ────────────────────────────────────────────────────────
     @app_commands.command(name='ver_permissoes', description='[LÍDER] Ver todas as permissões configuradas.')

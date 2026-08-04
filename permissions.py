@@ -1,15 +1,77 @@
 """
-cogs/permissions.py — Permissões dinâmicas carregadas do banco de dados
+permissions.py — Permissões dinâmicas carregadas do banco de dados
+
+Toda checagem de permissão passa por aqui, e ela acontece na PRIMEIRA linha de
+praticamente todo comando — antes do `defer()`. Consultando o banco a cada
+chamada, essa era a consulta mais repetida do bot inteiro, e a única que rodava
+antes de o comando ter qualquer chance de responder ao Discord: se o Postgres
+demorasse (por exemplo enquanto o price_updater grava 100 mil registros), o
+comando estourava o limite de 3s e a pessoa ficava olhando "Enviando
+comando..." pra sempre.
+
+Agora fica em memória. Permissão muda por comando de líder, raramente — e
+quando muda, `invalidar()` derruba o cache na hora, então não há janela de
+permissão desatualizada por descuido.
 """
+
+import time
 
 import discord
 import database
 
+# permissão -> (lista de cargos, momento em que foi lida)
+_cache: dict[str, tuple[list, float]] = {}
+
+# Teto de segurança pro caso de a tabela ser alterada por fora (pelo site ou
+# direto no banco) sem passar por invalidar(). Cinco minutos é curto o bastante
+# pra ninguém ficar sem acesso e longo o bastante pra tirar a consulta do
+# caminho de todo comando.
+_TTL = 300
+
+PERMISSOES = ('financial', 'events', 'recruit_tickets', 'support_tickets',
+              'saque_tickets', 'members', 'all')
+
+
+def invalidar():
+    """Esquece o que está em memória. Chamar ao ALTERAR permissão."""
+    _cache.clear()
+
+
+async def aquecer():
+    """Carrega tudo pro cache fora do laço de eventos (usar no on_ready).
+
+    Sem isso, a primeira checagem de cada permissão depois do boot ainda pagaria
+    a consulta síncrona — justamente no momento de maior movimento, logo que o
+    bot volta.
+    """
+    agora = time.time()
+    for p in PERMISSOES:
+        try:
+            _cache[p] = (await database.run_db(database.get_permission_roles, p), agora)
+        except Exception as e:
+            print(f'[permissions] falha ao aquecer {p}: {e!r}')
+    print(f'[permissions] {len(_cache)} permissao(oes) em memoria')
+
+
+def _cargos(permission: str) -> list:
+    v = _cache.get(permission)
+    if v is not None and (time.time() - v[1]) < _TTL:
+        return v[0]
+    try:
+        cargos = database.get_permission_roles(permission)
+    except Exception as e:
+        # Banco indisponível: usa o último valor conhecido em vez de negar
+        # acesso a todo mundo. Negar seria "seguro" no papel e péssimo na
+        # prática — trancaria a liderança pra fora justo durante um incidente.
+        print(f'[permissions] {permission}: {e!r}')
+        return v[0] if v is not None else []
+    _cache[permission] = (cargos, time.time())
+    return cargos
+
 
 def has_permission(member: discord.Member, permission: str) -> bool:
-    allowed_roles = database.get_permission_roles(permission)
-    member_roles  = {role.name for role in member.roles}
-    return bool(member_roles & set(allowed_roles))
+    member_roles = {role.name for role in member.roles}
+    return bool(member_roles & set(_cargos(permission)))
 
 def is_financial(member: discord.Member) -> bool:
     return has_permission(member, 'financial')

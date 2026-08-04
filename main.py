@@ -4,6 +4,7 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 import database
+import permissions
 import config
 from price_updater import start_price_updater   # ← LINHA ADICIONADA
 
@@ -32,6 +33,10 @@ async def on_ready():
     global _price_updater_started
     database.init_db()
     print('✅  XnoMercy Bot online como ' + str(bot.user))
+    # Carrega as permissoes pra memoria ANTES de o pessoal comecar a usar
+    # comandos — senao a primeira checagem de cada uma ainda paga a consulta
+    # sincrona, justo no momento de maior movimento (logo depois do boot).
+    await permissions.aquecer()
     try:
         # Sincroniza comandos administrativos SÓ no servidor autorizado (config.GUILD_ID) —
         # sem isso, o bot sincronizava (e liberava) comandos admin em QUALQUER servidor

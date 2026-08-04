@@ -15,8 +15,15 @@ from datetime import datetime, timezone, timedelta
 import database
 from discord_utils import (SEM_MENCOES, mencoes_do_ping, cortar, add_lista,
                            violacoes, LIM_TITULO, LIM_DESCRICAO, LIM_CAMPO)
+from permissions import can_manage_events
+
+import re
 
 BRT = timezone(timedelta(hours=-3))
+
+# "-13 @Fulano" — só o negativo aceita alvo: tirar alguém do slot é ação de
+# organização, colocar alguém no lugar dela não (a pessoa é que escolhe o slot).
+_SLOT_COM_ALVO = re.compile(r'\s*(-\d+)\s+<@!?(\d+)>\s*')
 
 INSTRUCTIONS = (
     "📋 **Como participar:**\n"
@@ -440,10 +447,21 @@ class ScheduledEventsCog(commands.Cog):
             return
 
         content = message.content.strip()
-        try:
-            num = int(content)
-        except ValueError:
-            return
+
+        # "-13" tira quem digitou; "-13 @Fulano" tira o Fulano (só puxador do
+        # evento ou quem pode gerir eventos). Nasceu de gente que não consegue
+        # sair sozinha — pessoa offline, sem acesso ao Discord na hora do CTA —
+        # e o slot ficava travado até alguém mexer no banco.
+        alvo_mencionado = None
+        m = _SLOT_COM_ALVO.fullmatch(content)
+        if m:
+            num = int(m.group(1))
+            alvo_mencionado = m.group(2)
+        else:
+            try:
+                num = int(content)
+            except ValueError:
+                return
 
         print("[slots] Thread " + str(message.channel.id) + " num=" + str(num))
 
@@ -549,19 +567,75 @@ class ScheduledEventsCog(commands.Cog):
                 except Exception: pass
                 return
         else:
-            removed = await database.run_db(database.unassign_slot, event["id"], abs_num, discord_id)
+            # Quem vai sair: eu mesmo, ou o mencionado se quem digitou tem
+            # autoridade pra isso (puxador do evento ou quem gere eventos).
+            alvo_id = discord_id
+            if alvo_mencionado:
+                pode = (str(event.get("created_by", "")) == message.author.display_name
+                        or can_manage_events(message.author))
+                if not pode:
+                    await self._responder_e_limpar(
+                        message,
+                        "Só o puxador do evento ou a staff pode tirar outra pessoa do slot.")
+                    return
+                alvo_id = alvo_mencionado
+
+            removed = await database.run_db(database.unassign_slot, event["id"], abs_num, alvo_id)
+
+            if removed is None:
+                # Falha de banco. Antes a excecao subia e a pessoa nao recebia
+                # NADA — nem reacao, nem mensagem — e ficava sem saber se saiu.
+                await self._responder_e_limpar(
+                    message, "Não consegui tirar agora (falha no banco). Tente de novo em instantes.")
+                return
+
+            if removed and alvo_mencionado:
+                await message.add_reaction("👋")
+                await message.channel.send(
+                    f"<@{alvo_id}> foi tirado do slot **{abs_num}** por "
+                    f"**{message.author.display_name}**.",
+                    allowed_mentions=SEM_MENCOES)
+                await self._update_embed(event["id"])
+                return
+
             if removed:
                 await message.add_reaction("👋")
             else:
-                reply = await message.reply("Voce nao esta no slot **" + str(abs_num) + "**.", mention_author=False)
-                await asyncio.sleep(6)
-                try: await reply.delete()
-                except Exception: pass
-                try: await message.delete()
-                except Exception: pass
+                # Se o slot é de outra pessoa e quem digitou pode tirar, ensina
+                # como — senão a pessoa lê "você não está no slot 13" e conclui
+                # que o bot não deixa tirar ninguém (foi exatamente o que
+                # aconteceu antes desta funcionalidade existir).
+                dono = await database.run_db(database.get_slot_owner, event["id"], abs_num)
+                if dono and dono != discord_id and (
+                        str(event.get("created_by", "")) == message.author.display_name
+                        or can_manage_events(message.author)):
+                    texto = (f"O slot **{abs_num}** é de <@{dono}>. "
+                             f"Digite `-{abs_num} <@{dono}>` para tirar.")
+                else:
+                    texto = f"Voce nao esta no slot **{abs_num}**."
+                await self._responder_e_limpar(message, texto)
                 return
 
         await self._update_embed(event["id"])
+
+    async def _responder_e_limpar(self, message, texto, segundos=6):
+        """Responde no topico e apaga os dois depois, pra nao poluir.
+
+        O topico de evento e' so numeros — aviso que fica pra sempre atrapalha
+        quem esta lendo a composicao. Falhar ao apagar nao pode derrubar nada:
+        a mensagem ja foi entregue, que era o que importava.
+        """
+        try:
+            reply = await message.reply(texto, mention_author=False)
+        except Exception as e:
+            print(f'[slots] nao consegui responder: {e!r}')
+            return
+        await asyncio.sleep(segundos)
+        for alvo in (reply, message):
+            try:
+                await alvo.delete()
+            except Exception:
+                pass
 
     async def _update_embed(self, event_id):
         try:

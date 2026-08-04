@@ -1552,6 +1552,13 @@ def assign_slot(event_id, slot_number, discord_id, username):
         release(conn)
 
 def unassign_slot(event_id, slot_number, discord_id):
+    """True (saiu), False (nao estava nesse slot) ou None (falha de banco).
+
+    O None importa: antes a excecao subia daqui e quem chama nao tratava, entao
+    a pessoa digitava -13 e nao recebia NADA — nem reacao, nem mensagem — sem
+    saber se tinha saido. Ficar mudo e' o que faz alguem abrir chamado dizendo
+    'o bot nao esta tirando'.
+    """
     conn = get_connection()
     try:
         c = conn.cursor()
@@ -1560,6 +1567,29 @@ def unassign_slot(event_id, slot_number, discord_id):
         changed = c.rowcount > 0
         conn.commit()
         return changed
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f'[unassign_slot] evento={event_id} slot={slot_number} {e!r}')
+        return None
+    finally:
+        release(conn)
+
+
+def get_slot_owner(event_id, slot_number):
+    """Quem esta no slot, ou None. Usado so pra mensagem de ajuda."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('SELECT discord_id FROM slot_assignments '
+                  'WHERE scheduled_event_id=%s AND slot_number=%s', (event_id, slot_number))
+        row = c.fetchone()
+        return row[0] if row else None
+    except Exception as e:
+        print(f'[get_slot_owner] {e!r}')
+        return None
     finally:
         release(conn)
 

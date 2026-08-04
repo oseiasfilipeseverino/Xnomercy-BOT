@@ -111,11 +111,13 @@ class ScheduledEventsCog(commands.Cog):
         self.post_pending_task.start()
         self.notification_task.start()
         self.reopen_pending_task.start()
+        self.delete_pending_task.start()
 
     def cog_unload(self):
         self.post_pending_task.cancel()
         self.notification_task.cancel()
         self.reopen_pending_task.cancel()
+        self.delete_pending_task.cancel()
 
     # ── Conferencia de quem fechou ────────────────────────────────────────────
     @app_commands.command(
@@ -216,6 +218,66 @@ class ScheduledEventsCog(commands.Cog):
     @reopen_pending_task.before_loop
     async def before_reopen(self):
         await self.bot.wait_until_ready()
+
+    # ── Task: apaga eventos pedidos pelo site ─────────────────────────────────
+    @tasks.loop(seconds=10)
+    async def delete_pending_task(self):
+        try:
+            for event in await database.run_db(database.get_pending_delete_events):
+                # Trava o status ANTES de falar com o Discord, igual às outras
+                # tasks: sem isso o próximo ciclo pega o mesmo evento e tenta
+                # apagar o tópico duas vezes.
+                await database.run_db(database.set_event_status, event["id"], "deleting")
+                await self._delete_event(event)
+        except Exception as e:
+            print("[scheduled_events] Erro delete_pending_task: " + str(e))
+
+    @delete_pending_task.before_loop
+    async def before_delete(self):
+        await self.bot.wait_until_ready()
+
+    async def _delete_event(self, event):
+        """Apaga o tópico e a mensagem de ping, depois o evento no banco.
+
+        Sem isto, apagar o evento no site deixava o tópico vivo no Discord — e a
+        galera continuava digitando número de slot num evento que não existia
+        mais, sem receber resposta nenhuma.
+
+        A ordem importa: Discord primeiro, banco por último. Se o Discord falhar,
+        o evento continua no banco e a próxima volta tenta de novo; apagando o
+        banco antes, um tópico órfão ficaria sem ninguém pra limpar.
+        """
+        event_id = event["id"]
+
+        # O tópico some com as mensagens dentro dele, então a mensagem de ping só
+        # precisa de tratamento próprio quando está FORA do tópico (no canal).
+        thread_id = (event.get("thread_id") or "").strip()
+        if thread_id:
+            try:
+                thread = self.bot.get_channel(int(thread_id)) \
+                    or await self.bot.fetch_channel(int(thread_id))
+                await thread.delete()
+                print("[delete] Topico " + thread_id + " apagado (evento " + str(event_id) + ")")
+            except discord.NotFound:
+                pass          # já não existe — o objetivo era esse mesmo
+            except Exception as e:
+                print("[delete] Evento " + str(event_id) + " topico: " + repr(e))
+
+        message_id = (event.get("message_id") or "").strip()
+        channel_id = (event.get("channel_id") or "").strip()
+        if message_id and channel_id:
+            try:
+                canal = self.bot.get_channel(int(channel_id)) \
+                    or await self.bot.fetch_channel(int(channel_id))
+                msg = await canal.fetch_message(int(message_id))
+                await msg.delete()
+                print("[delete] Ping do evento " + str(event_id) + " apagado")
+            except discord.NotFound:
+                pass
+            except Exception as e:
+                print("[delete] Evento " + str(event_id) + " ping: " + repr(e))
+
+        await database.run_db(database.delete_scheduled_event, event_id)
 
     async def _reopen_event(self, event):
         """Reabre o evento e relê o tópico atrás de inscrições perdidas.

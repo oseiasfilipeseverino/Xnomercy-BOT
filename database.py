@@ -1628,6 +1628,49 @@ def requeue_stuck_events():
     finally:
         release(conn)
 
+def get_pending_delete_events():
+    """Eventos que o site mandou APAGAR (nao so cancelar).
+
+    Mesmo padrao do pending_post/pending_reopen: o site so marca o status, quem
+    fala com o Discord e' o bot. Antes o evento sumia do site e o topico
+    continuava no Discord — a galera seguia se inscrevendo num evento que nao
+    existia mais."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT * FROM scheduled_events WHERE status='pending_delete' ORDER BY id")
+        return [_row_to_dict(r, SCHED_KEYS) for r in c.fetchall()]
+    except Exception as e:
+        print(f'[get_pending_delete_events] {e!r}')
+        return []
+    finally:
+        release(conn)
+
+
+def delete_scheduled_event(event_id):
+    """Apaga o evento e as inscricoes dele, numa transacao so.
+
+    Se sobrasse slot_assignments apontando pra um evento que nao existe mais, a
+    conferencia e o proximo evento com o mesmo id herdariam gente fantasma."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('DELETE FROM slot_assignments WHERE scheduled_event_id=%s', (event_id,))
+        c.execute('DELETE FROM scheduled_events WHERE id=%s', (event_id,))
+        conn.commit()
+        print(f'[delete_scheduled_event] evento {event_id} apagado')
+        return True
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f'[delete_scheduled_event] {event_id}: {e!r}')
+        return False
+    finally:
+        release(conn)
+
+
 def get_pending_reopen_events():
     """Eventos que o site mandou reabrir (botao Reabrir na aba Finalizados).
 

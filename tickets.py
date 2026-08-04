@@ -205,6 +205,14 @@ class TicketButton(discord.ui.Button):
                 '⚠️ Não consegui abrir o ticket agora. Tente de novo em instantes.', ephemeral=True)
             return
 
+        if ticket_id == 'erro':
+            # Falha de banco. NÃO pode cair no ramo de baixo: a pessoa leria
+            # "você já tem um ticket aberto" sem ter nenhum, e não teria como abrir.
+            await interaction.followup.send(
+                '⚠️ Não consegui abrir o ticket agora (falha no banco). '
+                'Tente de novo em instantes.', ephemeral=True)
+            return
+
         if ticket_id is None:
             # Perdeu a reserva: ou já tinha um aberto, ou foi o 2º clique.
             try:

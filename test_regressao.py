@@ -666,6 +666,42 @@ checar(r == 'erro', f"falha real tem que devolver 'erro', devolveu {r!r}")
 print(f"   banco fora do ar -> {r!r}  (nao mente 'slot ocupado')")
 
 
+secao('ninguem pode voltar a decidir pela CLASSE da excecao')
+# A raiz do bug: `except pg8000.dbapi.IntegrityError` parecia certo e nunca
+# casava, porque o pg8000 levanta DatabaseError pra erro vindo do servidor. Um
+# except tipado desses da' a impressao de estar tratando o caso e nao trata.
+# A decisao tem que sair do SQLSTATE.
+import ast as _ast
+import pathlib as _pl
+
+_tipados = []
+for _p in sorted(_pl.Path('.').glob('*.py')):
+    if _p.name.startswith('test_'):
+        continue
+    for _h in _ast.walk(_ast.parse(_p.read_text(encoding='utf-8'))):
+        if not (isinstance(_h, _ast.ExceptHandler) and _h.type):
+            continue
+        _t = _ast.unparse(_h.type)
+        if any(k in _t for k in ('pg8000', 'IntegrityError', 'DatabaseError',
+                                 'OperationalError', 'ProgrammingError')):
+            _tipados.append(f'{_p.name}:{_h.lineno} except {_t}')
+checar(not _tipados,
+       f'except por classe do driver (use violacao_de_unicidade / SQLSTATE): {_tipados}')
+print('   nenhum except decide pela classe do driver')
+
+# reservar_ticket tinha a mesma confusao: qualquer falha virava None, e quem
+# chama traduz None como "voce ja tem um ticket aberto".
+_src_db = open('database.py', encoding='utf-8').read()
+_fn_rt = _src_db[_src_db.index('def reservar_ticket('):]
+_fn_rt = _fn_rt[:_fn_rt.index(chr(10) + 'def ', 1)]
+checar('violacao_de_unicidade' in _fn_rt,
+       'reservar_ticket precisa separar colisao de falha real')
+checar("return 'erro'" in _fn_rt, 'reservar_ticket precisa de retorno proprio pra falha')
+checar("== 'erro'" in open('tickets.py', encoding='utf-8').read(),
+       "quem abre ticket tem que tratar o 'erro' antes do ramo de 'ja tem aberto'")
+print("   reservar_ticket: colisao -> None, falha real -> 'erro' avisado")
+
+
 secao('falha de banco nao pode virar resposta normal')
 # A outra metade do bug do COALESCE: sem log, "deu erro" e "nao tem nada" ficam
 # indistinguiveis. Pior caso encontrado: assign_slot devolvia 'already_taken'

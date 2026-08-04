@@ -954,8 +954,14 @@ def reservar_ticket(discord_id, username, ticket_type):
             conn.rollback()
         except Exception:
             pass
+        # Mesma separação do assign_slot: só a colisão no índice é "já tem um
+        # aberto". Sem isso, banco fora do ar fazia a pessoa ler "Você já tem um
+        # ticket aberto" sem ter nenhum — e ela não teria como abrir.
+        if violacao_de_unicidade(e):
+            print(f'[reservar_ticket] {discord_id}/{ticket_type}: ja tem um aberto')
+            return None
         print(f'[reservar_ticket] {discord_id}/{ticket_type}: {e!r}')
-        return None
+        return 'erro'
     finally:
         release(conn)
 

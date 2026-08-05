@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 
 import database
 from discord_utils import (SEM_MENCOES, mencoes_do_ping, cortar, add_lista,
-                           violacoes, LIM_TITULO, LIM_DESCRICAO, LIM_CAMPO)
+                           LIM_TITULO, LIM_DESCRICAO, LIM_CAMPO)
 from permissions import can_manage_events
 
 import re

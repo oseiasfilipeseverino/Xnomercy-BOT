@@ -468,16 +468,6 @@ def update_player_balance(discord_id, username, amount):
     finally:
         release(conn)
 
-def set_player_balance(discord_id, username, amount):
-    ensure_player(discord_id, username)
-    conn = get_connection()
-    try:
-        c = conn.cursor()
-        c.execute('UPDATE players SET balance=%s WHERE discord_id=%s', (amount, discord_id))
-        conn.commit()
-    finally:
-        release(conn)
-
 def debit_player_balance(discord_id, username, amount):
     """Debita SÓ se houver saldo suficiente, tudo numa query atômica. Retorna o
     novo saldo, ou None se não tinha saldo (nada foi alterado).
@@ -806,15 +796,6 @@ def set_ticket_message(ticket_type, title, message):
     finally:
         release(conn)
 
-def create_ticket(channel_id, discord_id, username, ticket_type):
-    conn = get_connection()
-    try:
-        c = conn.cursor()
-        c.execute('INSERT INTO tickets (channel_id,discord_id,username,ticket_type) VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING', (channel_id, discord_id, username, ticket_type))
-        conn.commit()
-    finally:
-        release(conn)
-
 def close_ticket_db(channel_id):
     conn = get_connection()
     try:
@@ -1021,16 +1002,6 @@ def set_welcome_config(title, message, channel_id=''):
     finally:
         release(conn)
 
-def set_welcome_channel(channel_id):
-    conn = get_connection()
-    try:
-        c = conn.cursor()
-        c.execute('UPDATE welcome_config SET channel_id=%s WHERE id=1', (channel_id,))
-        conn.commit()
-    finally:
-        release(conn)
-
-
 # ── Event Templates ────────────────────────────────────────────────────────────
 def get_event_templates():
     conn = get_connection()
@@ -1044,46 +1015,12 @@ def get_event_templates():
     finally:
         release(conn)
 
-def create_event_template(name, title, description, slots):
-    conn = get_connection()
-    try:
-        c = conn.cursor()
-        c.execute('INSERT INTO event_templates (name,title,description,slots) VALUES (%s,%s,%s,%s) RETURNING id', (name, title, description, slots))
-        tid = c.fetchone()[0]
-        conn.commit()
-        return tid
-    finally:
-        release(conn)
-
-def delete_event_template(template_id):
-    conn = get_connection()
-    try:
-        c = conn.cursor()
-        c.execute('DELETE FROM event_templates WHERE id=%s', (template_id,))
-        conn.commit()
-    finally:
-        release(conn)
-
-
 # ── Scheduled Events ───────────────────────────────────────────────────────────
 # Ordem tem que bater com a das colunas na tabela (as queries usam SELECT *).
 # link_url foi adicionado via ALTER TABLE, então vem por último.
 SCHED_KEYS = ['id','title','description','channel_id','thread_id','message_id',
               'slots','scheduled_time','status','notify_30','notify_15',
               'ping_type','ping_role_id','created_by','created_at','link_url']
-
-def create_scheduled_event(title, description, channel_id, slots, scheduled_time, created_by):
-    conn = get_connection()
-    try:
-        c = conn.cursor()
-        c.execute('''INSERT INTO scheduled_events (title,description,channel_id,slots,scheduled_time,created_by)
-                     VALUES (%s,%s,%s,%s,%s,%s) RETURNING id''',
-                  (title, description, channel_id, slots, scheduled_time, created_by))
-        eid = c.fetchone()[0]
-        conn.commit()
-        return eid
-    finally:
-        release(conn)
 
 def get_scheduled_event(event_id):
     conn = get_connection()
@@ -1126,15 +1063,6 @@ def update_scheduled_event_notify(event_id, notify_30=None, notify_15=None):
             c.execute('UPDATE scheduled_events SET notify_30=%s WHERE id=%s', (notify_30, event_id))
         if notify_15 is not None:
             c.execute('UPDATE scheduled_events SET notify_15=%s WHERE id=%s', (notify_15, event_id))
-        conn.commit()
-    finally:
-        release(conn)
-
-def finish_scheduled_event(event_id):
-    conn = get_connection()
-    try:
-        c = conn.cursor()
-        c.execute("UPDATE scheduled_events SET status='finished' WHERE id=%s", (event_id,))
         conn.commit()
     finally:
         release(conn)

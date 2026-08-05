@@ -141,6 +141,27 @@ def _resolve_members(guild: discord.Guild, text: str):
     return targets, invalid
 
 
+async def _ler_valor(interaction, texto):
+    """Lê o valor de prata e avisa a pessoa se não der. Devolve None se não valer.
+
+    Estava copiado em transferir_saldo, adicionar_saldo e pagar_saldo — três
+    cópias idênticas, e a mensagem de ajuda tinha que ser mantida igual nas
+    três. Num comando que mexe em prata, divergir aqui é como um comando
+    aceitar formato que o outro recusa.
+    """
+    valor = parse_prata(texto)
+    if valor is None:
+        await interaction.response.send_message(
+            '❌ Valor não reconhecido. Escreva como preferir: `1.200.000`, `1200000` ou `1,200,000`.',
+            ephemeral=True)
+        return None
+    if valor <= 0:
+        await interaction.response.send_message(
+            '❌ O valor precisa ser de pelo menos 1 prata.', ephemeral=True)
+        return None
+    return valor
+
+
 async def _log(guild, message: str):
     # Ver discord_utils.log_channel — texto de log nunca pinga ninguem.
     await log_channel(guild, message)
@@ -224,14 +245,8 @@ class BankCog(commands.Cog):
         if usuario.bot:
             await interaction.response.send_message('❌ Não dá pra transferir para um bot.', ephemeral=True)
             return
-        valor = parse_prata(valor)
+        valor = await _ler_valor(interaction, valor)
         if valor is None:
-            await interaction.response.send_message(
-                '❌ Valor não reconhecido. Escreva como preferir: `1.200.000`, `1200000` ou `1,200,000`.',
-                ephemeral=True)
-            return
-        if valor <= 0:
-            await interaction.response.send_message('❌ O valor precisa ser de pelo menos 1 prata.', ephemeral=True)
             return
 
         motivo = (motivo or '').strip()[:150]
@@ -403,14 +418,8 @@ class BankCog(commands.Cog):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
-        valor = parse_prata(valor)
+        valor = await _ler_valor(interaction, valor)
         if valor is None:
-            await interaction.response.send_message(
-                '❌ Valor não reconhecido. Escreva como preferir: `1.200.000`, `1200000` ou `1,200,000`.',
-                ephemeral=True)
-            return
-        if valor <= 0:
-            await interaction.response.send_message('❌ O valor precisa ser de pelo menos 1 prata.', ephemeral=True)
             return
 
         members, invalid = _resolve_members(interaction.guild, usuarios)
@@ -480,14 +489,8 @@ class BankCog(commands.Cog):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
-        valor = parse_prata(valor)
+        valor = await _ler_valor(interaction, valor)
         if valor is None:
-            await interaction.response.send_message(
-                '❌ Valor não reconhecido. Escreva como preferir: `1.200.000`, `1200000` ou `1,200,000`.',
-                ephemeral=True)
-            return
-        if valor <= 0:
-            await interaction.response.send_message('❌ O valor precisa ser de pelo menos 1 prata.', ephemeral=True)
             return
 
         members, invalid = _resolve_members(interaction.guild, usuarios)

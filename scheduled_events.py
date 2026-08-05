@@ -438,6 +438,107 @@ class ScheduledEventsCog(commands.Cog):
             await database.run_db(database.set_event_status, event["id"], "pending_post")
             print("[scheduled_events] Erro ao postar evento '" + str(event.get("title","?")) + "': " + str(e))
 
+    async def _entrar_no_slot(self, message, event, abs_num, discord_id, username):
+        """Coloca quem digitou no slot. True se o embed precisa ser atualizado.
+
+        Separado do on_message porque ele tinha 185 linhas cuidando de parsing,
+        permissao, entrada, saida e remocao de terceiro ao mesmo tempo — e e' o
+        caminho mais quente do bot, onde toda mudanca e' arriscada.
+        """
+        result = await database.run_db(database.assign_slot, event["id"], num, discord_id, username)
+        if result == "ok":
+            await message.add_reaction("✅")
+        elif result == "has_slot":
+            current = await database.run_db(database.get_player_slot, event["id"], discord_id)
+            reply = await message.reply(
+                "Voce ja esta no slot **" + str(current) + "**. Digite **-" + str(current) + "** para sair primeiro.",
+                mention_author=False
+            )
+            await asyncio.sleep(8)
+            try: await reply.delete()
+            except Exception: pass
+            try: await message.delete()
+            except Exception: pass
+            return False
+        elif result == "erro":
+            # falha de banco NAO pode virar "ocupado" — o jogador ficaria
+            # tentando outro slot achando que o problema e' ele
+            await message.reply(
+                "Nao consegui registrar agora (falha no banco). Tente de novo em instantes.",
+                mention_author=False
+            )
+            return False
+        else:
+            reply = await message.reply("Slot **" + str(num) + "** ja esta ocupado!", mention_author=False)
+            await asyncio.sleep(6)
+            try: await reply.delete()
+            except Exception: pass
+            try: await message.delete()
+            except Exception: pass
+            return False
+        return True
+
+    async def _sair_do_slot(self, message, event, abs_num, discord_id,
+                            alvo_mencionado):
+        """Tira alguem do slot. True se o embed precisa ser atualizado."""
+        organiza = (str(event.get("created_by", "")) == message.author.display_name
+                    or can_manage_events(message.author))
+
+        if alvo_mencionado and not organiza:
+            await self._responder_e_limpar(
+                message, "Só o puxador do evento ou a staff pode tirar outra pessoa do slot.")
+            return False
+
+        # SEMPRE tenta tirar quem digitou primeiro. Isso resolve a
+        # ambiguidade do "-13" sem perguntar nada: se você está no slot 13,
+        # o -13 tira VOCÊ, como sempre foi. Só quando você NÃO está nele é
+        # que ele passa a valer pra quem estiver — assim um staff que está
+        # no evento nunca tira outra pessoa achando que está saindo.
+        alvo_id = alvo_mencionado or discord_id
+        removed = await database.run_db(database.unassign_slot, event["id"], abs_num, alvo_id)
+
+        if removed is None:
+            # Falha de banco. Antes a excecao subia e a pessoa nao recebia
+            # NADA — nem reacao, nem mensagem — e ficava sem saber se saiu.
+            await self._responder_e_limpar(
+                message, "Não consegui tirar agora (falha no banco). Tente de novo em instantes.")
+            return False
+
+        tirou_outro = bool(alvo_mencionado)
+
+        if not removed and not alvo_mencionado and organiza:
+            # Não era meu slot, e eu posso tirar: tira quem estiver nele.
+            # Sem menção, sem copiar id, sem confirmar nada.
+            dono = await database.run_db(database.get_slot_owner, event["id"], abs_num)
+            if dono:
+                removed = await database.run_db(
+                    database.unassign_slot, event["id"], abs_num, dono)
+                if removed is None:
+                    await self._responder_e_limpar(
+                        message, "Não consegui tirar agora (falha no banco). "
+                                 "Tente de novo em instantes.")
+                    return False
+                alvo_id, tirou_outro = dono, True
+
+        if removed and tirou_outro:
+            await message.add_reaction("👋")
+            # Fica registrado no tópico quem tirou quem — tirar alguém da
+            # composição é decisão que a guild precisa conseguir auditar.
+            await message.channel.send(
+                f"<@{alvo_id}> foi tirado do slot **{abs_num}** por "
+                f"**{message.author.display_name}**.",
+                allowed_mentions=SEM_MENCOES)
+            await self._update_embed(event["id"])
+            return False
+
+        if removed:
+            await message.add_reaction("👋")
+        else:
+            await self._responder_e_limpar(
+                message, f"Voce nao esta no slot **{abs_num}**.")
+            return False
+        return True
+
     # ── Ouve mensagens nos tópicos ─────────────────────────────────────────────
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -535,94 +636,12 @@ class ScheduledEventsCog(commands.Cog):
         username   = message.author.display_name
 
         if num > 0:
-            result = await database.run_db(database.assign_slot, event["id"], num, discord_id, username)
-            if result == "ok":
-                await message.add_reaction("✅")
-            elif result == "has_slot":
-                current = await database.run_db(database.get_player_slot, event["id"], discord_id)
-                reply = await message.reply(
-                    "Voce ja esta no slot **" + str(current) + "**. Digite **-" + str(current) + "** para sair primeiro.",
-                    mention_author=False
-                )
-                await asyncio.sleep(8)
-                try: await reply.delete()
-                except Exception: pass
-                try: await message.delete()
-                except Exception: pass
-                return
-            elif result == "erro":
-                # falha de banco NAO pode virar "ocupado" — o jogador ficaria
-                # tentando outro slot achando que o problema e' ele
-                await message.reply(
-                    "Nao consegui registrar agora (falha no banco). Tente de novo em instantes.",
-                    mention_author=False
-                )
-                return
-            else:
-                reply = await message.reply("Slot **" + str(num) + "** ja esta ocupado!", mention_author=False)
-                await asyncio.sleep(6)
-                try: await reply.delete()
-                except Exception: pass
-                try: await message.delete()
-                except Exception: pass
+            if not await self._entrar_no_slot(message, event, abs_num,
+                                              discord_id, username):
                 return
         else:
-            # Quem manda no evento: o puxador ou quem gere eventos.
-            organiza = (str(event.get("created_by", "")) == message.author.display_name
-                        or can_manage_events(message.author))
-
-            if alvo_mencionado and not organiza:
-                await self._responder_e_limpar(
-                    message, "Só o puxador do evento ou a staff pode tirar outra pessoa do slot.")
-                return
-
-            # SEMPRE tenta tirar quem digitou primeiro. Isso resolve a
-            # ambiguidade do "-13" sem perguntar nada: se você está no slot 13,
-            # o -13 tira VOCÊ, como sempre foi. Só quando você NÃO está nele é
-            # que ele passa a valer pra quem estiver — assim um staff que está
-            # no evento nunca tira outra pessoa achando que está saindo.
-            alvo_id = alvo_mencionado or discord_id
-            removed = await database.run_db(database.unassign_slot, event["id"], abs_num, alvo_id)
-
-            if removed is None:
-                # Falha de banco. Antes a excecao subia e a pessoa nao recebia
-                # NADA — nem reacao, nem mensagem — e ficava sem saber se saiu.
-                await self._responder_e_limpar(
-                    message, "Não consegui tirar agora (falha no banco). Tente de novo em instantes.")
-                return
-
-            tirou_outro = bool(alvo_mencionado)
-
-            if not removed and not alvo_mencionado and organiza:
-                # Não era meu slot, e eu posso tirar: tira quem estiver nele.
-                # Sem menção, sem copiar id, sem confirmar nada.
-                dono = await database.run_db(database.get_slot_owner, event["id"], abs_num)
-                if dono:
-                    removed = await database.run_db(
-                        database.unassign_slot, event["id"], abs_num, dono)
-                    if removed is None:
-                        await self._responder_e_limpar(
-                            message, "Não consegui tirar agora (falha no banco). "
-                                     "Tente de novo em instantes.")
-                        return
-                    alvo_id, tirou_outro = dono, True
-
-            if removed and tirou_outro:
-                await message.add_reaction("👋")
-                # Fica registrado no tópico quem tirou quem — tirar alguém da
-                # composição é decisão que a guild precisa conseguir auditar.
-                await message.channel.send(
-                    f"<@{alvo_id}> foi tirado do slot **{abs_num}** por "
-                    f"**{message.author.display_name}**.",
-                    allowed_mentions=SEM_MENCOES)
-                await self._update_embed(event["id"])
-                return
-
-            if removed:
-                await message.add_reaction("👋")
-            else:
-                await self._responder_e_limpar(
-                    message, f"Voce nao esta no slot **{abs_num}**.")
+            if not await self._sair_do_slot(message, event, abs_num,
+                                            discord_id, alvo_mencionado):
                 return
 
         await self._update_embed(event["id"])

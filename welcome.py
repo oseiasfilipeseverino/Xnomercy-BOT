@@ -6,9 +6,11 @@ import discord
 from discord import app_commands
 from discord.ext import commands
  
+import config
 import database
 import permissions
 from permissions import is_financial
+from discord_utils import alertar_financeiro
 
 # Endereço do site. O valor que vale é o `site_url` do guild_config (dá pra
 # trocar sem deploy); isto aqui é só o socorro pra quando o banco não responde.
@@ -20,9 +22,111 @@ class WelcomeCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
  
+    async def _dar_cargo_de_entrada(self, member: discord.Member):
+        """Dá o cargo de entrada (Forasteiro) a quem acabou de chegar.
+
+        Estava sendo feito por um bot de terceiros, cujo painel caiu. Trazendo
+        pra cá, para de depender de serviço externo — e falha de forma visível
+        em vez de simplesmente parar um dia sem ninguém notar.
+
+        O nome do cargo sai do `cargo_entrada` no guild_config, então dá pra
+        trocar sem deploy; o padrão é o 'Forasteiro' do config.ROLES.
+        """
+        nome = (await database.run_db(database.get_config, 'cargo_entrada')
+                or config.ROLES['forasteiro'])
+        cargo = discord.utils.get(member.guild.roles, name=nome)
+
+        if cargo is None:
+            print(f'[cargo_entrada] cargo "{nome}" nao existe no servidor')
+            await self._avisar_cargo_falhou(member.guild,
+                                            f'o cargo **{nome}** não existe no servidor')
+            return
+
+        # O bot só consegue dar cargo ABAIXO do mais alto dele. Conferindo aqui,
+        # o aviso diz o que arrumar em vez de sair um Forbidden genérico.
+        eu = member.guild.me
+        if cargo >= eu.top_role:
+            print(f'[cargo_entrada] "{nome}" esta acima do cargo do bot')
+            await self._avisar_cargo_falhou(
+                member.guild,
+                f'o cargo **{nome}** está ACIMA do cargo do bot na lista. '
+                'Arraste o cargo do bot pra cima dele nas configurações do servidor.')
+            return
+
+        if cargo in member.roles:
+            return          # já tem (reentrada, ou outro bot foi mais rápido)
+
+        try:
+            await member.add_roles(cargo, reason='Entrou no servidor')
+            print(f'[cargo_entrada] {member.display_name} recebeu {nome}')
+        except discord.Forbidden:
+            print(f'[cargo_entrada] sem permissao pra dar "{nome}"')
+            await self._avisar_cargo_falhou(
+                member.guild,
+                'falta a permissão **Gerenciar Cargos** pro bot.')
+        except Exception as e:
+            print(f'[cargo_entrada] {member.display_name}: {e!r}')
+
+    async def _avisar_cargo_falhou(self, guild, motivo):
+        """Avisa a liderança, no máximo uma vez por reinício do bot.
+
+        Sem o cargo de entrada a pessoa entra e não enxerga canal nenhum — ela
+        não consegue nem pedir ajuda. Não pode falhar em silêncio, mas também
+        não pode virar um alerta por pessoa que entra.
+        """
+        if getattr(self, '_avisou_cargo', False):
+            return
+        self._avisou_cargo = True
+        await alertar_financeiro(
+            guild, '⚠️ Cargo de entrada não aplicado',
+            f'Quem está entrando no servidor NÃO está recebendo o cargo: {motivo}\n\n'
+            'Sem cargo, a pessoa não enxerga os canais e não consegue pedir ajuda.')
+
+    # ── /configurar_cargo_entrada ─────────────────────────────────────────────
+    @app_commands.command(
+        name='configurar_cargo_entrada',
+        description='[LÍDER] Define o cargo que todo mundo recebe ao entrar no servidor.')
+    @app_commands.describe(cargo='Cargo dado automaticamente a quem entra')
+    async def configurar_cargo_entrada(self, interaction: discord.Interaction,
+                                       cargo: discord.Role):
+        if not is_financial(interaction.user):
+            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        # Confere agora o que só apareceria quando alguém entrasse: cargo acima
+        # do bot na lista faz o Discord recusar, e aí ninguém recebe nada.
+        if cargo >= interaction.guild.me.top_role:
+            await interaction.followup.send(
+                f'❌ **{cargo.name}** está ACIMA do cargo do bot na lista de cargos, '
+                'então o Discord não deixa o bot aplicá-lo.\n\n'
+                'Em **Configurações do Servidor → Cargos**, arraste o cargo do bot '
+                'pra cima dele e rode o comando de novo.', ephemeral=True)
+            return
+
+        await database.run_db(database.set_config, 'cargo_entrada', cargo.name)
+        self._avisou_cargo = False      # volta a avisar se der problema depois
+        await interaction.followup.send(
+            f'✅ Quem entrar no servidor agora recebe **{cargo.name}** automaticamente.',
+            ephemeral=True)
+
     # ── Evento: membro entrou ──────────────────────────────────────────────────
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
+        # Cargo de entrada ANTES da mensagem: se a DM ou o canal falhar, a
+        # pessoa ainda entra com o cargo certo. Na ordem inversa, um erro de
+        # permissão de canal deixaria gente sem cargo nenhum — e sem cargo ela
+        # não enxerga os canais pra pedir ajuda.
+        #
+        # O try é do lado de fora de propósito: um problema no cargo não pode
+        # cancelar as boas-vindas, e vice-versa. São duas coisas independentes
+        # que só por acaso acontecem no mesmo evento.
+        try:
+            await self._dar_cargo_de_entrada(member)
+        except Exception as e:
+            print(f'[cargo_entrada] falha inesperada com {member.display_name}: {e!r}')
+
         try:
             cfg = await database.run_db(database.get_welcome_config)
             if not cfg:

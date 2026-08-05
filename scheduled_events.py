@@ -445,7 +445,7 @@ class ScheduledEventsCog(commands.Cog):
         permissao, entrada, saida e remocao de terceiro ao mesmo tempo — e e' o
         caminho mais quente do bot, onde toda mudanca e' arriscada.
         """
-        result = await database.run_db(database.assign_slot, event["id"], num, discord_id, username)
+        result = await database.run_db(database.assign_slot, event["id"], abs_num, discord_id, username)
         if result == "ok":
             await message.add_reaction("✅")
         elif result == "has_slot":
@@ -469,7 +469,7 @@ class ScheduledEventsCog(commands.Cog):
             )
             return False
         else:
-            reply = await message.reply("Slot **" + str(num) + "** ja esta ocupado!", mention_author=False)
+            reply = await message.reply("Slot **" + str(abs_num) + "** ja esta ocupado!", mention_author=False)
             await asyncio.sleep(6)
             try: await reply.delete()
             except Exception: pass

@@ -2,6 +2,7 @@
 bank.py — Banco da guild: saldos, ranking, ajustes, bônus
 """
 
+import asyncio
 import re
 import discord
 from discord import app_commands
@@ -693,21 +694,57 @@ class BankCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-        moved = 0
-        failed = 0
-        for member in members:
-            try:
-                await member.move_to(destino)
-                moved += 1
-            except Exception as e:
-                print(f'[mover membro] {e!r}')
-                failed += 1
+
+        # Resposta IMEDIATA antes de começar. Movendo em silêncio, o comando
+        # parecia travado — e travado é indistinguível de quebrado pra quem está
+        # esperando no meio de uma CTA.
+        aviso = await interaction.followup.send(
+            f'🔀 Movendo **{len(members)} player(s)** de **{origem.name}** → '
+            f'**{destino.name}**…', ephemeral=True, wait=True)
+
+        # Em paralelo, mas com freio. Um de cada vez, o Discord limita a taxa e
+        # 30 players viravam minutos de espera — foi essa a "travada". De 5 em 5
+        # a fila anda bem mais rápido sem estourar o limite (acima disso o
+        # próprio discord.py começa a segurar as chamadas e não adianta nada).
+        freio = asyncio.Semaphore(5)
+        falhas = []
+
+        async def mover(member):
+            async with freio:
+                try:
+                    await member.move_to(destino)
+                    return True
+                except discord.HTTPException as e:
+                    # Motivo mais comum: a pessoa saiu da call no meio. Não é
+                    # erro do comando, mas quem mandou precisa saber quem ficou.
+                    falhas.append((member.display_name, str(e)[:60]))
+                    return False
+                except Exception as e:
+                    falhas.append((member.display_name, repr(e)[:60]))
+                    return False
+
+        resultados = await asyncio.gather(*(mover(m) for m in members))
+        moved = sum(resultados)
+        failed = len(falhas)
+        if falhas:
+            print(f'[mover_todos] {failed} falha(s): ' +
+                  '; '.join(f'{n} ({m})' for n, m in falhas[:10]))
 
         msg = f'✅ **{moved} player(s)** movidos de **{origem.name}** → **{destino.name}**!'
         if failed:
-            msg += f'\n⚠️ {failed} player(s) não puderam ser movidos.'
+            # Nome de quem ficou pra trás, não só a contagem: com o número
+            # sozinho ainda sobra conferir a call na mão pra saber quem falta.
+            nomes = ', '.join(n for n, _ in falhas[:15])
+            if failed > 15:
+                nomes += f' e mais {failed - 15}'
+            msg += (f'\n⚠️ **{failed}** não foram movidos: {nomes}\n'
+                    '_Normalmente é quem saiu da call no meio._')
 
-        await interaction.followup.send(msg, ephemeral=True)
+        # Edita o aviso em vez de mandar outra mensagem, pra não duplicar.
+        try:
+            await aviso.edit(content=msg)
+        except Exception:
+            await interaction.followup.send(msg, ephemeral=True)
         await _log(interaction.guild,
             f'🔀 **{interaction.user.display_name}** moveu **{moved} player(s)** de **{origem.name}** → **{destino.name}**')
 

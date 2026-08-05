@@ -404,11 +404,22 @@ class TicketsCog(commands.Cog):
             resumo += f'\n• {nao_achados} canal(is) já não existia(m) — registro limpo.'
         if erros:
             resumo += f'\n• ⚠️ {erros} falhou/falharam (sem permissão?) e continuam na lista.'
-        await interaction.followup.send(resumo, ephemeral=True)
 
+        # O log vem PRIMEIRO e vai pra outro canal: rodando o /arquivar de
+        # dentro de um ticket fechado, o canal da interação é apagado no meio e
+        # o followup abaixo estoura 404 — o trabalho foi feito, mas o comando
+        # terminava em erro e sem registro nenhum de quanto tinha arquivado.
         await log_channel(
             interaction.guild,
             f'🗑️ **{interaction.user.display_name}** arquivou {removidos} ticket(s) fechado(s).')
+
+        try:
+            await interaction.followup.send(resumo, ephemeral=True)
+        except discord.NotFound:
+            # Canal onde o comando foi usado deixou de existir. Nada a fazer —
+            # o registro já está no canal de logs.
+            print('[tickets] /arquivar: canal da interacao foi apagado, '
+                  'resumo so no log — ' + resumo.replace('\n', ' '))
  
     @app_commands.command(
         name='postar_painel',

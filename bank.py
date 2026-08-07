@@ -10,7 +10,7 @@ from discord.ext import commands
 
 import database
 from permissions import is_financial, is_member
-from discord_utils import log_channel
+from discord_utils import log_channel, add_lista, cortar
 
 
 def fmt(v: float) -> str:
@@ -677,6 +677,78 @@ class BankCog(commands.Cog):
         embed.add_field(name='🔧 Reparo',           value='Informado pelo Puxador por evento',      inline=True)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+
+    # ── /extrato_dia ───────────────────────────────────────────────────────────
+    @app_commands.command(
+        name='extrato_dia',
+        description='Extrato dos eventos depositados no dia. (Staff e acima)')
+    @app_commands.describe(
+        dias_atras='0 = hoje, 1 = ontem, e assim por diante (padrao: hoje)',
+        publico='Posta no canal pra todos verem (padrao: so voce ve)')
+    async def extrato_dia(self, interaction: discord.Interaction,
+                          dias_atras: int = 0, publico: bool = False):
+        """Extrato do dia sem precisar consultar o banco na mão.
+
+        Nasceu de um pedido que até então exigia alguém abrir o Postgres. O
+        fechamento (o que ficou pra guild) entra de propósito: sem ele o
+        relatório mostra o que saiu e esconde o que entrou pro caixa.
+        """
+        from permissions import has_permission
+        if not has_permission(interaction.user, 'support_tickets'):
+            await interaction.response.send_message('❌ Apenas cargo **Staff** ou superior.',
+                                                    ephemeral=True)
+            return
+        if not 0 <= dias_atras <= 30:
+            await interaction.response.send_message(
+                '❌ Use de 0 (hoje) a 30 dias atras.', ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=not publico)
+        splits, mov = await database.run_db(database.get_extrato_do_dia, dias_atras)
+
+        quando = {0: 'Hoje', 1: 'Ontem'}.get(dias_atras, f'{dias_atras} dias atras')
+        embed = discord.Embed(title=f'📊 Extrato — {quando}', color=discord.Color.gold())
+
+        if not splits:
+            embed.description = '_Nenhum evento depositado nesse dia._'
+        else:
+            linhas, loot_tot, rep_tot, pago_tot = [], 0, 0, 0
+            for s in splits:
+                pago = s['por_player'] * s['players']
+                loot_tot += s['loot']
+                rep_tot += s['reparo']
+                pago_tot += pago
+                # split que não foi aprovado aparece marcado — senão some no meio
+                # dos outros e a soma do dia não bate com o que foi pago
+                marca = '' if s['status'] == 'approved' else f' ⚠️ {s["status"]}'
+                hora = str(s['quando'])[11:16]
+                linhas.append(
+                    f'**{hora}** · {cortar(s["titulo"], 40)}{marca}\n'
+                    f'`{s["players"]:2}x {fmt(s["por_player"])}` — loot {fmt(s["loot"])}'
+                    + (f', reparo {fmt(s["reparo"])}' if s['reparo'] else '')
+                    + f'\npor **{s["enviou"]}**')
+
+            add_lista(embed, f'🎯 Eventos ({len(splits)})', linhas, orcamento=3000)
+
+            guild = loot_tot - rep_tot - pago_tot
+            embed.add_field(
+                name='💰 Fechamento',
+                value=(f'Loot bruto: **{fmt(loot_tot)}**\n'
+                       f'Reparo: {fmt(rep_tot)}\n'
+                       f'Pago aos players: {fmt(pago_tot)}\n'
+                       f'**Ficou pra guild: {fmt(guild)}**'),
+                inline=False)
+
+        if mov:
+            embed.add_field(
+                name='📒 Movimentação do dia',
+                value='\n'.join(
+                    f'`{m["tipo"]:12}` {m["lancamentos"]:3} lanc. · '
+                    f'{m["pessoas"]:2} pessoa(s) · **{fmt(m["total"])}**' for m in mov),
+                inline=False)
+
+        embed.set_footer(text='Horario de Brasilia · XnoMercy Guild')
+        await interaction.followup.send(embed=embed, ephemeral=not publico)
 
     # ── /mover_todos ───────────────────────────────────────────────────────────
     @app_commands.command(name='mover_todos', description='Move todos os players de uma call para outra.')

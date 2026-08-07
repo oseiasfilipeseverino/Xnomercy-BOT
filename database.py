@@ -1116,6 +1116,49 @@ def mark_pending_split_posted(split_id, message_id):
     finally:
         release(conn)
 
+def get_extrato_do_dia(dias_atras=0):
+    """Splits e movimentacao de prata de um dia, no horario de Brasilia.
+
+    Nasceu de "quero o extrato dos eventos depositados hoje" — que ate' entao
+    exigia consultar o banco na mao. As datas ficam como TEXT nesta base, dai o
+    NULLIF antes do cast: campo vazio nao vira timestamp e estoura a query.
+
+    Devolve (splits, movimentacao).
+    """
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        alvo = f"(NOW() AT TIME ZONE 'America/Sao_Paulo')::date - {int(dias_atras)}"
+        c.execute(f"""
+            SELECT p.id, e.title, p.total_loot, p.repair_cost, p.guild_tax_pct,
+                   p.vendor_tax_pct, p.per_player, p.num_players, p.submitted_by,
+                   p.reviewed_by, p.status,
+                   (p.submitted_at AT TIME ZONE 'America/Sao_Paulo')
+            FROM pending_splits p
+            LEFT JOIN scheduled_events e ON e.id = p.event_id
+            WHERE (p.submitted_at AT TIME ZONE 'America/Sao_Paulo')::date = {alvo}
+            ORDER BY p.submitted_at""")
+        splits = [{'id': r[0], 'titulo': r[1] or f'evento {r[0]}', 'loot': r[2],
+                   'reparo': r[3] or 0, 'taxa_guild': r[4], 'taxa_vendedor': r[5],
+                   'por_player': r[6], 'players': r[7], 'enviou': r[8],
+                   'aprovou': r[9], 'status': r[10], 'quando': r[11]}
+                  for r in c.fetchall()]
+
+        c.execute(f"""
+            SELECT type, COUNT(*), COUNT(DISTINCT discord_id), SUM(amount)
+            FROM transactions
+            WHERE (NULLIF(created_at,'')::timestamp AT TIME ZONE 'America/Sao_Paulo')::date = {alvo}
+            GROUP BY type ORDER BY SUM(amount) DESC""")
+        mov = [{'tipo': r[0], 'lancamentos': r[1], 'pessoas': r[2], 'total': r[3]}
+               for r in c.fetchall()]
+        return splits, mov
+    except Exception as e:
+        print(f'[get_extrato_do_dia] {e!r}')
+        return [], []
+    finally:
+        release(conn)
+
+
 def get_pending_split(split_id):
     conn = get_connection()
     try:

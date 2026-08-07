@@ -27,16 +27,27 @@ def _fmt(v) -> str:
 
 def _build_embed(split, title_prefix='⏳ Split Pendente (via site)'):
     participants = json.loads(split['participants_json'])
-    lines = []
+    lines, sem_prata = [], []
     for p in participants:
         amt = p.get('amount', 0)
         pct = p.get('pct', 100)
         if amt > 0:
             lines.append(f'• <@{p["discord_id"]}> ({pct:.0f}%) → **{_fmt(amt)} prata**')
+        else:
+            # Quem foi zerado ficava FORA da lista, sem aparecer em lugar nenhum.
+            # O campo dizia "5 participantes" e vinham 4 linhas, e não dava pra
+            # saber quem tinha ficado de fora sem abrir o banco — nem se foi de
+            # propósito. Zerar alguém é decisão legítima; sumir com ela não.
+            sem_prata.append(f'<@{p["discord_id"]}>')
     if not lines:
         lines.append('_Nenhum participante recebeu prata nessa divisão._')
 
-    net = split['total_loot'] - split['repair_cost']
+    # Líquido = o que sobra DEPOIS do reparo e das taxas. Antes descontava só o
+    # reparo, então num evento sem reparo o campo repetia o loot bruto — e o
+    # embed se contradizia sozinho: dizia "Líquido 8.850.000" e logo abaixo
+    # distribuía 7.080.000.
+    taxas = (split['guild_tax_pct'] + split['vendor_tax_pct']) / 100
+    net = (split['total_loot'] - split['repair_cost']) * (1 - taxas)
     embed = discord.Embed(
         title=cortar(f'{title_prefix} — {split.get("event_title", "Evento")}', LIM_TITULO),
         description=cortar(f'Enviado por: **{split["submitted_by"]}**', LIM_DESCRICAO),
@@ -55,6 +66,11 @@ def _build_embed(split, title_prefix='⏳ Split Pendente (via site)'):
     # diferentes — corrigir num nao corrigia nos outros.
     add_lista(embed, '💰 Distribuição', lines,
               vazio='_Nenhum participante recebeu prata nessa divisão._')
+
+    if sem_prata:
+        # Fica registrado no próprio post: quem aprovar vê quem ficou de fora
+        # antes de clicar, e a auditoria depois não depende de consultar o banco.
+        add_lista(embed, f'🚫 Sem prata ({len(sem_prata)})', sem_prata, orcamento=800)
 
     embed.set_footer(text='Split criado pelo site — clique abaixo pra aprovar ou recusar')
     return embed

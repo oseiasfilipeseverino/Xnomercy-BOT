@@ -73,9 +73,16 @@ def _ligados(fn):
             nomes.add(no.name)
         elif isinstance(no, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             nomes.add(no.name)
-            # os parâmetros da aninhada também valem dentro dela
+            # Os parâmetros da aninhada valem dentro dela — inclusive *a e
+            # **kw. Sem isto, `def dec(*a, **kw)` dentro de um decorator fazia
+            # a função de FORA parecer estar usando `a` e `kw` do nada.
             if isinstance(no, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                nomes |= {a.arg for a in no.args.args}
+                nomes |= {x.arg for x in no.args.args + no.args.kwonlyargs
+                          + no.args.posonlyargs}
+                if no.args.vararg:
+                    nomes.add(no.args.vararg.arg)
+                if no.args.kwarg:
+                    nomes.add(no.args.kwarg.arg)
         elif isinstance(no, ast.Lambda):
             # `lambda i=item_id, q=quality: ...` — i e q existem dentro dela
             nomes |= {a.arg for a in no.args.args + no.args.kwonlyargs}

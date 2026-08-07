@@ -117,15 +117,23 @@ async def on_interaction(interaction: discord.Interaction):
 
 
 async def _vigia_de_saude():
-    """Atraso do laço de eventos + estado do gateway.
+    """Atraso do laço de eventos, estado do gateway e queda da API do Discord.
 
     O atraso é medido dormindo 1s e conferindo quanto passou de verdade: a
     diferença é o tempo que o laço ficou preso em código síncrono, que é
     exatamente o que impede o bot de responder dentro dos 3s do Discord.
+
+    A checagem da API existe por causa de 04/08: o Discord ficou horas com a
+    API fora do ar, os comandos pararam, e ninguém da guild sabia o que estava
+    acontecendo — nem que o site continuava funcionando. Quatro deploys foram
+    gastos procurando um bug que não existia aqui.
     """
     import time as _t
+
     voltas = 0
+    api_caiu_em = None          # quando a queda começou (None = está de pé)
     await bot.wait_until_ready()
+
     while not bot.is_closed():
         t0 = _t.perf_counter()
         await asyncio.sleep(1)
@@ -133,10 +141,68 @@ async def _vigia_de_saude():
         if atraso > 1.0:
             # Só o que importa: abaixo disso a interação ainda cabe nos 3s.
             print(f'[saude] laço travado por {atraso:.1f}s', flush=True)
+
         voltas += 1
         if voltas % 300 == 0:      # a cada 5 min — o bastante pra ver histórico
             print(f'[saude] gateway {bot.latency*1000:.0f}ms | '
                   f'{_eventos_recebidos["n"]} eventos desde o boot', flush=True)
+
+        # ── Estado da API do Discord, a cada 2 minutos ────────────────────────
+        # O gateway pode estar perfeito e a API caída ao mesmo tempo — foi
+        # exatamente o quadro de 04/08, e foi o que me confundiu por horas.
+        if voltas % 120 == 0:
+            de_pe = await _api_do_discord_responde()
+            if not de_pe and api_caiu_em is None:
+                api_caiu_em = _t.time()
+                print('[saude] API do Discord NAO responde', flush=True)
+            elif de_pe and api_caiu_em is not None:
+                minutos = (_t.time() - api_caiu_em) / 60
+                api_caiu_em = None
+                print(f'[saude] API do Discord voltou ({minutos:.0f} min fora)', flush=True)
+                # Só avisa se ficou fora tempo suficiente pra alguém ter notado.
+                # Oscilação de 2 minutos não merece ping no canal.
+                if minutos >= 5:
+                    await _avisar_discord_voltou(minutos)
+
+
+async def _api_do_discord_responde() -> bool:
+    """True se a API REST do Discord está respondendo.
+
+    Usa o próprio gateway/HTTP do discord.py, então reaproveita a sessão e o
+    controle de rate limit dele em vez de abrir conexão nova.
+    """
+    try:
+        await bot.application_info()
+        return True
+    except Exception:
+        return False
+
+
+async def _avisar_discord_voltou(minutos: float):
+    """Avisa a guild que os comandos voltaram, e por que pararam.
+
+    Sem isto, uma pane do Discord fica indistinguível de bot quebrado: a galera
+    tenta comando, não acontece nada, e alguém abre chamado com a gente.
+    """
+    try:
+        guild = config.get_home_guild(bot)
+        if not guild:
+            return
+        canal_id = await database.run_db(database.get_config, 'channel_logs')
+        canal = guild.get_channel(int(canal_id)) if canal_id else None
+        if not canal:
+            return
+        embed = discord.Embed(
+            title='✅ Comandos do bot voltaram',
+            description=(
+                f'A **API do Discord** ficou fora do ar por cerca de '
+                f'**{minutos:.0f} minutos** — não foi problema do bot nem do site.\n\n'
+                'Durante quedas assim, o site continua funcionando: '
+                'entre em https://xnomercy.com com usuário e senha.'),
+            color=discord.Color.green())
+        await canal.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    except Exception as e:
+        print(f'[saude] nao consegui avisar que a API voltou: {e!r}', flush=True)
 
 
 @bot.tree.error

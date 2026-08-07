@@ -99,6 +99,10 @@ class CloseTicketView(LoggedView):
  
     @discord.ui.button(label='🔒 Fechar Ticket', style=discord.ButtonStyle.danger, custom_id='xnm:fechar_ticket')
     async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # defer PUBLICO: a confirmacao abaixo e' publica de proposito (quem esta
+        # no canal ve que o ticket foi encerrado). Fechar mexe em categoria,
+        # permissoes e nome do canal — passa fácil dos 3s do Discord.
+        await interaction.response.defer()
         try:
             # Tipo real vem do banco (registrado na criação do ticket) — só cai pro
             # nome do canal se por algum motivo não achar o registro (canal antigo,
@@ -119,7 +123,7 @@ class CloseTicketView(LoggedView):
                 archive_key = 'category_tickets_saque_finalizado'
                 archive_name = '💰 Tickets Saldo Finalizado'
  
-            await interaction.response.send_message('🔒 Ticket encerrado! Movendo para o arquivo...')
+            await interaction.followup.send('🔒 Ticket encerrado! Movendo para o arquivo...')
             await database.run_db(database.close_ticket_db, str(interaction.channel.id))
  
             # Busca ou cria categoria de arquivo
@@ -436,6 +440,11 @@ class TicketsCog(commands.Cog):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
  
+        # defer PUBLICO: o painel abaixo e' a mensagem que a guild vai clicar
+        # por meses, entao tem que ser publica. Como followup ela continua sendo
+        # mensagem de verdade, com os botoes persistentes.
+        await interaction.response.defer()
+
         # Salva a categoria do canal atual como categoria deste tipo de ticket
         if tipo != 'todos' and interaction.channel.category:
             await database.run_db(database.set_config, 
@@ -466,7 +475,7 @@ class TicketsCog(commands.Cog):
             embed.set_thumbnail(url=interaction.guild.icon.url)
         embed.set_footer(text='XnoMercy Guild')
  
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.followup.send(embed=embed, view=view)
  
     @app_commands.command(name='configurar_ticket', description='[LÍDER] Edita a mensagem de um tipo de ticket.')
     @app_commands.describe(
@@ -480,11 +489,16 @@ class TicketsCog(commands.Cog):
         app_commands.Choice(name='Saque',        value='saque'),
     ])
     async def configurar_ticket(self, interaction: discord.Interaction, tipo: str, titulo: str, mensagem: str):
+        # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
+        # travam o bot), mas ainda demoram — e o Discord desiste da interacao
+        # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
+        # Deferido, todo envio daqui pra frente e' followup.
+        await interaction.response.defer(ephemeral=True)
         if not is_financial(interaction.user):
-            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            await interaction.followup.send('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
         await database.run_db(database.set_ticket_message, tipo, titulo, mensagem.replace('\\n', '\n'))
-        await interaction.response.send_message(f'✅ Mensagem do ticket **{tipo}** atualizada!', ephemeral=True)
+        await interaction.followup.send(f'✅ Mensagem do ticket **{tipo}** atualizada!', ephemeral=True)
  
  
 async def setup(bot):

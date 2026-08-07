@@ -184,17 +184,22 @@ class SitePendingSplitView(LoggedView):
                     pass
 
     async def _recusar(self, interaction: discord.Interaction):
+        # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
+        # travam o bot), mas ainda demoram — e o Discord desiste da interacao
+        # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
+        # Deferido, todo envio daqui pra frente e' followup.
+        await interaction.response.defer(ephemeral=True)
         if not is_financial(interaction.user):
-            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            await interaction.followup.send('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
 
         split = await database.run_db(database.get_pending_split, self.split_id)
         if not split or split['status'] != 'pending':
-            await interaction.response.send_message('❌ Já processado.', ephemeral=True)
+            await interaction.followup.send('❌ Já processado.', ephemeral=True)
             return
 
         if not await database.run_db(database.reject_pending_split, self.split_id, interaction.user.display_name):
-            await interaction.response.send_message('❌ Já processado por outra pessoa.', ephemeral=True)
+            await interaction.followup.send('❌ Já processado por outra pessoa.', ephemeral=True)
             return
 
         try:
@@ -209,7 +214,7 @@ class SitePendingSplitView(LoggedView):
             print(f'[site_splits] erro ao editar embed de recusa do split {self.split_id}: {e}')
 
         try:
-            await interaction.response.send_message('❌ Split recusado. O evento voltou para Finalizados.', ephemeral=True)
+            await interaction.followup.send('❌ Split recusado. O evento voltou para Finalizados.', ephemeral=True)
         except Exception as e:
             print(f'[site_splits] erro ao responder recusa do split {self.split_id}: {e}')
 

@@ -760,6 +760,31 @@ checar(not _send_apos_defer(_bom), 'acusou o padrao guardado por is_done(), que 
 print('   nenhum handler responde duas vezes; detector aferido')
 
 
+secao('todo handler que consulta o banco tem que deferir')
+# O Discord desiste da interacao em 3s. Um handler que faz varias consultas
+# antes de responder estoura isso com o banco carregado — e a pessoa fica no
+# "..." pra sempre, sem erro nenhum. Foi o sintoma que a guild reportou.
+#
+# Unica excecao: on_error, que trata interacao possivelmente JA respondida e
+# resolve isso com is_done() — deferir ali quebraria o caso comum.
+_sem_defer = []
+for _p in sorted(_pl.Path('.').glob('*.py')):
+    if _p.name.startswith(('test_', '_')):
+        continue
+    for _fn in _ast.walk(_ast.parse(_p.read_text(encoding='utf-8'))):
+        if not isinstance(_fn, _ast.AsyncFunctionDef):
+            continue
+        if 'interaction' not in [a.arg for a in _fn.args.args]:
+            continue
+        if _fn.name == 'on_error':
+            continue
+        _t = _ast.unparse(_fn)
+        if 'run_db' in _t and 'defer(' not in _t:
+            _sem_defer.append(f'{_p.name}:{_fn.lineno} {_fn.name}')
+checar(not _sem_defer, f'handler consulta o banco sem deferir: {_sem_defer}')
+print('   todos os handlers que consultam o banco deferem antes')
+
+
 secao('banco nunca no laco de eventos')
 # O pg8000 e' SINCRONO. Chamado direto de uma corrotina, ele congela o bot
 # INTEIRO ate' o Postgres responder — nao so quem deu o comando. Em 04/08 um

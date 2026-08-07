@@ -40,21 +40,26 @@ class ConfiscarView(LoggedView):
         self.add_item(cancelar)
 
     async def _confiscar(self, interaction: discord.Interaction):
+        # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
+        # travam o bot), mas ainda demoram — e o Discord desiste da interacao
+        # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
+        # Deferido, todo envio daqui pra frente e' followup.
+        await interaction.response.defer(ephemeral=True)
         if not is_financial(interaction.user):
-            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder podem confiscar.', ephemeral=True)
+            await interaction.followup.send('❌ Apenas Líder ou Vice Líder podem confiscar.', ephemeral=True)
             return
 
         dep = await database.run_db(database.get_member_departure, self.departure_id)
         if not dep:
-            await interaction.response.send_message('❌ Registro não encontrado.', ephemeral=True)
+            await interaction.followup.send('❌ Registro não encontrado.', ephemeral=True)
             return
         if dep['status'] != 'pending':
-            await interaction.response.send_message('❌ Já processado.', ephemeral=True)
+            await interaction.followup.send('❌ Já processado.', ephemeral=True)
             return
 
         # Atômico primeiro — evita dois Líderes clicando quase juntos confiscarem em dobro.
         if not await database.run_db(database.resolve_member_departure, self.departure_id, 'confiscated'):
-            await interaction.response.send_message('❌ Já processado por outra pessoa.', ephemeral=True)
+            await interaction.followup.send('❌ Já processado por outra pessoa.', ephemeral=True)
             return
 
         # Zera e devolve o saldo antigo na mesma query (ver database.zero_player_balance):
@@ -87,27 +92,32 @@ class ConfiscarView(LoggedView):
 
         try:
             if balance > 0:
-                await interaction.response.send_message(f'✅ **{fmt(balance)} prata** confiscados com sucesso!', ephemeral=True)
+                await interaction.followup.send(f'✅ **{fmt(balance)} prata** confiscados com sucesso!', ephemeral=True)
             else:
-                await interaction.response.send_message('ℹ️ Saldo já está zerado.', ephemeral=True)
+                await interaction.followup.send('ℹ️ Saldo já está zerado.', ephemeral=True)
         except Exception:
             pass
 
     async def _cancelar(self, interaction: discord.Interaction):
+        # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
+        # travam o bot), mas ainda demoram — e o Discord desiste da interacao
+        # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
+        # Deferido, todo envio daqui pra frente e' followup.
+        await interaction.response.defer(ephemeral=True)
         if not is_financial(interaction.user):
-            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            await interaction.followup.send('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
 
         dep = await database.run_db(database.get_member_departure, self.departure_id)
         if not dep:
-            await interaction.response.send_message('❌ Registro não encontrado.', ephemeral=True)
+            await interaction.followup.send('❌ Registro não encontrado.', ephemeral=True)
             return
         if dep['status'] != 'pending':
-            await interaction.response.send_message('❌ Já processado.', ephemeral=True)
+            await interaction.followup.send('❌ Já processado.', ephemeral=True)
             return
 
         if not await database.run_db(database.resolve_member_departure, self.departure_id, 'cancelled'):
-            await interaction.response.send_message('❌ Já processado por outra pessoa.', ephemeral=True)
+            await interaction.followup.send('❌ Já processado por outra pessoa.', ephemeral=True)
             return
 
         try:
@@ -120,7 +130,7 @@ class ConfiscarView(LoggedView):
             print(f'[members] erro ao editar mensagem de cancelamento {self.departure_id}: {e}')
 
         try:
-            await interaction.response.send_message('❌ Confisco cancelado.', ephemeral=True)
+            await interaction.followup.send('❌ Confisco cancelado.', ephemeral=True)
         except Exception:
             pass
 

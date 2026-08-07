@@ -223,8 +223,13 @@ class WelcomeCog(commands.Cog):
         mensagem='Mensagem (use {nome} para o nome, {mention} para marcar, {site} para o link)',
     )
     async def configurar_despedida(self, interaction: discord.Interaction, titulo: str, mensagem: str):
+        # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
+        # travam o bot), mas ainda demoram — e o Discord desiste da interacao
+        # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
+        # Deferido, todo envio daqui pra frente e' followup.
+        await interaction.response.defer(ephemeral=True)
         if not is_financial(interaction.user):
-            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            await interaction.followup.send('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
         await database.run_db(database.set_config, 'goodbye_title', titulo)
         await database.run_db(database.set_config, 'goodbye_message', mensagem.replace('\\n', '\n'))
@@ -232,14 +237,19 @@ class WelcomeCog(commands.Cog):
         embed.add_field(name='Título',   value=titulo,   inline=False)
         embed.add_field(name='Mensagem', value=mensagem, inline=False)
         embed.set_footer(text='A DM de despedida é best-effort — o Discord bloqueia o envio pra quem já saiu e não compartilha outro servidor com o bot. O aviso no canal de saídas sempre funciona.')
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ── /testar_despedida ──────────────────────────────────────────────────────
     @app_commands.command(name='testar_despedida', description='[LÍDER] Testa a DM de despedida (envia pra você mesmo).')
     @app_commands.describe(usuario='Quem recebe o teste (padrão: você mesmo)')
     async def testar_despedida(self, interaction: discord.Interaction, usuario: discord.Member = None):
+        # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
+        # travam o bot), mas ainda demoram — e o Discord desiste da interacao
+        # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
+        # Deferido, todo envio daqui pra frente e' followup.
+        await interaction.response.defer(ephemeral=True)
         if not is_financial(interaction.user):
-            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            await interaction.followup.send('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
         target = usuario or interaction.user
         title = await database.run_db(database.get_config, 'goodbye_title') or 'Até a próxima!'
@@ -257,30 +267,35 @@ class WelcomeCog(commands.Cog):
         embed.set_footer(text='XnoMercy Guild | Mensagem de despedida (teste)')
         try:
             await target.send(embed=embed)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f'✅ DM de despedida enviada para **{target.display_name}**! '
                 f'(No caso real, o Discord pode bloquear pra quem já saiu — ver /configurar_despedida.)',
                 ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f'❌ **{target.display_name}** bloqueou DMs ou não aceita mensagens de bots.', ephemeral=True)
         except Exception as e:
             print(f'[goodbye] {e}')
-            await interaction.response.send_message('❌ Erro ao enviar a DM. Tente novamente.', ephemeral=True)
+            await interaction.followup.send('❌ Erro ao enviar a DM. Tente novamente.', ephemeral=True)
 
     # ── /testar_boas_vindas ────────────────────────────────────────────────────
     @app_commands.command(name='testar_boas_vindas', description='[LÍDER] Testa o envio da mensagem de boas-vindas via DM.')
     @app_commands.describe(usuario='Usuário que vai receber o DM de teste (padrão: você mesmo)')
     async def testar_boas_vindas(self, interaction: discord.Interaction, usuario: discord.Member = None):
+        # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
+        # travam o bot), mas ainda demoram — e o Discord desiste da interacao
+        # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
+        # Deferido, todo envio daqui pra frente e' followup.
+        await interaction.response.defer(ephemeral=True)
         if not is_financial(interaction.user):
-            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            await interaction.followup.send('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
  
         target = usuario or interaction.user
         cfg    = await database.run_db(database.get_welcome_config)
  
         if not cfg:
-            await interaction.response.send_message('❌ Config não encontrada. Rode /setup primeiro.', ephemeral=True)
+            await interaction.followup.send('❌ Config não encontrada. Rode /setup primeiro.', ephemeral=True)
             return
  
         title   = cfg['title']
@@ -296,16 +311,16 @@ class WelcomeCog(commands.Cog):
  
         try:
             await target.send(embed=embed)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f'✅ DM enviado para **{target.display_name}**!', ephemeral=True
             )
         except discord.Forbidden:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f'❌ **{target.display_name}** bloqueou DMs ou não aceita mensagens de bots.', ephemeral=True
             )
         except Exception as e:
             print(f'[welcome] {e}')
-            await interaction.response.send_message('❌ Erro ao enviar a DM. Tente novamente.', ephemeral=True)
+            await interaction.followup.send('❌ Erro ao enviar a DM. Tente novamente.', ephemeral=True)
  
     # ── /configurar_boas_vindas ────────────────────────────────────────────────
     @app_commands.command(name='configurar_boas_vindas', description='[LÍDER] Edita a mensagem de boas-vindas.')
@@ -315,8 +330,13 @@ class WelcomeCog(commands.Cog):
         canal   ='Canal onde será enviada (opcional)'
     )
     async def configurar_boas_vindas(self, interaction: discord.Interaction, titulo: str, mensagem: str, canal: discord.TextChannel = None):
+        # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
+        # travam o bot), mas ainda demoram — e o Discord desiste da interacao
+        # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
+        # Deferido, todo envio daqui pra frente e' followup.
+        await interaction.response.defer(ephemeral=True)
         if not is_financial(interaction.user):
-            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            await interaction.followup.send('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
  
         ch_id = str(canal.id) if canal else await database.run_db(database.get_config, 'channel_boas_vindas')
@@ -327,7 +347,7 @@ class WelcomeCog(commands.Cog):
         embed.add_field(name='Mensagem', value=mensagem, inline=False)
         if canal:
             embed.add_field(name='Canal', value=canal.mention, inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
  
     # ── /configurar_canal ──────────────────────────────────────────────────────
     @app_commands.command(name='configurar_canal', description='[LÍDER] Aponta uma função do bot para um canal existente.')
@@ -342,8 +362,13 @@ class WelcomeCog(commands.Cog):
         app_commands.Choice(name='👋 Boas-vindas',        value='channel_boas_vindas'),
     ])
     async def configurar_canal(self, interaction: discord.Interaction, funcao: str, canal: discord.TextChannel):
+        # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
+        # travam o bot), mas ainda demoram — e o Discord desiste da interacao
+        # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
+        # Deferido, todo envio daqui pra frente e' followup.
+        await interaction.response.defer(ephemeral=True)
         if not is_financial(interaction.user):
-            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            await interaction.followup.send('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
  
         await database.run_db(database.set_config, funcao, str(canal.id))
@@ -358,7 +383,7 @@ class WelcomeCog(commands.Cog):
             'channel_boas_vindas':     '👋 Boas-vindas',
         }
  
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f'✅ **{nomes[funcao]}** agora aponta para {canal.mention}!', ephemeral=True
         )
  
@@ -403,8 +428,13 @@ class WelcomeCog(commands.Cog):
     # ── /ver_permissoes ────────────────────────────────────────────────────────
     @app_commands.command(name='ver_permissoes', description='[LÍDER] Ver todas as permissões configuradas.')
     async def ver_permissoes(self, interaction: discord.Interaction):
+        # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
+        # travam o bot), mas ainda demoram — e o Discord desiste da interacao
+        # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
+        # Deferido, todo envio daqui pra frente e' followup.
+        await interaction.response.defer(ephemeral=True)
         if not is_financial(interaction.user):
-            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            await interaction.followup.send('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
  
         all_perms = await database.run_db(database.get_all_permissions)
@@ -428,7 +458,7 @@ class WelcomeCog(commands.Cog):
                 inline=False
             )
  
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
  
  
 async def setup(bot):

@@ -134,17 +134,22 @@ class JoinEventButton(discord.ui.Button):
         self.voice_ch_id = voice_ch_id
 
     async def callback(self, interaction: discord.Interaction):
+        # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
+        # travam o bot), mas ainda demoram — e o Discord desiste da interacao
+        # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
+        # Deferido, todo envio daqui pra frente e' followup.
+        await interaction.response.defer(ephemeral=True)
         try:
             if not is_member(interaction.user):
-                await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
+                await interaction.followup.send('❌ Sem permissão.', ephemeral=True)
                 return
             if not interaction.user.voice or not interaction.user.voice.channel:
-                await interaction.response.send_message('❌ Entre em uma **call de voz** primeiro!', ephemeral=True)
+                await interaction.followup.send('❌ Entre em uma **call de voz** primeiro!', ephemeral=True)
                 return
 
             event = await database.run_db(database.get_event, self.event_id)
             if not event or event['status'] != 'active':
-                await interaction.response.send_message('❌ Evento não está mais ativo.', ephemeral=True)
+                await interaction.followup.send('❌ Evento não está mais ativo.', ephemeral=True)
                 return
 
             added = await database.run_db(database.add_event_participant, self.event_id, str(interaction.user.id), interaction.user.display_name)
@@ -158,14 +163,14 @@ class JoinEventButton(discord.ui.Button):
             await _log(interaction.guild, f'✅ **{interaction.user.display_name}** entrou no **Evento #{self.event_id:04d}**')
 
             msg = '✅ Você entrou no evento! Movendo para a call...' if added else '🔄 Você já estava no evento. Movendo para a call...'
-            await interaction.response.send_message(msg, ephemeral=True)
+            await interaction.followup.send(msg, ephemeral=True)
         except Exception as e:
             # Detalhe interno (str(e) pode carregar mensagem de driver de banco) só no
             # log — pro usuário vai a mensagem genérica, mesma política do handler global.
             print(f'[JoinEventButton] {e}')
             try:
                 if not interaction.response.is_done():
-                    await interaction.response.send_message('❌ Erro ao entrar no evento. Tente novamente.', ephemeral=True)
+                    await interaction.followup.send('❌ Erro ao entrar no evento. Tente novamente.', ephemeral=True)
             except Exception:
                 pass
 
@@ -235,11 +240,16 @@ class AddPlayerModal(discord.ui.Modal, title='Adicionar Player'):
         self.event_id = event_id
 
     async def on_submit(self, interaction: discord.Interaction):
+        # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
+        # travam o bot), mas ainda demoram — e o Discord desiste da interacao
+        # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
+        # Deferido, todo envio daqui pra frente e' followup.
+        await interaction.response.defer(ephemeral=True)
         try:
             member = await interaction.guild.fetch_member(int(self.user_id.value))
         except Exception as e:
             print(f'[fetch_member] {e!r}')
-            await interaction.response.send_message('❌ Membro não encontrado.', ephemeral=True)
+            await interaction.followup.send('❌ Membro não encontrado.', ephemeral=True)
             return
 
         try:
@@ -252,14 +262,14 @@ class AddPlayerModal(discord.ui.Modal, title='Adicionar Player'):
             # Falha real (conexão caiu etc) — distinto de "já existia" (False).
             # Antes os dois casos eram indistinguíveis e isso tentava um UPDATE
             # mesmo sem o INSERT ter funcionado por outro motivo.
-            await interaction.response.send_message('❌ Erro ao adicionar participante. Tente novamente.', ephemeral=True)
+            await interaction.followup.send('❌ Erro ao adicionar participante. Tente novamente.', ephemeral=True)
             return
         if added is False:
             await database.run_db(database.set_participant_weight, self.event_id, str(member.id), weight)
 
         await _update_event_embed(interaction.guild, self.event_id)
         msg = f'✅ **{member.display_name}** adicionado com **{weight:.0f}%** de participação!'
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.followup.send(msg, ephemeral=True)
 
 
 class RemovePlayerModal(discord.ui.Modal, title='Remover Player'):
@@ -270,12 +280,17 @@ class RemovePlayerModal(discord.ui.Modal, title='Remover Player'):
         self.event_id = event_id
 
     async def on_submit(self, interaction: discord.Interaction):
+        # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
+        # travam o bot), mas ainda demoram — e o Discord desiste da interacao
+        # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
+        # Deferido, todo envio daqui pra frente e' followup.
+        await interaction.response.defer(ephemeral=True)
         removed = await database.run_db(database.remove_event_participant, self.event_id, self.user_id.value)
         if removed:
             await _update_event_embed(interaction.guild, self.event_id)
-            await interaction.response.send_message('✅ Player removido!', ephemeral=True)
+            await interaction.followup.send('✅ Player removido!', ephemeral=True)
         else:
-            await interaction.response.send_message('❌ Player não encontrado neste evento.', ephemeral=True)
+            await interaction.followup.send('❌ Player não encontrado neste evento.', ephemeral=True)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -540,14 +555,19 @@ class ApproveDepositView(LoggedView):
 
     @discord.ui.button(label='❌ Recusar', style=discord.ButtonStyle.danger, custom_id='xnm:recusar_dep')
     async def recusar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
+        # travam o bot), mas ainda demoram — e o Discord desiste da interacao
+        # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
+        # Deferido, todo envio daqui pra frente e' followup.
+        await interaction.response.defer(ephemeral=True)
         if not is_financial(interaction.user):
-            await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            await interaction.followup.send('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
 
         # Antes só editava o embed — o evento continuava 'pending' no banco, então
         # dava pra clicar "Aprovar" depois de "Recusar" e creditar a prata mesmo assim.
         if not await database.run_db(database.reject_event, self.event_id, interaction.user.display_name):
-            await interaction.response.send_message('❌ Já processado.', ephemeral=True)
+            await interaction.followup.send('❌ Já processado.', ephemeral=True)
             return
 
         try:
@@ -561,7 +581,7 @@ class ApproveDepositView(LoggedView):
             print(f'[events] erro ao editar embed de recusa do evento #{self.event_id}: {e}')
 
         try:
-            await interaction.response.send_message('❌ Depósito recusado.', ephemeral=True)
+            await interaction.followup.send('❌ Depósito recusado.', ephemeral=True)
         except Exception as e:
             print(f'[events] erro ao responder recusa do evento #{self.event_id}: {e}')
 
@@ -593,14 +613,19 @@ class EventsCog(commands.Cog):
     @app_commands.command(name='atualizar_participacao', description='Define a participação de um player. Use 0 para excluí-lo da distribuição.')
     @app_commands.describe(usuario='Player', valor='Participação de 0 a 100 (0 = excluído da distribuição)')
     async def atualizar_participacao(self, interaction: discord.Interaction, usuario: discord.Member, valor: int):
+        # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
+        # travam o bot), mas ainda demoram — e o Discord desiste da interacao
+        # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
+        # Deferido, todo envio daqui pra frente e' followup.
+        await interaction.response.defer(ephemeral=True)
         try:
             if not (can_manage_events(interaction.user) or is_staff_up(interaction.user)):
-                await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
+                await interaction.followup.send('❌ Sem permissão.', ephemeral=True)
                 return
 
             event = await database.run_db(database.get_event_by_channel, str(interaction.channel_id))
             if not event:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     '❌ Este canal não é um canal de evento. Use este comando dentro do canal do evento.',
                     ephemeral=True
                 )
@@ -616,12 +641,12 @@ class EventsCog(commands.Cog):
             else:
                 msg = f'✅ **{usuario.display_name}** — participação definida para **{valor}%**!'
 
-            await interaction.response.send_message(msg, ephemeral=True)
+            await interaction.followup.send(msg, ephemeral=True)
 
         except Exception as e:
             print(f'[atualizar_participacao] {e}')
             try:
-                await interaction.response.send_message('❌ Erro ao atualizar participação. Tente novamente.', ephemeral=True)
+                await interaction.followup.send('❌ Erro ao atualizar participação. Tente novamente.', ephemeral=True)
             except Exception:
                 pass
 
@@ -629,8 +654,12 @@ class EventsCog(commands.Cog):
     @app_commands.command(name='simular_evento', description='Simula a distribuição proporcional do loot. Informe o valor total e o reparo.')
     @app_commands.describe(valor_total='Loot total — ex: 25.000.000 ou 25000000', reparo='Reparo total — ex: 2.000.000 (0 se não houver)')
     async def simular(self, interaction: discord.Interaction, valor_total: str, reparo: str = '0'):
+        # defer PUBLICO: a simulacao serve pra guild conferir a divisao antes do
+        # deposito, entao o resultado tem que ser visivel. As recusas continuam
+        # privadas — followup aceita ephemeral por mensagem.
+        await interaction.response.defer()
         if not (can_manage_events(interaction.user) or is_staff_up(interaction.user)):
-            await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
+            await interaction.followup.send('❌ Sem permissão.', ephemeral=True)
             return
 
         # Aceita 1.200.000 / 1200000 / 1,200,000 — ver bank.parse_prata. O campo era
@@ -638,24 +667,24 @@ class EventsCog(commands.Cog):
         valor_total_n = parse_prata(valor_total)
         reparo_n      = parse_prata(reparo if reparo not in (None, '') else '0')
         if valor_total_n is None or reparo_n is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 '❌ Valor não reconhecido. Escreva como preferir: `25.000.000`, `25000000` ou `25,000,000`.',
                 ephemeral=True)
             return
         if valor_total_n <= 0 or reparo_n < 0:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 '❌ O loot precisa ser maior que zero e o reparo não pode ser negativo.', ephemeral=True)
             return
         valor_total, reparo = valor_total_n, reparo_n
 
         event = await database.run_db(database.get_event_by_channel, str(interaction.channel_id))
         if not event:
-            await interaction.response.send_message('❌ Este canal não é um canal de evento.', ephemeral=True)
+            await interaction.followup.send('❌ Este canal não é um canal de evento.', ephemeral=True)
             return
 
         participants = await database.run_db(database.get_event_participants, event['id'])
         if not participants:
-            await interaction.response.send_message('❌ Nenhum participante registrado.', ephemeral=True)
+            await interaction.followup.send('❌ Nenhum participante registrado.', ephemeral=True)
             return
 
         guild_tax  = float(await database.run_db(database.get_config, 'guild_tax') or 10)
@@ -665,7 +694,7 @@ class EventsCog(commands.Cog):
         net        = valor_total - guild_cut - vendor_cut - reparo
 
         if net <= 0:
-            await interaction.response.send_message('❌ Valor líquido negativo!', ephemeral=True)
+            await interaction.followup.send('❌ Valor líquido negativo!', ephemeral=True)
             return
 
         distribution = _calc_distribution(participants, net)
@@ -696,14 +725,19 @@ class EventsCog(commands.Cog):
         add_lista(embed, '💰 Distribuição Proporcional', lines)
         embed.set_footer(text='Use /depositar_evento para enviar para aprovação')
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     # ── /depositar_evento ──────────────────────────────────────────────────────
     @app_commands.command(name='depositar_evento', description='Envia o loot para aprovação. Informe o valor total e o custo de reparo.')
     @app_commands.describe(valor_total='Loot total — ex: 25.000.000 ou 25000000', reparo='Reparo total — ex: 2.000.000 (0 se não houver)')
     async def depositar(self, interaction: discord.Interaction, valor_total: str, reparo: str = '0'):
+        # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
+        # travam o bot), mas ainda demoram — e o Discord desiste da interacao
+        # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
+        # Deferido, todo envio daqui pra frente e' followup.
+        await interaction.response.defer(ephemeral=True)
         if not (can_manage_events(interaction.user) or is_staff_up(interaction.user)):
-            await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
+            await interaction.followup.send('❌ Sem permissão.', ephemeral=True)
             return
 
         # Aceita 1.200.000 / 1200000 / 1,200,000 — ver bank.parse_prata. O campo era
@@ -711,28 +745,28 @@ class EventsCog(commands.Cog):
         valor_total_n = parse_prata(valor_total)
         reparo_n      = parse_prata(reparo if reparo not in (None, '') else '0')
         if valor_total_n is None or reparo_n is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 '❌ Valor não reconhecido. Escreva como preferir: `25.000.000`, `25000000` ou `25,000,000`.',
                 ephemeral=True)
             return
         if valor_total_n <= 0 or reparo_n < 0:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 '❌ O loot precisa ser maior que zero e o reparo não pode ser negativo.', ephemeral=True)
             return
         valor_total, reparo = valor_total_n, reparo_n
 
         event = await database.run_db(database.get_event_by_channel, str(interaction.channel_id))
         if not event:
-            await interaction.response.send_message('❌ Este canal não é um canal de evento.', ephemeral=True)
+            await interaction.followup.send('❌ Este canal não é um canal de evento.', ephemeral=True)
             return
 
         if event['status'] not in ('active', 'finished'):
-            await interaction.response.send_message('❌ Evento já processado.', ephemeral=True)
+            await interaction.followup.send('❌ Evento já processado.', ephemeral=True)
             return
 
         participants = await database.run_db(database.get_event_participants, event['id'])
         if not participants:
-            await interaction.response.send_message('❌ Nenhum participante registrado.', ephemeral=True)
+            await interaction.followup.send('❌ Nenhum participante registrado.', ephemeral=True)
             return
 
         guild_tax  = float(await database.run_db(database.get_config, 'guild_tax') or 10)
@@ -742,14 +776,14 @@ class EventsCog(commands.Cog):
         net        = valor_total - guild_cut - vendor_cut - reparo
 
         if net <= 0:
-            await interaction.response.send_message('❌ Valor líquido negativo!', ephemeral=True)
+            await interaction.followup.send('❌ Valor líquido negativo!', ephemeral=True)
             return
 
         # Reivindica o evento atomicamente ANTES de montar a mensagem de aprovação —
         # se perder a corrida (já reivindicado por outra chamada quase simultânea),
         # aborta sem postar uma 2ª mensagem de aprovação divergente pro mesmo evento.
         if not await database.run_db(database.deposit_event, event['id'], valor_total, reparo, net):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 '❌ Este evento já foi processado ou está aguardando aprovação.', ephemeral=True)
             return
         distribution = _calc_distribution(participants, net)
@@ -788,7 +822,7 @@ class EventsCog(commands.Cog):
             f'⏳ **{interaction.user.display_name}** enviou depósito de **{fmt(valor_total)} prata** '
             f'do **Evento #{event["id"]:04d} — {event["title"]}** para aprovação.')
 
-        await interaction.response.send_message('✅ Enviado para aprovação no canal financeiro!', ephemeral=True)
+        await interaction.followup.send('✅ Enviado para aprovação no canal financeiro!', ephemeral=True)
 
 
 async def setup(bot):

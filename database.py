@@ -346,6 +346,16 @@ def save_guild_config(config_dict):
 
 # ── Permissions ────────────────────────────────────────────────────────────────
 def get_permission_roles(permission):
+    """Cargos que têm essa permissão, ou None se não deu pra ler.
+
+    O None não é frescura: `[]` significa "nenhum cargo tem essa permissão", e
+    quem chama usa isso pra NEGAR acesso. Devolver `[]` num erro de banco fazia
+    "não consegui ler" virar "ninguém pode" — e o permissions.py cacheava esse
+    vazio por 5 minutos, então um deadlock de um segundo trancava a liderança
+    fora de todo comando até o cache expirar, já com o banco de pé de novo.
+
+    O `except` do permissions._cargos existia justamente pra evitar isso e nunca
+    chegava a rodar: a exceção morria aqui, um andar abaixo dele."""
     conn = get_connection()
     try:
         c = conn.cursor()
@@ -353,7 +363,7 @@ def get_permission_roles(permission):
         return [r[0] for r in c.fetchall()]
     except Exception as e:
         print(f'[get_permission_roles] {e!r}')
-        return []
+        return None
     finally:
         release(conn)
 

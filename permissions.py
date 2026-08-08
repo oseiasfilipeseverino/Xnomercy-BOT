@@ -45,25 +45,53 @@ async def aquecer():
     bot volta.
     """
     agora = time.time()
+    falhas = 0
     for p in PERMISSOES:
         try:
-            _cache[p] = (await database.run_db(database.get_permission_roles, p), agora)
+            cargos = await database.run_db(database.get_permission_roles, p)
         except Exception as e:
             print(f'[permissions] falha ao aquecer {p}: {e!r}')
-    print(f'[permissions] {len(_cache)} permissao(oes) em memoria')
+            cargos = None
+        # Não cacheia falha. O on_ready roda logo depois do init_db, que é o
+        # momento de maior disputa no banco — aquecer com [] aqui deixaria o bot
+        # inteiro sem permissão nenhuma pelos 5 minutos seguintes ao boot.
+        if cargos is None:
+            falhas += 1
+            continue
+        _cache[p] = (cargos, agora)
+    print(f'[permissions] {len(_cache)} permissao(oes) em memoria'
+          + (f' ({falhas} nao lida(s) — serao tentadas sob demanda)' if falhas else ''))
 
 
 def _cargos(permission: str) -> list:
+    """Cargos da permissão, do cache ou do banco.
+
+    Banco indisponível usa o último valor conhecido em vez de negar acesso a
+    todo mundo. Negar seria "seguro" no papel e péssimo na prática — trancaria a
+    liderança pra fora justo durante um incidente.
+
+    Dois cuidados, os dois vindos de um erro real:
+
+    O `except` abaixo NÃO basta sozinho. O `get_permission_roles` trata a
+    exceção dele mesmo, então nada é levantado até aqui — ele sinaliza a falha
+    devolvendo None. Enquanto ele devolvia `[]`, este except nunca rodava e o
+    caminho de degradação inteiro era código morto.
+
+    E falha não pode ser cacheada. O `[]` entrava no cache e ficava valendo por
+    5 minutos, então um deadlock de um segundo continuava trancando todo mundo
+    depois de o banco já ter voltado.
+    """
     v = _cache.get(permission)
     if v is not None and (time.time() - v[1]) < _TTL:
         return v[0]
     try:
         cargos = database.get_permission_roles(permission)
     except Exception as e:
-        # Banco indisponível: usa o último valor conhecido em vez de negar
-        # acesso a todo mundo. Negar seria "seguro" no papel e péssimo na
-        # prática — trancaria a liderança pra fora justo durante um incidente.
         print(f'[permissions] {permission}: {e!r}')
+        cargos = None
+    if cargos is None:
+        # Não deu pra ler: mantém o que estava (sem renovar o relógio, pra
+        # tentar de novo na próxima chamada em vez de esperar o TTL).
         return v[0] if v is not None else []
     _cache[permission] = (cargos, time.time())
     return cargos

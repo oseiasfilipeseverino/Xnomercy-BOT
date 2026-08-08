@@ -345,6 +345,45 @@ def save_guild_config(config_dict):
 
 
 # ── Permissions ────────────────────────────────────────────────────────────────
+def get_saldos_divergentes():
+    """Jogadores cujo saldo não bate com a soma do próprio extrato.
+
+    Devolve [(discord_id, username, saldo, extrato, diferenca)], ou None se não
+    deu pra ler (mesma convenção do get_permission_roles: None é "não sei", que
+    é diferente de "está tudo certo").
+
+    Existe por causa da auditoria de 08/08/2026, que encontrou 811.641.467 de
+    prata sem lastro no extrato — dinheiro que ESTÁ nas contas certas, mas cuja
+    entrada nunca foi lançada. Duas origens, e a aritmética fechou exata:
+
+      +804.821.478  a conta do banco da guild, alimentada por fora
+      +  6.819.989  11 pessoas × 619.999, uma operação que nunca virou lançamento
+
+    Não havia nada que percebesse isso: só o test_regressao cobre o caminho do
+    split, e o que furou não passou por lá. Uma conta que não fecha é a única
+    checagem que pega buraco que ninguém previu — inclusive os que ainda não
+    existem."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('''
+            SELECT p.discord_id, p.username, p.balance,
+                   COALESCE(SUM(t.amount), 0),
+                   p.balance - COALESCE(SUM(t.amount), 0)
+            FROM players p
+            LEFT JOIN transactions t ON t.discord_id = p.discord_id
+            GROUP BY p.discord_id, p.username, p.balance
+            HAVING ABS(p.balance - COALESCE(SUM(t.amount), 0)) >= 1
+            ORDER BY ABS(p.balance - COALESCE(SUM(t.amount), 0)) DESC''')
+        return [(r[0], r[1], float(r[2]), float(r[3]), float(r[4]))
+                for r in c.fetchall()]
+    except Exception as e:
+        print(f'[get_saldos_divergentes] {e!r}')
+        return None
+    finally:
+        release(conn)
+
+
 def get_permission_roles(permission):
     """Cargos que têm essa permissão, ou None se não deu pra ler.
 

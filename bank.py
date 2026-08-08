@@ -405,6 +405,14 @@ class BankCog(commands.Cog):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
+        # Corta ANTES de mexer em prata. O motivo vai pra um campo de embed, e
+        # campo de embed estoura em 1024 — a API recusa a mensagem INTEIRA com
+        # 400. Como o crédito acontece antes do envio, um motivo longo creditava
+        # a prata e devolvia erro pra quem executou, que naturalmente rodaria de
+        # novo: pagamento em dobro. É o mesmo desfecho que motivou o defer logo
+        # abaixo, por outra porta. Também limita o que entra na descrição da
+        # transação, que é o que a pessoa lê no /extrato.
+        motivo = (motivo or '').strip()[:150] or 'Bônus da liderança'
         valor = await _ler_valor(interaction, valor)
         if valor is None:
             return
@@ -476,6 +484,9 @@ class BankCog(commands.Cog):
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
+        # Mesmo motivo do /adicionar_saldo: corta antes de mexer em prata, senão
+        # um motivo longo faz o embed ser recusado DEPOIS do débito.
+        motivo = (motivo or '').strip()[:150] or 'Pagamento manual'
         valor = await _ler_valor(interaction, valor)
         if valor is None:
             return

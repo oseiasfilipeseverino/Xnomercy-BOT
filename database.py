@@ -105,10 +105,37 @@ def _row_to_dict(row, keys):
 
 
 # ── Init ───────────────────────────────────────────────────────────────────────
+def _colunas_existentes(c) -> set:
+    """{(tabela, coluna)} do schema public, numa consulta só.
+
+    Existe pra evitar `ALTER TABLE`. O `IF NOT EXISTS` engana: o Postgres pega o
+    lock ACCESS EXCLUSIVE na tabela ANTES de checar se a coluna já está lá — um
+    ALTER que não faz nada ainda tranca a tabela inteira.
+
+    Aqui pesa mais que no site: o `init_db` roda no `on_ready`, e o discord.py
+    chama `on_ready` DE NOVO a cada reconexão. Uma noite com a rede oscilando
+    trancava as tabelas várias vezes, no mesmo banco em que os 4 workers do
+    gunicorn do site estavam fazendo o mesmo. É de onde vinham os deadlocks que
+    apareceram 3 vezes nos testes de 07/08.
+
+    Ler o information_schema é barato e não pega lock nenhum."""
+    c.execute("""SELECT table_name, column_name FROM information_schema.columns
+                 WHERE table_schema = 'public'""")
+    return {(t, col) for t, col in c.fetchall()}
+
+
 def init_db():
     conn = get_connection()
     try:
         c = conn.cursor()
+        _ja_tem = _colunas_existentes(c)
+
+        def garantir_coluna(tabela, coluna, definicao):
+            """Só toca na tabela se a coluna faltar de verdade."""
+            if (tabela, coluna) in _ja_tem:
+                return
+            c.execute(f'ALTER TABLE {tabela} ADD COLUMN IF NOT EXISTS {coluna} {definicao}')
+
         c.execute('''CREATE TABLE IF NOT EXISTS guild_config (
             key   TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')''')
         c.execute('''CREATE TABLE IF NOT EXISTS permissions (
@@ -150,7 +177,7 @@ def init_db():
             submitted_at TIMESTAMP DEFAULT NOW(), status TEXT DEFAULT 'pending',
             reviewed_by TEXT DEFAULT '', reviewed_at TIMESTAMP,
             discord_message_id TEXT DEFAULT '')''')
-        c.execute("ALTER TABLE pending_splits ADD COLUMN IF NOT EXISTS discord_message_id TEXT DEFAULT ''")
+        garantir_coluna('pending_splits', 'discord_message_id', "TEXT DEFAULT ''")
         c.execute('''CREATE TABLE IF NOT EXISTS tickets (
             id SERIAL PRIMARY KEY, channel_id TEXT UNIQUE,
             discord_id TEXT NOT NULL, username TEXT NOT NULL,
@@ -211,7 +238,7 @@ def init_db():
             ping_role_id TEXT DEFAULT '', created_by TEXT NOT NULL,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
         # Link opcional do evento (ex: planilha de builds) — o site é quem preenche.
-        c.execute("ALTER TABLE scheduled_events ADD COLUMN IF NOT EXISTS link_url TEXT DEFAULT ''")
+        garantir_coluna('scheduled_events', 'link_url', "TEXT DEFAULT ''")
         c.execute('''CREATE TABLE IF NOT EXISTS slot_assignments (
             id SERIAL PRIMARY KEY, scheduled_event_id INTEGER NOT NULL,
             slot_number INTEGER NOT NULL, discord_id TEXT NOT NULL,

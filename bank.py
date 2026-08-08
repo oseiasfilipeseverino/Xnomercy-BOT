@@ -26,19 +26,6 @@ def fmt_saldo(discord_id) -> str:
     return fmt(valor) if ok else 'indisponivel'
 
 
-def _prata_inteira(v: float) -> int:
-    """Trunca pra prata inteira.
-
-    Prata fracionada não existe no Albion (nem dá pra transferir), e o formato de
-    exibição arredonda pra 0 decimais — então um saldo de 0,4 aparecia no /saldos
-    como "0 prata", parecendo que a lista mostrava gente sem saldo. Todo comando
-    que mexe em saldo passa o valor por aqui antes de gravar."""
-    try:
-        return int(float(v))
-    except (TypeError, ValueError):
-        return 0
-
-
 def parse_prata(texto) -> int | None:
     """Lê um valor de prata escrito como a gente escreve de verdade.
 

@@ -27,40 +27,58 @@ NICK_PREFIX     = '[NM] '          # Prefixo do nick no Discord
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def _search_player(nick):
-    # type: (str) -> Optional[dict]
+    # type: (str) -> object
     """
-    Busca jogador na API do Albion (Americas).
-    Tenta múltiplas variações de capitalização para contornar
-    a API que é case-sensitive na busca.
+    Busca jogador na API do Albion (Americas). Tenta variações de capitalização
+    porque a busca da API é case-sensitive.
+
+    Devolve TRÊS coisas diferentes, e a diferença importa:
+
+        dict   — achou o jogador
+        False  — a API respondeu e o jogador NÃO existe
+        None   — não deu pra perguntar (API fora do ar, timeout)
+
+    Antes devolvia None nos dois últimos casos, e quem chamava dizia "Jogador X
+    não encontrado no servidor Americas" — uma afirmação sobre o mundo do jogo
+    feita quando, na verdade, ninguém tinha conseguido olhar. Em 08/08/2026 o
+    endpoint do Americas ficou fora e todo mundo que tentou se registrar ouviu
+    que o próprio personagem não existia.
+
+    A API do Americas cair não é hipótese remota: é o mesmo endpoint que já
+    tinha derrubado o auto-purge em silêncio (ver o comentário do
+    run_in_executor lá).
     """
-    # Variações únicas de capitalização
     variations = []
     for v in [nick, nick.capitalize(), nick.lower(), nick.title(), nick.upper()]:
         if v not in variations:
             variations.append(v)
+
+    respondeu = False        # a API chegou a dar uma resposta útil alguma vez?
 
     for term in variations:
         try:
             url = ALBION_API + '/search?q=' + requests.utils.quote(term)
             r = requests.get(url, timeout=20, headers={'User-Agent': 'XnoMercy-Bot/2.0'})
             if not r.ok:
+                print('[albion_register] HTTP ' + str(r.status_code) + ' (termo: ' + term + ')')
                 continue
             players = r.json().get('players', [])
-            # Match case-insensitive no resultado
-            match = None
-            for p in players:
-                if p.get('Name', '').lower() == nick.lower():
-                    match = p
-                    break
-            if match:
-                return match
         except requests.exceptions.Timeout:
-            print('[albion_register] Timeout na API (tentativa: ' + term + ')')
-            continue
+            # Timeout aqui significa API fora, não nick errado — as outras
+            # variações vão estourar igual. Insistir só faz a pessoa esperar
+            # 20s a mais por variação (eram até 100s) pra ouvir a mesma coisa.
+            print('[albion_register] Timeout na API (termo: ' + term + ') — desistindo')
+            break
         except Exception as e:
             print('[albion_register] Erro API: ' + str(e))
             continue
-    return None
+
+        respondeu = True
+        for p in players:
+            if p.get('Name', '').lower() == nick.lower():
+                return p
+
+    return False if respondeu else None
 
 
 def _in_guild(player):
@@ -136,6 +154,16 @@ class AlbionRegister(commands.Cog):
         player = await asyncio.get_event_loop().run_in_executor(
             None, _search_player, nick)
 
+        # None = a API não respondeu. Dizer "não encontrado" aqui seria afirmar
+        # que o personagem não existe sem ninguém ter conseguido olhar.
+        if player is None:
+            await interaction.followup.send(
+                '⚠️ A **API do Albion** não está respondendo agora, então não deu '
+                'pra confirmar seu personagem.\n'
+                '> Não é problema no seu nick. Tente de novo em alguns minutos.',
+                ephemeral=True)
+            return
+
         if not player:
             await interaction.followup.send(
                 '❌ Jogador **' + nick + '** não encontrado no servidor Americas.\n'
@@ -207,6 +235,14 @@ class AlbionRegister(commands.Cog):
 
         player = await asyncio.get_event_loop().run_in_executor(
             None, _search_player, nick)
+
+        if player is None:
+            await interaction.followup.send(
+                '⚠️ A **API do Albion** não está respondendo agora — não deu pra '
+                'confirmar **' + nick + '**.\n'
+                '> Não é o nick. Tente de novo em alguns minutos.',
+                ephemeral=True)
+            return
 
         if not player:
             await interaction.followup.send(

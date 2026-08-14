@@ -28,6 +28,40 @@ def get_ticket_category(guild: discord.Guild, ticket_type: str) -> discord.Categ
     return None
  
  
+# O Discord recusa a partir de 50 canais numa categoria, e o erro chega como
+# "400 Invalid Form Body" — igualzinho a qualquer outro problema de forma, sem
+# dizer que é lotação. Em produção isso apareceu como
+# "Maximum number of channels in category reached (50)".
+MAX_POR_CATEGORIA = 50
+
+
+async def categoria_com_espaco(guild, categoria, nome_base):
+    """A categoria pedida, ou uma continuação dela se estiver lotada.
+
+    Sem isto, arquivar ticket parava de funcionar do dia pra noite — no 51º.
+    E parava do pior jeito possível: o `edit()` estourava, caía no except, e o
+    except APAGAVA o canal (ver o comentário lá embaixo).
+
+    Devolve None se nem as continuações couberem. Quem chama trata — e nunca
+    apagando nada.
+    """
+    if categoria is None or len(categoria.channels) < MAX_POR_CATEGORIA:
+        return categoria
+    for n in range(2, 12):
+        nome = f'{nome_base} {n}'
+        c = discord.utils.get(guild.categories, name=nome)
+        if c is None:
+            print(f'[tickets] "{categoria.name}" lotada — criando "{nome}"', flush=True)
+            try:
+                return await guild.create_category(nome)
+            except Exception as e:
+                print(f'[tickets] nao consegui criar "{nome}": {e!r}', flush=True)
+                return None
+        if len(c.channels) < MAX_POR_CATEGORIA:
+            return c
+    return None
+
+
 class ReopenTicketView(LoggedView):
     """Substitui o botao Fechar depois que o ticket e' arquivado.
 
@@ -70,8 +104,15 @@ class ReopenTicketView(LoggedView):
             categoria = (get_ticket_category(guild, tipo) if tipo else None) \
                 or interaction.channel.category
 
+            # A categoria de tickets ABERTOS também bate os 50 — foi o
+            # "Maximum number of channels in category reached" que apareceu no
+            # log em 13/08 justamente ao reabrir. Sem espaço, destrava o canal
+            # onde ele está: a permissão é o que importa pra pessoa escrever de
+            # novo; a categoria é organização.
+            com_espaco = await categoria_com_espaco(
+                guild, categoria, categoria.name if categoria else 'Tickets')
             await interaction.channel.edit(
-                category=categoria,
+                category=com_espaco or interaction.channel.category,
                 overwrites=overwrites,
                 name=interaction.channel.name.replace('✅│', '', 1),
             )
@@ -164,15 +205,36 @@ class CloseTicketView(LoggedView):
                         send_messages=False
                     )
  
+            # Se a categoria de arquivo estiver nos 50, usa a continuação.
+            category = await categoria_com_espaco(guild, category, archive_name)
+
+            # Só prefixa o ✅ uma vez: arquivar → reabrir → arquivar empilhava
+            # "✅│✅│…" e o nome de canal tem teto de 100 caracteres no Discord.
+            nome_atual = interaction.channel.name
+            novo_nome = nome_atual if nome_atual.startswith('✅') else f'✅│{nome_atual}'
+
             await interaction.channel.edit(
                 category=category,
                 overwrites=overwrites,
-                name=f'✅│{interaction.channel.name}'
+                name=novo_nome[:100]
             )
         except Exception as e:
-            print(f'[tickets] Erro ao arquivar ticket: {e}')
+            # NUNCA apagar. Antes este except fazia `interaction.channel.delete()`,
+            # e foi o que aconteceu 6 vezes em 13-14/08: a categoria de arquivo
+            # bateu os 50 canais do Discord, o edit() estourou com 400, e o
+            # histórico do ticket foi DESTRUÍDO. A pessoa via "Movendo para o
+            # arquivo..." e o canal sumia; o único rastro era esta linha de log.
+            #
+            # Canal aberto no lugar errado é um incômodo. Canal apagado é perda
+            # de dado que ninguém pede de volta porque ninguém sabe que existiu.
+            print(f'[tickets] falha ao arquivar canal {interaction.channel.id}: {e!r}',
+                  flush=True)
             try:
-                await interaction.channel.delete()
+                await interaction.followup.send(
+                    '⚠️ O ticket foi marcado como **fechado**, mas não consegui movê-lo '
+                    'para o arquivo — o canal continua aqui, com o histórico intacto.\n'
+                    'Avise a liderança: pode ser que as categorias de arquivo estejam '
+                    'lotadas (o Discord permite 50 canais por categoria).')
             except Exception:
                 pass
  

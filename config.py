@@ -17,6 +17,34 @@ import discord
 GUILD_ID = int(os.getenv('GUILD_ID')) if os.getenv('GUILD_ID', '').strip().isdigit() else None
 
 
+# ── Como falamos com a API do Albion ──────────────────────────────────────────
+# O valor estava repetido em 3 arquivos; centralizado aqui só pra não divergir.
+# Identificar o cliente com um endereço de contato é o que se espera de quem
+# consome API pública.
+#
+# NÃO é isto que resolve o timeout. Medido em 16/08/2026, alternando os dois
+# User-Agents na mesma máquina, 4 voltas cada: mediana de 0,42s para AMBOS. A
+# hipótese de que a palavra "bot" caía numa fila lenta do Cloudflare foi
+# TESTADA E DESCARTADA.
+ALBION_USER_AGENT = 'XnoMercy/2.0 (+https://xnomercy.com)'
+
+# O problema real é de ONDE a chamada sai, e isso está medido:
+#
+#     do PC do Oseias      ->  HTTP 200 em 0,42s
+#     do Railway           ->  ReadTimeout, no mesmo minuto, na mesma URL
+#
+# (log de 16/08: albion_register 13:13 e 15:58, auto_purge 14:05.) A API fica
+# atrás de Cloudflare, que trata tráfego de datacenter diferente de conexão
+# residencial. O price_updater não sofre disso porque fala com outro serviço
+# (albion-online-data.com), que responde normalmente do Railway.
+#
+# 40s em vez de 20 porque a resposta pode estar só LENTA, não bloqueada — e
+# esperar mais é barato: todo comando que chama isto já deferiu, então tem 15
+# minutos de janela. Se for bloqueio de verdade, nenhum timeout resolve, e a
+# saída é buscar por outro caminho (ver PENDENCIAS).
+ALBION_TIMEOUT = 40
+
+
 def get_home_guild(bot):
     """Servidor principal da guild. Usa GUILD_ID se configurado (seguro); sem
     isso, cai no fallback antigo por nome (mantido só por compatibilidade —

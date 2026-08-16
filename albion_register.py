@@ -14,6 +14,7 @@ from discord import app_commands
 import requests
 import asyncio
 from typing import Optional
+import config
 import database as db
 import permissions
 
@@ -58,7 +59,8 @@ def _search_player(nick):
     for term in variations:
         try:
             url = ALBION_API + '/search?q=' + requests.utils.quote(term)
-            r = requests.get(url, timeout=20, headers={'User-Agent': 'XnoMercy-Bot/2.0'})
+            r = requests.get(url, timeout=config.ALBION_TIMEOUT,
+                             headers={'User-Agent': config.ALBION_USER_AGENT})
             if not r.ok:
                 print('[albion_register] HTTP ' + str(r.status_code) + ' (termo: ' + term + ')')
                 continue

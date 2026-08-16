@@ -63,14 +63,22 @@ class AutoPurgeCog(commands.Cog):
         return config.get_home_guild(self.bot)
 
     def _buscar(self, url, timeout, rotulo, tentativas=3):
-        """GET com repetição. A API do Albion dá timeout com frequência a partir
-        do Railway (do meu PC a mesma chamada volta em 0,9s), provavelmente por
-        vir de datacenter. Uma tentativa só fazia o ciclo inteiro desistir."""
+        """GET com repetição.
+
+        A API do Albion dá timeout com frequência a partir do Railway, e isso foi
+        CONFIRMADO por medição em 16/08/2026: do PC do Oseias a mesma URL volta em
+        0,42s enquanto o Railway registra ReadTimeout no mesmo minuto. É a origem
+        da chamada que pesa (datacenter x residencial), não o User-Agent — essa
+        hipótese foi testada e descartada, ver config.ALBION_USER_AGENT.
+
+        A repetição não conserta bloqueio por origem, mas cobre oscilação normal
+        de API pública, e uma tentativa só fazia o ciclo inteiro desistir.
+        """
         ultimo = None
         for n in range(1, tentativas + 1):
             try:
                 r = requests.get(url, timeout=timeout,
-                                 headers={'User-Agent': 'XnoMercy-Bot/2.0'})
+                                 headers={'User-Agent': config.ALBION_USER_AGENT})
                 if r.ok:
                     return r.json()
                 ultimo = f'HTTP {r.status_code}'
@@ -92,7 +100,7 @@ class AutoPurgeCog(commands.Cog):
         if salvo:
             return salvo
 
-        dados = self._buscar(ALBION_API + '/search?q=' + GUILD_NAME, 15, 'busca da guild')
+        dados = self._buscar(ALBION_API + '/search?q=' + GUILD_NAME, config.ALBION_TIMEOUT, 'busca da guild')
         if not dados:
             return None
         for g in dados.get('guilds', []):
@@ -107,7 +115,7 @@ class AutoPurgeCog(commands.Cog):
         return None
 
     def _get_guild_members_albion(self, guild_id):
-        membros = self._buscar(f'{ALBION_API}/guilds/{guild_id}/members', 20,
+        membros = self._buscar(f'{ALBION_API}/guilds/{guild_id}/members', config.ALBION_TIMEOUT,
                                'lista de membros')
         if membros is None:
             return None

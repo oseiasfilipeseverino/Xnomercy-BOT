@@ -17,6 +17,7 @@ from typing import Optional
 import config
 import database as db
 import permissions
+from discord_utils import cortar, enviar_embed, LIM_CAMPO, LIM_NOME_CAMPO
 
 # ── Configuração ───────────────────────────────────────────────────────────────
 ALBION_API      = 'https://gameinfo.albiononline.com/api/gameinfo'
@@ -24,6 +25,75 @@ GUILD_NAME      = 'XnoMercy'
 ROLE_MEMBRO     = 'Membro'
 ROLE_FORASTEIRO = 'Forasteiro'
 NICK_PREFIX     = '[NM] '          # Prefixo do nick no Discord
+
+
+# ── Diagnóstico da API ─────────────────────────────────────────────────────────
+# Existe porque o mesmo pedido, no mesmo minuto, responde em 0,42s do PC de casa
+# e dá ReadTimeout do Railway. Testar da máquina de casa não separa as hipóteses:
+# é justamente onde funciona. E o Oseias trouxe o dado que derruba a explicação
+# fácil — outros bots da comunidade funcionam, então bloqueio geral de datacenter
+# não explica.
+#
+# Isto NÃO tenta consertar nada. Só faz os pedidos de dentro do Railway e conta o
+# que recebeu de verdade: tempo, status e os cabeçalhos do Cloudflare. São eles
+# que separam "bloqueado" de "desafiado" de "só lento" — o que eu venho chutando.
+CABECALHOS_QUE_IMPORTAM = ('cf-ray', 'cf-mitigated', 'cf-cache-status', 'server',
+                           'retry-after', 'x-ratelimit-remaining')
+
+
+def _sondar(url, cabecalhos, rotulo, timeout=25):
+    """Um pedido, e o que ele devolveu. Nunca levanta."""
+    import time as _t
+    t0 = _t.perf_counter()
+    try:
+        r = requests.get(url, headers=cabecalhos, timeout=timeout)
+        dt = _t.perf_counter() - t0
+        achados = {k: v for k, v in r.headers.items()
+                   if k.lower() in CABECALHOS_QUE_IMPORTAM}
+        corpo = ''
+        if not r.ok:
+            corpo = f' · corpo: {r.text[:80]!r}'
+        return (f'**{rotulo}**\n`HTTP {r.status_code}` em `{dt:.2f}s` · '
+                f'{len(r.content)} bytes{corpo}\n' +
+                ('\n'.join(f'`{k}: {v[:60]}`' for k, v in sorted(achados.items()))
+                 or '`(sem cabeçalho de Cloudflare)`'))
+    except Exception as e:
+        dt = _t.perf_counter() - t0
+        return (f'**{rotulo}**\n`{type(e).__name__}` depois de `{dt:.1f}s`\n'
+                f'`{str(e)[:110]}`')
+
+
+def _diagnostico_completo():
+    """Roda todas as sondagens. SÍNCRONO — chamar via run_in_executor."""
+    alvo = ALBION_API + '/search?q=Criminouso'
+    navegador = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                 '(KHTML, like Gecko) Chrome/126.0 Safari/537.36')
+    return [
+        _sondar(alvo, {'User-Agent': config.ALBION_USER_AGENT}, 'Como o bot faz hoje'),
+        _sondar(alvo, {}, 'Sem User-Agent'),
+        _sondar(alvo, {'User-Agent': navegador, 'Accept': 'application/json'},
+                'User-Agent de navegador'),
+        # Outro caminho no MESMO host: separa "a rota /search está ruim" de
+        # "o host inteiro nos recusa".
+        _sondar(ALBION_API + '/events?limit=1',
+                {'User-Agent': config.ALBION_USER_AGENT}, 'Outra rota, mesmo host'),
+        # Controle: este serviço responde do Railway (o price_updater usa e tem
+        # 0 erros). Se ele também falhar, o problema é rede, não a Albion.
+        _sondar('https://west.albion-online-data.com/api/v2/stats/prices/T4_BAG',
+                {'User-Agent': config.ALBION_USER_AGENT},
+                'Controle: albion-online-data'),
+
+        # O MESMO pedido do item 1, agora no fim. Medido daqui em 17/08, na
+        # ordem: 1º timeout em 25s, 2º 12,2s, 3º 0,37s, 4º 0,68s — inclusive com
+        # o mesmo User-Agent que falhou no 1º. Isso tem cara de IP "frio" sendo
+        # verificado pelo Cloudflare e liberado depois, não de bloqueio.
+        #
+        # Se esta repetição vier RÁPIDA e a primeira lenta, é aquecimento — e a
+        # solução é insistir, não trocar de rota. Se as duas falharem, é bloqueio
+        # de verdade e insistir não vai adiantar nunca.
+        _sondar(alvo, {'User-Agent': config.ALBION_USER_AGENT},
+                'REPETINDO o item 1 (aquecimento?)'),
+    ]
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -283,6 +353,44 @@ class AlbionRegister(commands.Cog):
             '> Cargo **' + ROLE_MEMBRO + '** atribuído\n'
             '> Nick Discord: **' + NICK_PREFIX + player_name + '**',
             ephemeral=False)
+
+
+    # ── /diag_albion ───────────────────────────────────────────────────────────
+    @app_commands.command(
+        name='diag_albion',
+        description='[LÍDER] Testa a API do Albion DAQUI e mostra o que ela responde.')
+    async def diag_albion(self, interaction: discord.Interaction):
+        if not permissions.is_financial(interaction.user):
+            await interaction.response.send_message(
+                '❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            return
+
+        # São até 5 pedidos com timeout de 25s cada. Deferir dá 15 minutos; sem
+        # isso o Discord desiste em 3s. E run_in_executor porque requests é
+        # síncrono — chamado direto aqui, travaria o bot inteiro.
+        await interaction.response.defer(ephemeral=True)
+        blocos = await asyncio.get_event_loop().run_in_executor(
+            None, _diagnostico_completo)
+
+        embed = discord.Embed(
+            title='🔎 API do Albion, vista de dentro do bot',
+            description=(
+                'O mesmo pedido responde em ~0,4s do PC de casa. Aqui é o que o '
+                'bot recebe **do servidor onde ele roda**.\n\n'
+                'Os cabeçalhos do Cloudflare são o que separa *bloqueado* de '
+                '*desafiado* de *só lento*.'),
+            color=discord.Color.blurple())
+        for b in blocos:
+            titulo, _, corpo = b.partition('\n')
+            embed.add_field(name=cortar(titulo.strip('*'), LIM_NOME_CAMPO),
+                            value=cortar(corpo, LIM_CAMPO), inline=False)
+        embed.set_footer(text='Só leitura — não altera nada.')
+
+        # Primeiro uso do enviar_embed, que estava pronto e sem chamador: se o
+        # relatório passar dos tetos, ele manda uma versão enxuta em vez de tomar
+        # 400 e não chegar nada.
+        await enviar_embed(interaction.followup, embed, rotulo='diag_albion',
+                           ephemeral=True)
 
 
 async def setup(bot):

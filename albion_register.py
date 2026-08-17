@@ -13,6 +13,7 @@ from discord.ext import commands
 from discord import app_commands
 import requests
 import asyncio
+import time
 from typing import Optional
 import config
 import database as db
@@ -111,40 +112,54 @@ def _search_player(nick):
 
     Antes devolvia None nos dois últimos casos, e quem chamava dizia "Jogador X
     não encontrado no servidor Americas" — uma afirmação sobre o mundo do jogo
-    feita quando, na verdade, ninguém tinha conseguido olhar. Em 08/08/2026 o
-    endpoint do Americas ficou fora e todo mundo que tentou se registrar ouviu
-    que o próprio personagem não existia.
+    feita quando, na verdade, ninguém tinha conseguido olhar.
 
-    A API do Americas cair não é hipótese remota: é o mesmo endpoint que já
-    tinha derrubado o auto-purge em silêncio (ver o comentário do
-    run_in_executor lá).
+    Sobre INSISTIR, que é o que esta função faz agora e antes não fazia:
+
+    Eu tinha posto um `break` no timeout, com o raciocínio "a API está fora, as
+    outras tentativas vão estourar igual". Esse raciocínio veio de uma teoria
+    errada. O /diag_albion, rodando DE DENTRO do Railway em 17/08, respondeu 200
+    nas seis sondagens — a mais rápida em 0,02s. A API não está bloqueada nem
+    fora: ela tem períodos lentos, e os timeouts do log de 16/08 são de quando o
+    teto era 20s.
+
+    Contra lentidão intermitente, desistir na primeira é a pior escolha
+    possível. Agora repete com espera crescente, e só desiste depois de três.
     """
+    def _buscar(termo):
+        """(players, respondeu). respondeu=False significa 'não deu pra olhar'."""
+        url = ALBION_API + '/search?q=' + requests.utils.quote(termo)
+        for tentativa in (1, 2, 3):
+            try:
+                r = requests.get(url, timeout=config.ALBION_TIMEOUT,
+                                 headers={'User-Agent': config.ALBION_USER_AGENT})
+                if r.ok:
+                    return r.json().get('players', []), True
+                print(f'[albion_register] HTTP {r.status_code} ({termo}, '
+                      f'tentativa {tentativa})')
+            except requests.exceptions.Timeout:
+                print(f'[albion_register] timeout ({termo}, tentativa {tentativa}'
+                      f'/3)')
+            except Exception as e:
+                print(f'[albion_register] erro ({termo}): {e!r}')
+                return [], False       # erro que não é lentidão: repetir não ajuda
+            if tentativa < 3:
+                time.sleep(2 * tentativa)      # 2s, 4s
+        return [], False
+
     variations = []
     for v in [nick, nick.capitalize(), nick.lower(), nick.title(), nick.upper()]:
         if v not in variations:
             variations.append(v)
 
-    respondeu = False        # a API chegou a dar uma resposta útil alguma vez?
-
+    respondeu = False
     for term in variations:
-        try:
-            url = ALBION_API + '/search?q=' + requests.utils.quote(term)
-            r = requests.get(url, timeout=config.ALBION_TIMEOUT,
-                             headers={'User-Agent': config.ALBION_USER_AGENT})
-            if not r.ok:
-                print('[albion_register] HTTP ' + str(r.status_code) + ' (termo: ' + term + ')')
-                continue
-            players = r.json().get('players', [])
-        except requests.exceptions.Timeout:
-            # Timeout aqui significa API fora, não nick errado — as outras
-            # variações vão estourar igual. Insistir só faz a pessoa esperar
-            # 20s a mais por variação (eram até 100s) pra ouvir a mesma coisa.
-            print('[albion_register] Timeout na API (termo: ' + term + ') — desistindo')
+        players, ok = _buscar(term)
+        if not ok:
+            # A API não respondeu nem em 3 tentativas. As variações de
+            # capitalização só ajudam quando ela RESPONDE — insistir nelas aqui
+            # faria a pessoa esperar minutos pela mesma resposta.
             break
-        except Exception as e:
-            print('[albion_register] Erro API: ' + str(e))
-            continue
-
         respondeu = True
         for p in players:
             if p.get('Name', '').lower() == nick.lower():

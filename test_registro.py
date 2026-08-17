@@ -76,19 +76,29 @@ print('\n-- a API devolve erro HTTP')
 erro = com_api(lambda *a, **k: RespostaFalsa(ok=False, status=503))
 checar(erro is None, '503 tambem e "nao consegui", nao "nao existe"')
 
-print('\n-- timeout nao insiste nas 5 variacoes')
+print('\n-- quantas tentativas quando a API nao responde')
+# Esta checagem ja exigiu o CONTRARIO: "para na 1a tentativa". Aquilo veio da
+# minha teoria de que a API estava fora, e a teoria era errada — o /diag_albion,
+# rodando de dentro do Railway em 17/08, respondeu 200 nas seis sondagens, a
+# mais rapida em 0,02s. A API tem periodo lento, nao queda.
+#
+# Contra lentidao intermitente, desistir na primeira e' a pior escolha. Mas
+# tambem nao pode virar 5 variacoes x 3 tentativas = 15 pedidos, com a pessoa
+# esperando minutos pela mesma resposta. O certo e' insistir no MESMO termo e
+# nao passar pras variacoes: elas so ajudam quando a API responde.
 chamadas = []
 
 
 def _conta_timeout(*a, **k):
     chamadas.append(a)
-    raise _requests.exceptions.Timeout('read timeout=20')
+    raise _requests.exceptions.Timeout('read timeout')
 
 
 com_api(_conta_timeout)
-checar(len(chamadas) == 1,
-       f'para na 1a tentativa quando a API cai (foram {len(chamadas)}; '
-       f'com 5 a pessoa esperaria 100s pra ouvir o mesmo)')
+checar(len(chamadas) == 3,
+       f'insiste 3x no mesmo termo (foram {len(chamadas)})')
+checar(len(chamadas) < 5,
+       'e NAO percorre as 5 variacoes de capitalizacao com a API muda')
 
 # ── Os dois comandos precisam TRATAR o None separado ──────────────────────────
 print('\n-- os comandos distinguem os tres estados')

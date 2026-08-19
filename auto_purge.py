@@ -50,6 +50,47 @@ MIN_MEMBERS_SANITY = 5
 # Se mais de 30% dos membros checados sumirem de uma vez, tambem e' suspeito.
 MAX_PURGE_RATIO = 0.30
 
+# Quao parecido um apelido do Discord precisa ser de um nome da guild pra ser
+# tratado como "e a mesma pessoa, so escreveu diferente". Calibrado contra os
+# 171 membros reais em 19/08/2026: neste valor os quatro casos do log
+# (BengaziN/BangziN, JhonHorse/JhonHoorse, Carlinhodmg/CarlinhoDmg,
+# Carabito/Carabit6) sao reconhecidos, e nenhum nome de quem saiu de verdade e
+# aproximado por engano.
+SEMELHANCA_MINIMA = 0.78
+
+
+def _parecido_na_guild(candidatos, membros_albion, nomes_originais):
+    """Alguem na guild tem nome PARECIDO com esse apelido? Devolve o nome ou None.
+
+    Este e o coracao da correcao de 19/08/2026. O bot comparava o apelido do
+    Discord com a lista da guild e, nao achando, concluia "saiu da guild". Mas
+    "nao achei" tem DUAS causas que parecem identicas:
+
+        1. a pessoa saiu mesmo
+        2. o apelido do Discord nao e' igual ao nome no Albion
+
+    A causa 2 e' comum e PERMANENTE — e por ser permanente, o sistema de strikes
+    nao protege: a pessoa leva strike todo ciclo ate ser rebaixada. Foi o que
+    aconteceu, com os nomes no log provando:
+
+        Discord "BengaziN"   ->  Albion "BangziN"
+        Discord "JhonHorse"  ->  Albion "JhonHoorse"
+
+    Os dois estavam na guild o tempo todo (conferido: a API devolve os 171
+    membros e ambos estao la). Perderam o cargo por uma letra de diferenca.
+
+    O corte foi CALIBRADO contra a guild real (171 nomes da API), nao chutado:
+    0.78 acerta os quatro casos que o log registrou e nao aproxima ninguem que
+    saiu de verdade. Acima de 0.80 o BengaziN/BangziN escapa (semelhanca 0.80);
+    abaixo de 0.70 nao foi testado e nao vale arriscar.
+    """
+    import difflib
+    for c in candidatos:
+        perto = difflib.get_close_matches(c.lower(), membros_albion, n=1, cutoff=SEMELHANCA_MINIMA)
+        if perto:
+            return nomes_originais.get(perto[0], perto[0])
+    return None
+
 
 class AutoPurgeCog(commands.Cog):
     def __init__(self, bot):
@@ -119,7 +160,11 @@ class AutoPurgeCog(commands.Cog):
                                'lista de membros')
         if membros is None:
             return None
-        return {m.get('Name', '').lower() for m in membros if m.get('Name')}
+        # {minusculo: nome como o jogo escreve}. O minusculo e' pra comparar; o
+        # original e' pro aviso poder dizer "provavelmente e' BangziN" em vez de
+        # jogar "bangzin" na cara de quem vai arrumar o apelido.
+        return {m.get('Name', '').lower(): m.get('Name', '')
+                for m in membros if m.get('Name')}
 
     def _extract_albion_nick(self, discord_member):
         """Extrai o nick do Albion de um apelido "[NM] Nome". Devolve uma tupla
@@ -210,11 +255,15 @@ class AutoPurgeCog(commands.Cog):
                 await self._avisar_parado('nao consegui descobrir o id da guild')
                 return
 
-            albion_members = await loop.run_in_executor(
+            # {minusculo: nome original}. O `in` continua funcionando igual
+            # (dict testa a chave), e o original serve pro aviso de apelido
+            # divergente dizer o nome como o jogo escreve.
+            nomes_albion = await loop.run_in_executor(
                 None, self._get_guild_members_albion, guild_id)
-            if albion_members is None:
+            if nomes_albion is None:
                 await self._avisar_parado('a API do Albion nao respondeu')
                 return
+            albion_members = nomes_albion
 
             self._falhas = 0
 
@@ -244,6 +293,7 @@ class AutoPurgeCog(commands.Cog):
             to_purge = []
             checked = 0
             nao_verificaveis = []
+            apelidos_divergentes = []   # apelido != nome no Albion
 
             for member in discord_guild.members:
                 if member.bot:
@@ -267,6 +317,22 @@ class AutoPurgeCog(commands.Cog):
                 # pessoa saiu da guild. Só avisa pra liderança arrumar o apelido.
                 if not confiavel:
                     nao_verificaveis.append((member, candidatos[0]))
+                    continue
+
+                # Tem alguem na guild com nome PARECIDO? Entao quase certamente e'
+                # o apelido do Discord que esta diferente do nome no Albion, nao
+                # saida da guild. Rebaixar aqui e' o erro que vinha acontecendo:
+                #
+                #   Discord "BengaziN"   ->  Albion "BangziN"
+                #   Discord "JhonHorse"  ->  Albion "JhonHoorse"
+                #
+                # Os dois estavam na guild e perderam o cargo por uma letra. E o
+                # sistema de strikes nao ajudava: divergencia de apelido e'
+                # PERMANENTE, entao a pessoa levava strike todo ciclo ate cair.
+                parecido = _parecido_na_guild(candidatos, albion_members, nomes_albion)
+                if parecido:
+                    await database.run_db(database.purge_strike_clear, str(member.id))
+                    apelidos_divergentes.append((member, candidatos[0], parecido))
                     continue
 
                 # Confirmacao em multiplas verificacoes: a API do Albion as vezes
@@ -322,6 +388,35 @@ class AutoPurgeCog(commands.Cog):
                                 allowed_mentions=SEM_MENCOES)
                 except Exception:
                     pass
+
+            # Apelido do Discord diferente do nome no Albion. NAO e' saida da
+            # guild — a pessoa esta la, so escreveu o nome diferente. Antes isso
+            # virava rebaixamento, e como a divergencia e' permanente, a pessoa
+            # caia todo ciclo. Agora vira uma lista de "arrume o apelido", com o
+            # nome certo do lado pra ninguem precisar procurar.
+            if apelidos_divergentes:
+                for m, escrito, real in apelidos_divergentes:
+                    print(f'[auto_purge] apelido divergente: "{escrito}" no Discord '
+                          f'x "{real}" no Albion — cargo MANTIDO')
+                try:
+                    ch_id = await database.run_db(database.get_config, 'channel_logs')
+                    ch = discord_guild.get_channel(int(ch_id)) if ch_id else None
+                    if ch:
+                        quebra = chr(10)
+                        linhas_aviso = quebra.join(
+                            f'• {m.mention} — apelido diz **{escrito}**, na guild e **{real}**'
+                            for m, escrito, real in apelidos_divergentes[:15])
+                        sobra = len(apelidos_divergentes) - 15
+                        rodape = (f'{quebra}_e mais {sobra}_' if sobra > 0 else '')
+                        await ch.send(
+                            'ℹ️ **Apelidos pra arrumar** — estas pessoas ESTAO na '
+                            'guild, mas o apelido do Discord nao bate com o nome do '
+                            'Albion. **Nenhum cargo foi alterado.**'
+                            + quebra + quebra + linhas_aviso + rodape + quebra + quebra
+                            + 'Ajustando o apelido, o auto-purge volta a conferir sozinho.',
+                            allowed_mentions=SEM_MENCOES)
+                except Exception as e:
+                    print(f'[auto_purge] nao consegui avisar sobre apelidos: {e!r}')
 
             changed = []
 

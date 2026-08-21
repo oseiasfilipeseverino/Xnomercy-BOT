@@ -363,6 +363,7 @@ def get_saldos_divergentes():
     split, e o que furou não passou por lá. Uma conta que não fecha é a única
     checagem que pega buraco que ninguém previu — inclusive os que ainda não
     existem."""
+    tesouraria = contas_tesouraria()
     conn = get_connection()
     try:
         c = conn.cursor()
@@ -375,13 +376,44 @@ def get_saldos_divergentes():
             GROUP BY p.discord_id, p.username, p.balance
             HAVING ABS(p.balance - COALESCE(SUM(t.amount), 0)) >= 1
             ORDER BY ABS(p.balance - COALESCE(SUM(t.amount), 0)) DESC''')
+        # Filtra em Python, nao no SQL: a lista de tesouraria e' minuscula e o
+        # filtro no HAVING obrigaria a montar placeholders pra uma lista que
+        # pode estar vazia — caso em que `NOT IN ()` e' erro de sintaxe.
         return [(r[0], r[1], float(r[2]), float(r[3]), float(r[4]))
-                for r in c.fetchall()]
+                for r in c.fetchall() if str(r[0]) not in tesouraria]
     except Exception as e:
         print(f'[get_saldos_divergentes] {e!r}')
         return None
     finally:
         release(conn)
+
+
+# Contas que divergem POR NATUREZA e nao devem ser cobradas pela conciliacao.
+# O caso concreto e a conta do banco da guild: os pagamentos saindo dela sao
+# lancados, mas as entradas vem de loot depositado dentro do jogo, fora do
+# sistema. Ela nunca vai fechar enquanto for alimentada assim, e um aviso que
+# sempre toca e igual a um aviso desligado — foi por isso que a linha de base
+# de "divergencias conhecidas" existe, e a conta do banco entupia ela sozinha
+# com 804 milhoes dos 811 do total.
+#
+# Marcar como tesouraria NAO esconde o numero: ela sai da conciliacao diaria,
+# nao do banco. Quem quiser ver continua vendo pelo extrato dela.
+CHAVE_TESOURARIA = 'contas_tesouraria'
+
+
+def contas_tesouraria() -> set:
+    """IDs das contas fora da conciliacao. Conjunto vazio se nao houver ou se
+    a leitura falhar — errar pra 'cobra de todo mundo' e' o lado seguro: no pior
+    caso aparece um aviso a mais, nunca um a menos."""
+    import json
+    bruto = get_config(CHAVE_TESOURARIA)
+    if not bruto:
+        return set()
+    try:
+        return {str(x) for x in json.loads(bruto)}
+    except (ValueError, TypeError):
+        print('[contas_tesouraria] lista ilegivel, tratando como vazia')
+        return set()
 
 
 def get_permission_roles(permission):

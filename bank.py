@@ -10,7 +10,8 @@ from discord.ext import commands
 
 import database
 from permissions import is_financial, is_member
-from discord_utils import log_channel, add_lista, cortar
+from discord_utils import (log_channel, add_lista, cortar, enviar_embed,
+                           LIM_DESCRICAO)
 
 
 def fmt(v: float) -> str:
@@ -437,9 +438,11 @@ class BankCog(commands.Cog):
         # varios de uma vez. Rodando no laço de eventos, uma chamada com 20
         # jogadores travava o bot inteiro por segundos.
         for m in members:
-            await database.run_db(database.update_player_balance, str(m.id), m.display_name, valor)
-            await database.run_db(database.add_transaction, str(m.id), valor, 'bonus', motivo,
-                                  interaction.user.display_name)
+            # extrato= grava a linha do /extrato na MESMA transacao do saldo. Eram
+            # duas chamadas separadas, cada uma com seu commit: se a segunda
+            # falhasse, a prata mudava e o extrato nao registrava nada.
+            await database.run_db(database.update_player_balance, str(m.id), m.display_name, valor,
+                                  ('bonus', motivo, interaction.user.display_name))
             ok_saldo = await database.run_db(database.get_player_balance_display, str(m.id))
             results.append((m, ok_saldo[1]))
 
@@ -451,13 +454,21 @@ class BankCog(commands.Cog):
             embed.add_field(name='💎 Saldo Atual', value=fmt(novo),  inline=True)
         else:
             embed = discord.Embed(title=f'➕ Saldo Adicionado ({len(results)} players)!', color=discord.Color.green())
-            embed.description = '\n'.join(
-                f'**{m.display_name}** — {fmt(valor)} (saldo atual: {fmt(novo)})' for m, novo in results)
+            # cortar(): a descricao tambem cresce com o numero de jogadores e
+            # estoura em 4096 pelo mesmo caminho dos campos acima.
+            embed.description = cortar('\n'.join(
+                f'**{m.display_name}** — {fmt(valor)} (saldo atual: {fmt(novo)})'
+                for m, novo in results), LIM_DESCRICAO)
+        # Lista de tamanho variavel num campo so estoura os 1024 do Discord, que
+        # recusa a mensagem INTEIRA com 400. E aqui a prata JA foi movimentada no
+        # laco acima — o lider veria erro, rodaria de novo, e pagaria duas vezes.
+        # E' o mesmo defeito do `motivo` longo, ja corrigido cortando na entrada;
+        # estes campos ficaram de fora daquela passada.
         embed.add_field(name='📝 Motivo', value=motivo, inline=False)
         if invalid:
-            embed.add_field(name='⚠️ Não encontrados no servidor', value=', '.join(invalid), inline=False)
+            add_lista(embed, '⚠️ Não encontrados no servidor', invalid)
         embed.set_footer(text=f'Por {interaction.user.display_name}')
-        await interaction.followup.send(embed=embed)
+        await enviar_embed(interaction.followup, embed, rotulo='adicionar_saldo')
 
         nomes = ', '.join(m.display_name for m, _ in results)
         await _log(interaction.guild,
@@ -511,13 +522,12 @@ class BankCog(commands.Cog):
             # Débito atômico (checa saldo e debita na mesma query) — ler o saldo e
             # só depois debitar deixava dois Líderes pagarem a mesma pessoa ao
             # mesmo tempo e o saldo ficar NEGATIVO.
-            novo = await database.run_db(database.debit_player_balance, str(m.id), m.display_name, valor)
+            novo = await database.run_db(database.debit_player_balance, str(m.id), m.display_name, valor,
+                                         ('payment', motivo, interaction.user.display_name))
             if novo is None:
                 saldo = await database.run_db(fmt_saldo, str(m.id))
                 insufficient.append(f'{m.display_name} (tem só {saldo})')
                 continue
-            await database.run_db(database.add_transaction, str(m.id), -valor, 'payment', motivo,
-                                  interaction.user.display_name)
             results.append((m, novo))
 
         if not results:
@@ -533,15 +543,25 @@ class BankCog(commands.Cog):
             embed.add_field(name='💎 Saldo Atual', value=fmt(novo),  inline=True)
         else:
             embed = discord.Embed(title=f'✅ Pagamento Realizado ({len(results)} players)!', color=discord.Color.green())
-            embed.description = '\n'.join(
-                f'**{m.display_name}** — {fmt(valor)} (saldo atual: {fmt(novo)})' for m, novo in results)
+            # cortar(): a descricao tambem cresce com o numero de jogadores e
+            # estoura em 4096 pelo mesmo caminho dos campos acima.
+            embed.description = cortar('\n'.join(
+                f'**{m.display_name}** — {fmt(valor)} (saldo atual: {fmt(novo)})'
+                for m, novo in results), LIM_DESCRICAO)
+        # Lista de tamanho variavel num campo so estoura os 1024 do Discord, que
+        # recusa a mensagem INTEIRA com 400. E aqui a prata JA foi movimentada no
+        # laco acima — o lider veria erro, rodaria de novo, e pagaria duas vezes.
+        # E' o mesmo defeito do `motivo` longo, ja corrigido cortando na entrada;
+        # estes campos ficaram de fora daquela passada.
         embed.add_field(name='📝 Motivo', value=motivo, inline=False)
         if invalid:
-            embed.add_field(name='⚠️ Não encontrados no servidor', value=', '.join(invalid), inline=False)
+            add_lista(embed, '⚠️ Não encontrados no servidor', invalid)
         if insufficient:
-            embed.add_field(name='⚠️ Saldo insuficiente (pulado)', value='\n'.join(insufficient), inline=False)
+            # O mais provavel dos tres: numa CTA de 30 pessoas cada linha e'
+            # "Fulano (tem so 12.500)" — uns 25 nomes ja estouram o campo.
+            add_lista(embed, '⚠️ Saldo insuficiente (pulado)', insufficient)
         embed.set_footer(text=f'Por {interaction.user.display_name}')
-        await interaction.followup.send(embed=embed)
+        await enviar_embed(interaction.followup, embed, rotulo='pagar_saldo')
 
         nomes = ', '.join(m.display_name for m, _ in results)
         await _log(interaction.guild,
@@ -585,10 +605,9 @@ class BankCog(commands.Cog):
             # Zera e devolve o saldo antigo na mesma query — ler e só depois zerar
             # deixava dois admins zerando junto registrarem DUAS transações do
             # mesmo valor, inflando o débito no extrato de auditoria.
-            old = await database.run_db(database.zero_player_balance, str(m.id), m.display_name)
-            if old:
-                await database.run_db(database.add_transaction, str(m.id), -old, 'withdrawal',
-                                      'Saldo zerado — pagamento efetuado', interaction.user.display_name)
+            old = await database.run_db(database.zero_player_balance, str(m.id), m.display_name,
+                                        ('withdrawal', 'Saldo zerado — pagamento efetuado',
+                                         interaction.user.display_name))
             results.append((m, old))
 
         if len(results) == 1:
@@ -600,11 +619,18 @@ class BankCog(commands.Cog):
             )
         else:
             embed = discord.Embed(title=f'✅ Saldo Zerado ({len(results)} players)', color=discord.Color.green())
-            embed.description = '\n'.join(f'**{m.display_name}** — {fmt(old)}' for m, old in results)
+            embed.description = cortar(
+                '\n'.join(f'**{m.display_name}** — {fmt(old)}' for m, old in results),
+                LIM_DESCRICAO)
+        # Lista de tamanho variavel num campo so estoura os 1024 do Discord, que
+        # recusa a mensagem INTEIRA com 400. E aqui a prata JA foi movimentada no
+        # laco acima — o lider veria erro, rodaria de novo, e pagaria duas vezes.
+        # E' o mesmo defeito do `motivo` longo, ja corrigido cortando na entrada;
+        # estes campos ficaram de fora daquela passada.
         if invalid:
-            embed.add_field(name='⚠️ Não encontrados no servidor', value=', '.join(invalid), inline=False)
+            add_lista(embed, '⚠️ Não encontrados no servidor', invalid)
         embed.set_footer(text=f'Por {interaction.user.display_name}')
-        await interaction.followup.send(embed=embed)
+        await enviar_embed(interaction.followup, embed, rotulo='zerar_saldo')
 
         nomes = ', '.join(f'{m.display_name} ({fmt(old)})' for m, old in results)
         await _log(interaction.guild,

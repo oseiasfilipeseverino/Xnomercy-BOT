@@ -532,7 +532,48 @@ def get_player_transactions(discord_id, limit=15):
     finally:
         release(conn)
 
-def update_player_balance(discord_id, username, amount):
+
+# ── Saldo + extrato na MESMA transacao ────────────────────────────────────────
+# Achado na revisao de 20/08/2026.
+#
+# Todo lugar que mexe em prata fazia isto:
+#
+#     update_player_balance(...)   -> abre conexao, UPDATE, COMMIT, devolve
+#     add_transaction(...)         -> abre OUTRA conexao, INSERT, COMMIT
+#
+# Duas transacoes independentes. Se a segunda falha — deadlock, pool esgotado,
+# conexao caida, tudo isso ja aconteceu aqui — a prata ja mudou de valor e o
+# extrato nao tem registro nenhum de por que. O saldo para de bater com a soma
+# das transacoes, e nao ha como descobrir depois qual dos dois esta certo.
+#
+# E' exatamente o formato das 12 divergencias que a auditoria do Oseias achou.
+#
+# O detalhe cruel: varias dessas funcoes ganharam, ao longo do mes, um comentario
+# explicando que sao atomicas — o zero_player_balance le e zera numa query so, o
+# debit_player_balance confere e debita numa query so. Isso e' verdade e nao
+# adianta aqui: protege contra dois lideres ao mesmo tempo, nao contra o extrato
+# ficar pra tras. Era a atomicidade certa no lugar errado.
+#
+# Agora o INSERT do extrato entra ANTES do commit, na mesma transacao. Se ele
+# falhar, o release() faz rollback e o saldo volta ao que era: ou as duas coisas
+# acontecem, ou nenhuma.
+
+def _inserir_extrato(c, discord_id, amount, extrato):
+    """INSERT do extrato usando o cursor de QUEM CHAMOU — de proposito.
+
+    Receber o cursor e' o que faz a coisa toda funcionar: a linha do extrato
+    entra na mesma transacao do UPDATE do saldo. Se esta funcao abrisse a
+    propria conexao, voltariamos ao problema que ela existe pra resolver.
+    """
+    tipo, descricao, autor = extrato
+    c.execute('INSERT INTO transactions (discord_id,amount,type,description,created_by) '
+              'VALUES (%s,%s,%s,%s,%s)',
+              (discord_id, amount, tipo, descricao, autor))
+
+
+def update_player_balance(discord_id, username, amount, extrato=None):
+    """Soma `amount` ao saldo. Com `extrato=(tipo, descricao, autor)`, grava a
+    linha do extrato na MESMA transacao (ver o bloco acima)."""
     ensure_player(discord_id, username)
     conn = get_connection()
     try:
@@ -540,11 +581,13 @@ def update_player_balance(discord_id, username, amount):
         c.execute('UPDATE players SET balance=balance+%s WHERE discord_id=%s', (amount, discord_id))
         if amount > 0:
             c.execute('UPDATE players SET total_earned=total_earned+%s WHERE discord_id=%s', (amount, discord_id))
+        if extrato:
+            _inserir_extrato(c, discord_id, amount, extrato)
         conn.commit()
     finally:
         release(conn)
 
-def debit_player_balance(discord_id, username, amount):
+def debit_player_balance(discord_id, username, amount, extrato=None):
     """Debita SÓ se houver saldo suficiente, tudo numa query atômica. Retorna o
     novo saldo, ou None se não tinha saldo (nada foi alterado).
 
@@ -559,6 +602,10 @@ def debit_player_balance(discord_id, username, amount):
         c.execute('UPDATE players SET balance=balance-%s WHERE discord_id=%s AND balance >= %s RETURNING balance',
                   (amount, discord_id, amount))
         row = c.fetchone()
+        # So grava extrato se debitou de verdade: sem linha atualizada, nao havia
+        # saldo e nada aconteceu.
+        if row and extrato:
+            _inserir_extrato(c, discord_id, -amount, extrato)
         conn.commit()
         return float(row[0]) if row else None
     finally:
@@ -611,7 +658,7 @@ def transfer_balance(from_id, from_name, to_id, to_name, amount, note=''):
     finally:
         release(conn)
 
-def zero_player_balance(discord_id, username):
+def zero_player_balance(discord_id, username, extrato=None):
     """Zera o saldo e devolve quanto tinha ANTES, numa query só. Sem isso, dois
     admins zerando ao mesmo tempo liam o mesmo saldo antigo e cada um registrava
     uma transação de -saldo, dobrando o débito no extrato (o saldo final ficava
@@ -627,8 +674,13 @@ def zero_player_balance(discord_id, username):
                   'WHERE p.discord_id=%s AND old.discord_id=p.discord_id RETURNING old.balance',
                   (discord_id,))
         row = c.fetchone()
+        antigo = float(row[0]) if row else 0.0
+        # So grava extrato se havia saldo: zerar quem ja estava em zero nao e'
+        # movimento nenhum e nao deve poluir o extrato.
+        if antigo > 0 and extrato:
+            _inserir_extrato(c, discord_id, -antigo, extrato)
         conn.commit()
-        return float(row[0]) if row else 0.0
+        return antigo
     finally:
         release(conn)
 

@@ -65,13 +65,13 @@ class ConfiscarView(LoggedView):
         # Zera e devolve o saldo antigo na mesma query (ver database.zero_player_balance):
         # ler e só depois zerar podia registrar a transação com um valor diferente do
         # que realmente saiu, se algo creditasse esse player nesse meio-tempo.
-        balance = await database.run_db(database.zero_player_balance, dep['discord_id'], dep['username'])
-        if balance > 0:
-            await database.run_db(database.add_transaction, 
-                dep['discord_id'], -balance, 'confiscation',
-                'Saldo confiscado — membro saiu do servidor',
-                interaction.user.display_name
-            )
+        # extrato= na mesma transacao. Este era o pior dos casos: se o
+        # add_transaction falhasse depois do zero_player_balance, a prata sumia do
+        # saldo e o extrato nao dizia pra onde foi — confisco sem registro nenhum.
+        balance = await database.run_db(database.zero_player_balance,
+            dep['discord_id'], dep['username'],
+            ('confiscation', 'Saldo confiscado — membro saiu do servidor',
+             interaction.user.display_name))
 
         try:
             embed = interaction.message.embeds[0]

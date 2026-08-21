@@ -65,8 +65,14 @@ for nome in ALVOS:
     for no in ast.walk(fn):
         if isinstance(no, ast.Call):
             alvo = ast.unparse(no)
+            # debit_/zero_ entraram em 20/08: quando o extrato passou a ser
+            # gravado DENTRO dessas funcoes (mesma transacao do saldo), o
+            # add_transaction avulso do /pagar_saldo sumiu — e este teste parou
+            # de enxergar a movimentacao de prata ali. Ele falhou, corretamente:
+            # o detector perdeu o alvo, nao o codigo perdeu a correcao.
             if any(f in alvo for f in ('update_player_balance', 'add_transaction',
                                        'transfer_balance', 'remove_player_balance',
+                                       'debit_player_balance', 'zero_player_balance',
                                        'zerar_saldo_db', 'pay_player')):
                 if linha_prata is None or no.lineno < linha_prata:
                     linha_prata = no.lineno

@@ -206,7 +206,12 @@ class CloseTicketView(LoggedView):
                     )
  
             # Se a categoria de arquivo estiver nos 50, usa a continuação.
-            category = await categoria_com_espaco(guild, category, archive_name)
+            # O `or category` no fim importa: sem espaço em nenhuma das 11
+            # continuações a função devolve None, e `edit(category=None)` tira o
+            # canal de QUALQUER categoria — o ticket arquivado reaparece solto no
+            # topo da lista de canais, que é o oposto de arquivar. O caminho de
+            # reabrir já tratava isso; este ficou de fora.
+            category = await categoria_com_espaco(guild, category, archive_name) or category
 
             # Só prefixa o ✅ uma vez: arquivar → reabrir → arquivar empilhava
             # "✅│✅│…" e o nome de canal tem teto de 100 caracteres no Discord.

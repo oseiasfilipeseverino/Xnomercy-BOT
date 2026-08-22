@@ -16,9 +16,14 @@ from discord.ext import commands, tasks
 
 import database
 from discord_utils import (alertar_financeiro, cortar, add_lista, violacoes,
-                           LIM_TITULO, LIM_DESCRICAO)
+                           log_channel, LIM_TITULO, LIM_DESCRICAO)
 from permissions import is_financial
 from view_utils import LoggedView
+
+
+async def _log(guild, message: str):
+    # Ver discord_utils.log_channel — texto de log nunca pinga ninguem.
+    await log_channel(guild, message)
 
 
 def _fmt(v) -> str:
@@ -154,6 +159,31 @@ class SitePendingSplitView(LoggedView):
         except Exception as e:
             print(f'[site_splits] erro ao editar embed de aprovação do split {self.split_id}: {e}')
 
+        # Log de QUEM aprovou. Pedido do Oseias em 21/08: o nome de quem aprovou
+        # ficava só no rodapé do embed e na coluna reviewed_by do banco. O embed
+        # se perde no meio do canal financeiro e o banco ninguém abre — então na
+        # prática não havia onde consultar quem liberou qual pagamento.
+        #
+        # A aprovação pela tela do site já registrava isso (add_pending_log em
+        # rotas/gestao.py), e o /depositar_evento do bot também. Só este caminho
+        # — que é o mais usado, o botão no Discord — ficava de fora.
+        #
+        # Vai DEPOIS do crédito e num try próprio: log é registro, não pode
+        # derrubar uma aprovação que já movimentou prata.
+        try:
+            # Nome do evento fora da f-string: aninhar aspas iguais só compila do
+            # Python 3.12 pra cima. A Railway roda 3.13 e passaria, mas amarrar
+            # uma linha de log a uma regra nova de parser é fragilidade de graça.
+            nome_evento = (split.get('event_title') or event_title
+                           or f'Evento #{split["event_id"]}')
+            await _log(interaction.guild,
+                f'✅ **{interaction.user.display_name}** aprovou o split de '
+                f'**{nome_evento}** — {_fmt(split.get("total_loot", 0))} de loot '
+                f'para {len(participants)} participante(s). '
+                f'Enviado por {split.get("submitted_by") or "?"}.')
+        except Exception as e:
+            print(f'[site_splits] erro ao logar aprovação do split {self.split_id}: {e}')
+
         # RESPONDE ANTES das DMs. Elas custam ~250ms cada e antes vinham primeiro:
         # com 20 participantes eram 5s, com 70 são 18s — muito além dos 3s que o
         # Discord dá pra 1a resposta. A prata era creditada certo, mas quem clicou
@@ -212,6 +242,18 @@ class SitePendingSplitView(LoggedView):
             await interaction.message.edit(embed=embed, view=self)
         except Exception as e:
             print(f'[site_splits] erro ao editar embed de recusa do split {self.split_id}: {e}')
+
+        # Recusa também vai pro log. Quem recusou é tão importante quanto quem
+        # aprovou: sem isto, um split que sumiu da fila não tem responsável, e a
+        # pergunta "por que esse conteúdo nunca foi pago?" não tem onde ser
+        # respondida.
+        try:
+            nome_evento = split.get('event_title') or f'Evento #{split["event_id"]}'
+            await _log(interaction.guild,
+                f'❌ **{interaction.user.display_name}** recusou o split de '
+                f'**{nome_evento}**. Enviado por {split.get("submitted_by") or "?"}.')
+        except Exception as e:
+            print(f'[site_splits] erro ao logar recusa do split {self.split_id}: {e}')
 
         try:
             await interaction.followup.send('❌ Split recusado. O evento voltou para Finalizados.', ephemeral=True)

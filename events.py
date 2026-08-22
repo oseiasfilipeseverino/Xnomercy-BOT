@@ -580,6 +580,16 @@ class ApproveDepositView(LoggedView):
         except Exception as e:
             print(f'[events] erro ao editar embed de recusa do evento #{self.event_id}: {e}')
 
+        # A aprovação já logava quem aprovou; a recusa não logava nada. Um
+        # depósito recusado some da fila sem responsável, e depois não há onde
+        # responder "por que esse evento nunca foi pago?".
+        try:
+            await _log(interaction.guild,
+                f'❌ **{interaction.user.display_name}** recusou o depósito do '
+                f'**Evento #{self.event_id:04d}**.')
+        except Exception as e:
+            print(f'[events] erro ao logar recusa do evento #{self.event_id}: {e}')
+
         try:
             await interaction.followup.send('❌ Depósito recusado.', ephemeral=True)
         except Exception as e:

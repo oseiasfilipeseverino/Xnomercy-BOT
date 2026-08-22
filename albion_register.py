@@ -64,6 +64,28 @@ def _sondar(url, cabecalhos, rotulo, timeout=25):
                 f'`{str(e)[:110]}`')
 
 
+def _url_membros():
+    """URL da lista de membros, com o id da guild que o auto_purge já descobriu.
+
+    Lê do guild_config em vez de descobrir de novo: descobrir custa uma chamada
+    a /search, e se ELA estiver lenta o diagnóstico da rota de membros nem
+    aconteceria — o teste morreria antes de testar o que interessa.
+
+    Sem id salvo ainda, cai numa guild pública conhecida só pra medir a ROTA.
+    O que se quer saber aqui é se /guilds/*/members responde, não qual guild.
+    """
+    try:
+        # `db`, não `database`: neste módulo o import é `import database as db`.
+        # Escrevi `database.get_config` primeiro, e o except abaixo teria
+        # engolido o NameError e caído sempre no id fixo — funcionando errado,
+        # em silêncio. Por isso o except registra o motivo em vez de só desviar.
+        gid = db.get_config('albion_guild_id')
+    except Exception as e:
+        print(f'[diag_albion] nao li o guild_id salvo ({e!r}) — usando o id fixo')
+        gid = ''
+    return f'{ALBION_API}/guilds/{gid or "tBX2nMRQQIeA-acMK5tpUw"}/members'
+
+
 def _diagnostico_completo():
     """Roda todas as sondagens. SÍNCRONO — chamar via run_in_executor."""
     alvo = ALBION_API + '/search?q=Criminouso'
@@ -83,6 +105,19 @@ def _diagnostico_completo():
         _sondar('https://west.albion-online-data.com/api/v2/stats/prices/T4_BAG',
                 {'User-Agent': config.ALBION_USER_AGENT},
                 'Controle: albion-online-data'),
+
+        # A rota que o auto_purge realmente usa. ESTAVA FALTANDO, e a ausência
+        # dela fez este diagnóstico responder a pergunta errada: em 19/08 ele
+        # devolveu 6 sondagens HTTP 200 e eu li isso como "a API está de pé",
+        # enquanto o auto_purge falhava todo ciclo — porque nenhuma das 6 tocava
+        # em /guilds/{id}/members.
+        #
+        # Medido em 22/08, 4 chamadas de cada: /events volta em 0,3s; esta leva
+        # 31-34s ou estoura. E não é tamanho — a resposta tem 6 KB, menos que a
+        # do /events. Um diagnóstico que não testa a rota que quebra é pior que
+        # nenhum: ele dá confiança errada.
+        _sondar(_url_membros(), {'User-Agent': config.ALBION_USER_AGENT},
+                'Lista de membros (a rota do auto_purge)', timeout=config.ALBION_TIMEOUT_MEMBROS),
 
         # O MESMO pedido do item 1, agora no fim. Medido daqui em 17/08, na
         # ordem: 1º timeout em 25s, 2º 12,2s, 3º 0,37s, 4º 0,68s — inclusive com

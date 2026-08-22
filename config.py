@@ -44,6 +44,23 @@ ALBION_USER_AGENT = 'XnoMercy/2.0 (+https://xnomercy.com)'
 # saída é buscar por outro caminho (ver PENDENCIAS).
 ALBION_TIMEOUT = 40
 
+# A rota /guilds/{id}/members e' MUITO mais lenta que o resto do mesmo host, e
+# nao e' por tamanho: a resposta tem 6 KB, menos que /events?limit=1, que volta
+# em 0,3s. Medido daqui em 22/08/2026, 4 chamadas seguidas de cada:
+#
+#   /search?q=...              timeout, 20,9s, 0,32s, 0,29s     1 KB
+#   /events?limit=1            0,66s, 0,37s, 0,33s, 0,35s       7 KB
+#   /guilds/{id}/members       31,2s, 34,2s, timeout, timeout   6 KB
+#
+# Com ALBION_TIMEOUT=40 essa rota fica em cima da borda, e foi o que aconteceu:
+# o auto_purge falhou os DOIS ciclos dos ultimos 3 dias, sempre com ReadTimeout
+# nas 3 tentativas. Ou seja, ha tres dias ele nao confere ninguem.
+#
+# Esperar mais aqui e' de graca: a chamada roda em run_in_executor (nao segura o
+# event loop) e o ciclo e' de 6 em 6 horas. O pior caso passa a ser 3 tentativas
+# de 120s = 6 minutos de uma thread ociosa, uma vez a cada 6 horas.
+ALBION_TIMEOUT_MEMBROS = 120
+
 
 def get_home_guild(bot):
     """Servidor principal da guild. Usa GUILD_ID se configurado (seguro); sem

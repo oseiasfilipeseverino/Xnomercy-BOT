@@ -1,2 +1,27 @@
 __pycache__/
 *.pyc
+
+# ── Segredos ─────────────────────────────────────────────────────────────────
+# Este repositorio e' PUBLICO. Ate 22/08/2026 o .gitignore tinha so as duas
+# linhas acima, e o bot precisa de DISCORD_TOKEN e DATABASE_URL pra rodar
+# local — ou seja, bastava alguem criar um .env aqui e dar `git add -A` pra
+# publicar o token do bot e a senha do banco de producao no GitHub.
+#
+# Nunca chegou a acontecer (git log --all -- .env veio vazio), mas o risco era
+# real e aumentou quando o acerto_divergencias.py passou a ler DATABASE_URL do
+# ambiente: criar um .env aqui virou a coisa natural a fazer.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# Saidas de auditoria e diagnostico: contem discord_id, nome e saldo de gente
+# real. Nada disso deve sair do computador de quem rodou.
+auditoria*.txt
+auditoria*.log
+diag_*.txt
+*.dump
+*.sql.gz

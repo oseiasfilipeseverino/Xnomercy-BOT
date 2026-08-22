@@ -156,7 +156,12 @@ class AutoPurgeCog(commands.Cog):
         return None
 
     def _get_guild_members_albion(self, guild_id):
-        membros = self._buscar(f'{ALBION_API}/guilds/{guild_id}/members', config.ALBION_TIMEOUT,
+        # Timeout PROPRIO, maior. Esta rota leva 31-34s quando responde — com os
+        # 40s gerais ela ficava na borda e estourava, e o auto_purge falhou os
+        # dois ciclos dos ultimos 3 dias por causa disso. Ver o comentario em
+        # config.ALBION_TIMEOUT_MEMBROS com a medicao das tres rotas.
+        membros = self._buscar(f'{ALBION_API}/guilds/{guild_id}/members',
+                               config.ALBION_TIMEOUT_MEMBROS,
                                'lista de membros')
         if membros is None:
             return None

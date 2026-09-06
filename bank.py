@@ -421,13 +421,38 @@ class BankCog(commands.Cog):
         total  = 0.0
         for i, row in enumerate(balances):
             prefix = medals[i] if i < 3 else f'`{i+1}.`'
-            # A menção <@id> só vira nome de verdade se a pessoa ainda estiver no
-            # servidor. Pra quem já saiu, ela fica como "<@276...>" cru e não dá pra
-            # saber quem é — nesses casos (e SÓ nesses) acrescenta o nome salvo no
-            # banco. Antes o nome vinha sempre, o que duplicava a informação em
-            # todas as linhas ("@[NM] Fulano ([NM] Fulano)").
-            ainda_no_servidor = interaction.guild.get_member(int(row['discord_id'])) is not None
-            nome = '' if ainda_no_servidor else f' ({row["username"]})'
+            # A menção <@id> só vira nome se a pessoa ainda estiver no servidor.
+            # Pra quem saiu ela fica "<@1312927288446156824>" cru — foi o que o
+            # Oseias viu em 06/09 e leu como "nome com número".
+            #
+            # Já havia um fallback aqui, e ele NÃO bastava, por dois motivos que
+            # aparecem juntos na mesma tela:
+            #
+            #   1. `guild.get_member()` lê o cache local do bot. Se o bot perdeu o
+            #      evento de saída (reconexão, por exemplo), a pessoa continua no
+            #      cache: o código acha que está no servidor, não põe o nome, e o
+            #      Discord do outro lado não consegue renderizar. Linha ilegível.
+            #   2. quando o `username` no banco está vazio, o fallback rendia " ()".
+            #
+            # Agora o nome entra sempre que EXISTE e a menção pode falhar, e a
+            # ausência dele é DITA em vez de virar parêntese vazio. Duplicar
+            # "@Fulano (Fulano)" numa linha ou outra é preço barato perto de uma
+            # linha em que não dá pra saber de quem é a prata.
+            membro = interaction.guild.get_member(int(row['discord_id']))
+            bruto = (row['username'] or '').strip()
+            # Tira o prefixo de cargo do apelido do Discord ("[NM] ", "[AMG] ").
+            # Ele vazou pro banco por meses (ver o comentário sobre ensure_player
+            # no extrato_membro) e não é o nome da pessoa no jogo.
+            limpo = re.sub(r'^\[[^\]]{1,10}\]\s*', '', bruto)
+            if membro:
+                nome = ''
+            elif limpo:
+                nome = f' ({limpo})'
+            else:
+                # Sem nome no banco E fora do servidor: a linha viraria só o ID.
+                # Dizer isso é melhor que deixar parecer defeito de renderização,
+                # e aponta pro comando que resolve.
+                nome = ' (_sem nome salvo — use `/quem_e` com esse ID_)'
             lines.append(f'{prefix} <@{row["discord_id"]}>{nome} — {fmt(row["balance"])}')
             total += row['balance']
 

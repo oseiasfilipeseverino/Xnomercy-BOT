@@ -178,6 +178,52 @@ for nome in ('update_player_balance', 'debit_player_balance', 'zero_player_balan
            f'{nome} ainda garante a linha antes de mexer no saldo')
 
 
+# ── 4. A lista /saldos nao pode virar so um ID ───────────────────────────────
+# O Oseias em 06/09, olhando o /saldos: "porque alguns nomes ficam com numeros?".
+# Nao eram nomes com numero — eram mencoes <@id> de quem SAIU, que o Discord nao
+# consegue transformar em nome. O fallback que existia nao bastava: ele so
+# entrava quando guild.get_member() devolvia None, e o cache do bot as vezes
+# mantem quem saiu; e quando o username no banco estava vazio, rendia " ()".
+print("")
+print("-- a linha do /saldos sempre da pra ler")
+import re as _re
+
+
+def _render(username, no_servidor):
+    """A mesma regra do bank.py, reescrita: se alguem mudar so um lado, os casos
+    abaixo denunciam."""
+    bruto = (username or "").strip()
+    limpo = _re.sub(r"^\[[^\]]{1,10}\]\s*", "", bruto)
+    if no_servidor:
+        return ""
+    if limpo:
+        return f" ({limpo})"
+    return " (_sem nome salvo_)"
+
+
+checar(_render("[NM] MatsukeZ", True) == "",
+       "quem esta no servidor nao duplica o nome")
+checar(_render("[NM] snook222", False) == " (snook222)",
+       "quem saiu mostra o nome SEM o prefixo de cargo")
+checar("()" not in _render("", False),
+       "username vazio nao vira parentese vazio")
+checar("None" not in _render(None, False),
+       "username None nao vira (None)")
+
+_bank = FONTE
+_i = _bank.find("prefix = medals[i] if i < 3")
+# Delimita pelo FIM do laço, nao por um numero de caracteres. A 1a versao usava
+# _i + 1800 e reprovou duas checagens porque o que ela procurava estava a 1940 —
+# janela fixa quebra sozinha assim que alguem escreve mais um comentario.
+_fim = _bank.find("total += row", _i)
+_bloco_saldos = _bank[_i:_fim if _fim != -1 else _i + 3000]
+checar(_fim > _i, 'delimitei o laco do /saldos pelo fim dele, nao por tamanho')
+checar("re.sub(" in _bloco_saldos, "o bank.py limpa o prefixo de cargo")
+checar("sem nome salvo" in _bloco_saldos,
+       "e DIZ quando nao ha nome, em vez de deixar so o ID")
+checar("quem_e" in _bloco_saldos,
+       "apontando o comando que descobre de quem e aquele ID")
+
 # ── Afericao ─────────────────────────────────────────────────────────────────
 print('\n-- afericao')
 # Se o detector nao acusa a versao antiga, nao esta medindo nada.

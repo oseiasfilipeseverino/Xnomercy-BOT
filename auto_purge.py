@@ -566,6 +566,79 @@ class AutoPurgeCog(commands.Cog):
         await self.bot.wait_until_ready()
 
     @discord.app_commands.command(
+        name='quem_e',
+        description='[LÍDER] Descobre quem é um Discord ID solto (nome, saldo, histórico).')
+    @discord.app_commands.describe(discord_id='O ID numérico (18-19 dígitos)')
+    async def quem_e(self, interaction: discord.Interaction, discord_id: str):
+        """Um id aparece sozinho em auditoria e não há de onde tirar o nome: quem
+        saiu do Discord some da API, e o snowflake só entrega a data de criação da
+        conta. Mas o nome ficou GRAVADO nas nossas tabelas na hora em que a ação
+        aconteceu — este comando varre todas.
+        """
+        import permissions
+        if not permissions.is_financial(interaction.user):
+            await interaction.response.send_message(
+                '❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+
+        did = ''.join(ch for ch in discord_id if ch.isdigit())
+        if not (17 <= len(did) <= 20):
+            await interaction.followup.send(
+                f'❌ `{discord_id}` não parece um Discord ID (esperado 17 a 20 dígitos).',
+                ephemeral=True)
+            return
+
+        n = chr(10)
+        partes = [f'**ID `{did}`**']
+
+        # Data de criação: sai do próprio número, sem consultar nada. É o único
+        # dado que existe mesmo quando a conta sumiu de tudo.
+        try:
+            from datetime import datetime, timezone
+            criado = datetime.fromtimestamp(((int(did) >> 22) + 1420070400000) / 1000,
+                                            tz=timezone.utc)
+            partes.append(f'Conta criada em **{criado:%d/%m/%Y}** '
+                          f'(vem do próprio ID, não do banco).')
+        except Exception:
+            pass
+
+        # No servidor agora?
+        membro = interaction.guild.get_member(int(did))
+        if membro:
+            partes.append(f'Está no servidor: {membro.mention} — '
+                          f'apelido **{membro.display_name}**')
+        else:
+            partes.append('_Não está no servidor hoje._')
+
+        dados = await database.run_db(database.rastrear_discord_id, did)
+        if dados is None:
+            await interaction.followup.send(
+                f'{n.join(partes)}{n}{n}❌ Não consegui ler o banco agora.',
+                ephemeral=True)
+            return
+
+        if dados['nomes']:
+            partes.append(f'{n}**Nome(s) gravado(s) no nosso banco:** '
+                          + ', '.join(f'`{x}`' for x in dados['nomes']))
+        if dados['fontes']:
+            partes.append(f'{n}**Onde aparece:**')
+            for tabela, linhas in dados['fontes'].items():
+                resumo = '; '.join(str(tuple(r)) for r in linhas[:3])
+                partes.append(f'• `{tabela}` — {resumo[:160]}')
+        else:
+            # Distinguir "não achei" de "não olhei" é o ponto: se o banco não tem
+            # nada, essa pessoa nunca interagiu com o bot, e isso é uma resposta.
+            partes.append(f'{n}Nenhum registro no banco. Esse ID nunca movimentou '
+                          f'prata, entrou em evento nem abriu ticket aqui.')
+
+        from discord_utils import cortar, enviar_embed, LIM_DESCRICAO
+        embed = discord.Embed(title='Rastreando Discord ID',
+                              description=cortar(n.join(partes), LIM_DESCRICAO),
+                              color=discord.Color.blurple())
+        await enviar_embed(interaction.followup, embed, rotulo='quem_e', ephemeral=True)
+
+    @discord.app_commands.command(
         name='conferir_amigos',
         description='[LÍDER] Quem está como Amigo mas VOLTOU pra guild no Albion.')
     async def conferir_amigos(self, interaction: discord.Interaction):

@@ -498,6 +498,66 @@ def get_player(discord_id):
     finally:
         release(conn)
 
+def rastrear_discord_id(discord_id):
+    """Tudo que o banco sabe sobre um discord_id, pra responder "quem era esse?".
+
+    Um id aparece sozinho em auditoria (participante de split que nao esta mais no
+    servidor, linha de extrato antiga) e nao ha de onde tirar o nome: quem saiu do
+    Discord some da API, e o snowflake so entrega a data de criacao da conta.
+
+    Mas o nome fica GRAVADO em varias tabelas no momento em que a acao aconteceu.
+    Esta funcao varre todas de uma vez e devolve o que achar — inclusive nomes
+    diferentes, que e' informacao e nao ruido: quem trocou de nick aparece com os
+    dois, e isso costuma ser justamente o que a pessoa esta tentando descobrir.
+
+    Uma consulta por tabela, mas e' um comando manual de lideranca — nao esta em
+    caminho quente.
+    """
+    achados = {'discord_id': str(discord_id), 'nomes': [], 'fontes': {}}
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        consultas = [
+            ('players', 'SELECT username, balance FROM players WHERE discord_id=%s'),
+            ('transactions',
+             'SELECT COUNT(*), MIN(created_at), MAX(created_at), SUM(amount) '
+             'FROM transactions WHERE discord_id=%s'),
+            ('member_departures',
+             'SELECT username, status, balance FROM member_departures '
+             'WHERE discord_id=%s ORDER BY id DESC LIMIT 3'),
+            ('event_participants',
+             'SELECT username, COUNT(*) FROM event_participants WHERE discord_id=%s '
+             'GROUP BY username'),
+            ('slot_assignments',
+             'SELECT username, COUNT(*) FROM slot_assignments WHERE discord_id=%s '
+             'GROUP BY username'),
+            ('tickets',
+             'SELECT username, COUNT(*) FROM tickets WHERE discord_id=%s GROUP BY username'),
+            ('purge_strikes',
+             'SELECT albion_nick, strikes FROM purge_strikes WHERE discord_id=%s'),
+        ]
+        for tabela, sql in consultas:
+            try:
+                c.execute(sql, (str(discord_id),))
+                linhas = [r for r in c.fetchall() if r and any(x is not None for x in r)]
+                if linhas:
+                    achados['fontes'][tabela] = linhas
+                    for r in linhas:
+                        n = r[0]
+                        if isinstance(n, str) and n.strip() and n not in achados['nomes']:
+                            achados['nomes'].append(n.strip())
+            except Exception as e:
+                # Tabela que nao existe mais (ou coluna renomeada) nao pode derrubar
+                # a busca inteira — registra e segue pras outras.
+                print(f'[rastrear] {tabela}: {e!r}')
+        return achados
+    except Exception as e:
+        print(f'[rastrear_discord_id] {e!r}')
+        return None
+    finally:
+        release(conn)
+
+
 def get_player_balance(discord_id):
     """PROPAGA a exceção de propósito (não devolve 0.0 em erro).
 

@@ -168,7 +168,10 @@ class BankCog(commands.Cog):
         # botões de outras pessoas — e passando de 3s o Discord já tinha
         # desistido da interação.
         await interaction.response.defer()
-        await database.run_db(database.ensure_player, str(user.id), user.display_name)
+        # ensure_player NAO entra aqui: ele faz ON CONFLICT DO UPDATE SET
+        # username=..., entao um comando de LEITURA sobrescrevia o nome no
+        # banco com o display_name do Discord, prefixo de cargo incluso.
+        # Dai vieram os "[NM] DrumnKiller" e "AMG KRDemons" da auditoria.
         try:
             balance = await database.run_db(database.get_player_balance, str(user.id))
         except Exception as e:
@@ -193,7 +196,10 @@ class BankCog(commands.Cog):
     async def extrato(self, interaction: discord.Interaction):
         user = interaction.user
         await interaction.response.defer(ephemeral=True)
-        await database.run_db(database.ensure_player, str(user.id), user.display_name)
+        # ensure_player NAO entra aqui: ele faz ON CONFLICT DO UPDATE SET
+        # username=..., entao um comando de LEITURA sobrescrevia o nome no
+        # banco com o display_name do Discord, prefixo de cargo incluso.
+        # Dai vieram os "[NM] DrumnKiller" e "AMG KRDemons" da auditoria.
         txs = await database.run_db(database.get_player_transactions, str(user.id), 15)
 
         embed = discord.Embed(title='📜 Extrato de Saldo', color=discord.Color.gold())
@@ -288,19 +294,61 @@ class BankCog(commands.Cog):
             pass
 
     # ── /extrato_membro ────────────────────────────────────────────────────────
-    @app_commands.command(name='extrato_membro', description='[LÍDER] Ver o extrato de um membro específico (auditoria).')
-    @app_commands.describe(usuario='Membro que deseja auditar')
-    async def extrato_membro(self, interaction: discord.Interaction, usuario: discord.Member):
+    @app_commands.command(name='extrato_membro', description='[LÍDER] Ver o extrato de um membro (funciona pra quem já saiu).')
+    @app_commands.describe(usuario='Menção, ID, ou o NOME (pra quem já saiu do servidor)')
+    async def extrato_membro(self, interaction: discord.Interaction, usuario: str):
+        # `str` em vez de `discord.Member`: o seletor do Discord só lista quem está
+        # no servidor AGORA, e é justamente de quem SAIU que a auditoria precisa —
+        # quanto recebeu antes de sair, conferir print de pagamento, fechar conta.
+        # O Oseias travou nisso procurando o snook222 em 06/09.
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
-        await database.run_db(database.ensure_player, str(usuario.id), usuario.display_name)
-        txs = await database.run_db(database.get_player_transactions, str(usuario.id), 25)
 
+        # 1. Menção ou ID cru resolve direto (inclusive de quem saiu, via banco).
+        alvos, _ = _resolve_members(interaction.guild, usuario)
+        if alvos:
+            did, nome = alvos[0].id, alvos[0].name
+        else:
+            # 2. Senão é nome. Busca no banco, que guarda quem já saiu.
+            achados = await database.run_db(database.buscar_jogador_por_nome, usuario)
+            if achados is None:
+                await interaction.followup.send(
+                    '❌ Não consegui consultar o banco agora. Tente de novo.', ephemeral=True)
+                return
+            if not achados:
+                await interaction.followup.send(
+                    f'❌ Ninguém com `{usuario}` no nome tem registro no banco.\n'
+                    f'Se a pessoa nunca movimentou prata, não há extrato pra mostrar.',
+                    ephemeral=True)
+                return
+            if len(achados) > 1:
+                # Escolher sozinho seria chutar em cima de dinheiro. Lista e deixa
+                # a pessoa apontar pelo ID.
+                lista = '\n'.join(f'• `{a["discord_id"]}` — **{a["username"]}** '
+                                  f'({fmt(a["balance"])})' for a in achados[:10])
+                await interaction.followup.send(
+                    f'Achei **{len(achados)}** com `{usuario}` no nome. '
+                    f'Rode de novo com o ID:\n{lista}', ephemeral=True)
+                return
+            did, nome = achados[0]['discord_id'], achados[0]['username']
+
+        # ensure_player SAIU daqui de propósito. Ele faz
+        # `ON CONFLICT DO UPDATE SET username=...`, então auditar alguém
+        # SOBRESCREVIA o nome no banco com o display_name do Discord — prefixo de
+        # cargo e tudo. É de onde vieram os "[NM] DrumnKiller", "AMG KRDemons" e
+        # "[Officer] Leirram27" que apareceram na auditoria de 08/08. Comando de
+        # leitura não escreve.
+        txs = await database.run_db(database.get_player_transactions, did, 25)
+
+        membro = interaction.guild.get_member(int(did)) if did.isdigit() else None
         embed = discord.Embed(title='📜 Extrato (Auditoria)', color=discord.Color.gold())
-        embed.set_author(name=usuario.display_name, icon_url=usuario.display_avatar.url)
+        if membro:
+            embed.set_author(name=membro.display_name, icon_url=membro.display_avatar.url)
+        else:
+            embed.set_author(name=f'{nome} (não está mais no servidor)')
         if not txs:
             embed.description = 'Nenhuma movimentação registrada ainda.'
         else:
@@ -311,10 +359,11 @@ class BankCog(commands.Cog):
                 desc = t['description'] or t['type']
                 by = f" (por {t['created_by']})" if t['created_by'] else ''
                 lines.append(f"`{data}` **{sign}{fmt(t['amount'])}** — {desc}{by}")
-            embed.description = '\n'.join(lines)
-            saldo = await database.run_db(fmt_saldo, str(usuario.id))
+            embed.description = cortar('\n'.join(lines), LIM_DESCRICAO)
+            saldo = await database.run_db(fmt_saldo, did)
             embed.set_footer(text=f'Últimas {len(txs)} movimentações · saldo atual: {saldo}')
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await enviar_embed(interaction.followup, embed, rotulo='extrato_membro',
+                           ephemeral=True)
 
     # ── /saldo_membro ──────────────────────────────────────────────────────────
     @app_commands.command(name='saldo_membro', description='[LÍDER] Ver o saldo de um membro específico.')
@@ -325,7 +374,10 @@ class BankCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-        await database.run_db(database.ensure_player, str(usuario.id), usuario.display_name)
+        # ensure_player NAO entra aqui: ele faz ON CONFLICT DO UPDATE SET
+        # username=..., entao um comando de LEITURA sobrescrevia o nome no
+        # banco com o display_name do Discord, prefixo de cargo incluso.
+        # Dai vieram os "[NM] DrumnKiller" e "AMG KRDemons" da auditoria.
         try:
             balance = await database.run_db(database.get_player_balance, str(usuario.id))
         except Exception as e:

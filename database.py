@@ -498,6 +498,44 @@ def get_player(discord_id):
     finally:
         release(conn)
 
+def buscar_jogador_por_nome(termo, limite=10):
+    """Acha jogador pelo NOME, inclusive quem ja saiu do Discord.
+
+    Existe porque o /extrato_membro pedia `discord.Member`, e o seletor do Discord
+    so lista quem esta no servidor AGORA. Quem saiu some do seletor — e e'
+    justamente de quem se quer o extrato: pra saber quanto recebeu antes de sair,
+    conferir print de pagamento, fechar auditoria.
+
+    Busca com ILIKE %termo% de proposito, nao igualdade. Dois motivos:
+
+      1. o nome guardado as vezes carrega o prefixo do cargo do Discord
+         ("[NM] snook222"), entao igualdade com "snook222" nao acharia nada;
+      2. quem procura raramente lembra o nome exato com maiuscula e numero.
+
+    Ordena os que COMECAM com o termo primeiro: procurando "snook", o "snook222"
+    vem antes de "xxsnookxx".
+    """
+    termo = (termo or '').strip()
+    if len(termo) < 2:
+        return []
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT discord_id, username, balance FROM players "
+                  "WHERE username ILIKE %s "
+                  "ORDER BY (username ILIKE %s) DESC, username LIMIT %s",
+                  (f'%{termo}%', f'{termo}%', limite))
+        return [{'discord_id': r[0], 'username': r[1], 'balance': float(r[2] or 0)}
+                for r in c.fetchall()]
+    except Exception as e:
+        # Devolver [] mudo faria "nao achei ninguem" e "o banco caiu" virarem a
+        # mesma resposta na tela. Quem chama distingue pelo None.
+        print(f'[buscar_jogador_por_nome] {termo!r}: {e!r}')
+        return None
+    finally:
+        release(conn)
+
+
 def rastrear_discord_id(discord_id):
     """Tudo que o banco sabe sobre um discord_id, pra responder "quem era esse?".
 

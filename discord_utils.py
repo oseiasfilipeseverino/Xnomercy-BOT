@@ -141,8 +141,21 @@ async def enviar_embed(destino, embed, rotulo='', **kwargs):
         embed = enxuto
     try:
         msg = await destino.send(embed=embed, **kwargs)
+        # msg PODE ser None sem nada ter dado errado. `interaction.followup` é um
+        # discord.Webhook, e Webhook.send tem `wait=False` por padrão — ele manda a
+        # mensagem e devolve None em vez do objeto.
+        #
+        # Antes daqui saía `msg.id` direto, o AttributeError caía no except abaixo,
+        # e o log dizia "FALHA ao enviar" numa mensagem que CHEGOU. Todo comando que
+        # responde por followup (adicionar/pagar/zerar_saldo, diag_albion,
+        # conferir_amigos) registrava fracasso a cada execução bem-sucedida.
+        #
+        # É a família "erro virando resposta normal" ao contrário: sucesso virando
+        # erro. Igualmente caro — manda a próxima investigação pro lugar errado, e
+        # quem chama recebe None e conclui que precisa tentar de novo.
         if rotulo:
-            print(f'[embed] {rotulo}: enviado (msg {msg.id})')
+            onde = f' (msg {msg.id})' if msg is not None else ''
+            print(f'[embed] {rotulo}: enviado{onde}')
         return msg
     except Exception as e:
         print(f'[embed] {rotulo}: FALHA ao enviar: {e!r}')

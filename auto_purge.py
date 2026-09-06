@@ -171,7 +171,7 @@ class AutoPurgeCog(commands.Cog):
         return {m.get('Name', '').lower(): m.get('Name', '')
                 for m in membros if m.get('Name')}
 
-    def _extract_albion_nick(self, discord_member):
+    def _extract_albion_nick(self, discord_member, prefixo='[NM]'):
         """Extrai o nick do Albion de um apelido "[NM] Nome". Devolve uma tupla
         (candidatos, confiavel):
 
@@ -189,11 +189,15 @@ class AutoPurgeCog(commands.Cog):
         do Albion nao tem emoji nem espaco, entao aqui isolamos o primeiro trecho
         que se parece com um nome de conta de verdade.
         """
+        # `prefixo` existe pro /conferir_amigos poder ler apelido "[AMG] Fulano"
+        # com esta MESMA logica. Duplicar o tratamento de emoji e acento aqui foi
+        # o que produziu os falsos positivos do BangziN, Carabito e Zarpam — e um
+        # segundo lugar com a mesma regra escrita de novo erraria de novo.
         nick = discord_member.nick or discord_member.display_name or ''
-        if nick.startswith('[NM] '):
-            resto = nick[5:].strip()
-        elif nick.startswith('[NM]'):
-            resto = nick[4:].strip()
+        if nick.startswith(prefixo + ' '):
+            resto = nick[len(prefixo) + 1:].strip()
+        elif nick.startswith(prefixo):
+            resto = nick[len(prefixo):].strip()
         else:
             return None, False
         if not resto:
@@ -560,6 +564,108 @@ class AutoPurgeCog(commands.Cog):
     @purge_check_task.before_loop
     async def before_purge(self):
         await self.bot.wait_until_ready()
+
+    @discord.app_commands.command(
+        name='conferir_amigos',
+        description='[LÍDER] Quem está como Amigo mas VOLTOU pra guild no Albion.')
+    async def conferir_amigos(self, interaction: discord.Interaction):
+        """Responde a pergunta "tem alguem como Amigo que eu preciso corrigir?".
+
+        O auto-purge so olha quem tem [NM]: quem ja foi rebaixado pra Amigo sai
+        do radar dele pra sempre. Entao quem foi rebaixado por engano — ou quem
+        saiu e VOLTOU pra guild depois — fica preso como Amigo sem nada avisar.
+
+        Este comando olha o outro lado: pega todo mundo com o cargo Amigo e
+        confere contra a lista da guild no Albion.
+        """
+        import permissions
+        if not permissions.is_financial(interaction.user):
+            await interaction.response.send_message(
+                '❌ Apenas Líder ou Vice Líder.', ephemeral=True)
+            return
+
+        # A rota de membros leva 31-34s. Deferir da 15 minutos; sem isso o
+        # Discord desiste em 3.
+        await interaction.response.defer(ephemeral=True)
+
+        loop = asyncio.get_event_loop()
+        guild_id = await loop.run_in_executor(None, self._get_albion_guild_id)
+        if not guild_id:
+            await interaction.followup.send(
+                '❌ Não descobri o id da guild no Albion.', ephemeral=True)
+            return
+        nomes_albion = await loop.run_in_executor(
+            None, self._get_guild_members_albion, guild_id)
+        if nomes_albion is None or len(nomes_albion) < MIN_MEMBERS_SANITY:
+            # Mesma regra do ciclo automático: sem lista confiável não se afirma
+            # nada. Dizer "ninguém precisa voltar" com a API fora seria pior que
+            # não responder — é a resposta que a pessoa quer ouvir, e errada.
+            await interaction.followup.send(
+                '❌ A API do Albion não respondeu (ou devolveu lista curta demais). '
+                'Não dá pra afirmar nada sobre quem voltou — tente daqui a pouco.',
+                ephemeral=True)
+            return
+
+        guild = interaction.guild
+        amigo_role = discord.utils.get(guild.roles, name=ROLE_AMIGO)
+        if not amigo_role:
+            await interaction.followup.send(
+                f'❌ Não achei o cargo **{ROLE_AMIGO}** neste servidor.', ephemeral=True)
+            return
+
+        exatos, parecidos, fora, sem_tag = [], [], [], []
+        for m in amigo_role.members:
+            if m.bot:
+                continue
+            candidatos, _ = self._extract_albion_nick(m, prefixo='[AMG]')
+            if not candidatos:
+                sem_tag.append(m)
+                continue
+            achou = next((c for c in candidatos if c.lower() in nomes_albion), None)
+            if achou:
+                exatos.append((m, nomes_albion[achou.lower()]))
+                continue
+            perto = _parecido_na_guild(candidatos, nomes_albion, nomes_albion)
+            if perto:
+                parecidos.append((m, candidatos[0], perto))
+            else:
+                fora.append(m)
+
+        n = chr(10)
+        partes = [f'**{len(amigo_role.members)}** com o cargo {ROLE_AMIGO}, '
+                  f'conferidos contra **{len(nomes_albion)}** membros da guild.']
+
+        if exatos:
+            partes.append(
+                f'{n}✅ **{len(exatos)} VOLTOU pra guild — devolva Membro e [NM]:**{n}'
+                + n.join(f'• {m.mention} — `{nome}`' for m, nome in exatos[:20]))
+        if parecidos:
+            # Separado dos exatos de propósito: aqui o apelido NÃO bate, então
+            # além do cargo é o nick que precisa de conserto — e é justamente
+            # esse caso que fazia a pessoa ser rebaixada de novo no ciclo seguinte.
+            partes.append(
+                f'{n}⚠️ **{len(parecidos)} na guild com apelido DIFERENTE — '
+                f'corrija o nick também:**{n}'
+                + n.join(f'• {m.mention} — apelido diz `{esc}`, na guild é `{real}`'
+                         for m, esc, real in parecidos[:20]))
+        if sem_tag:
+            partes.append(
+                f'{n}❔ **{len(sem_tag)} sem `[AMG]` no apelido — não deu pra conferir:**{n}'
+                + n.join(f'• {m.mention}' for m in sem_tag[:10]))
+        if not exatos and not parecidos:
+            partes.append(f'{n}Ninguém pra corrigir: os {len(fora)} conferíveis '
+                          f'realmente não estão na guild.')
+        else:
+            partes.append(f'{n}_Os outros {len(fora)} realmente não estão na guild._')
+
+        from discord_utils import cortar, LIM_DESCRICAO
+        embed = discord.Embed(
+            title='Amigos que voltaram pra guild',
+            description=cortar(n.join(partes), LIM_DESCRICAO),
+            color=discord.Color.gold())
+        from discord_utils import enviar_embed
+        await enviar_embed(interaction.followup, embed,
+                           rotulo='conferir_amigos', ephemeral=True)
 
 
 async def setup(bot):

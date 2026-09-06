@@ -423,6 +423,77 @@ class AutoPurgeCog(commands.Cog):
                 except Exception as e:
                     print(f'[auto_purge] nao consegui avisar sobre apelidos: {e!r}')
 
+            # ── CONFIRMAÇÃO AO VIVO, ANTES DE MEXER EM CARGO ────────────────────
+            # Pedido do Oseias em 06/09: "pode rebaixar, mas deve confirmar se
+            # estamos tendo contato direto com a API".
+            #
+            # A lista que decidiu isto foi buscada lá em cima, no começo do ciclo.
+            # Entre aquela busca e este ponto passaram os strikes, as consultas ao
+            # banco e a montagem dos avisos — e a decisão é irreversível pra quem
+            # está do outro lado: perde cargo e nick. Então antes de aplicar, busca
+            # DE NOVO e confere.
+            #
+            # É o que faltava explicar o ViKiNhO25 e o gomesxpl: os dois batiam
+            # EXATAMENTE com o nome na API e mesmo assim foram rebaixados em 17/08.
+            # A semelhança de apelido não explica esses dois — resposta parcial da
+            # API explica, e é o único caminho que sobrou. Esta segunda busca
+            # fecha essa porta sem precisar provar qual foi.
+            #
+            # Três desfechos, e nenhum deles rebaixa na dúvida:
+            #   API não responde  -> não rebaixa ninguém, tenta no próximo ciclo
+            #   resposta curta    -> idem (mesma trava de sanidade da 1ª busca)
+            #   pessoa reapareceu -> tira da fila e ZERA o strike dela
+            if to_purge:
+                print(f'[auto_purge] confirmando com a API antes de rebaixar '
+                      f'{len(to_purge)} pessoa(s)...')
+                confirmacao = await loop.run_in_executor(
+                    None, self._get_guild_members_albion, guild_id)
+                if confirmacao is None or len(confirmacao) < MIN_MEMBERS_SANITY:
+                    motivo = ('a API nao respondeu' if confirmacao is None
+                              else f'a API devolveu so {len(confirmacao)} membro(s)')
+                    print(f'[auto_purge] ABORTADO na confirmacao: {motivo}. '
+                          f'Nenhum cargo alterado — os strikes ficam e o proximo '
+                          f'ciclo tenta de novo.')
+                    try:
+                        ch_id = await database.run_db(database.get_config, 'channel_logs')
+                        ch = discord_guild.get_channel(int(ch_id)) if ch_id else None
+                        if ch:
+                            await ch.send(
+                                f'⚠️ **Auto-Purge nao rebaixou ninguem:** ia rebaixar '
+                                f'**{len(to_purge)}** pessoa(s), mas na hora de confirmar '
+                                f'{motivo}. Nada foi alterado — o proximo ciclo confere de novo.',
+                                allowed_mentions=SEM_MENCOES)
+                    except Exception as e:
+                        print(f'[auto_purge] nao consegui avisar sobre a confirmacao: {e!r}')
+                    return
+
+                # Quem reapareceu na segunda busca NÃO sai da fila em silêncio: é
+                # sinal de que a primeira resposta veio incompleta, e isso precisa
+                # ficar registrado pra a gente saber com que frequência acontece.
+                sobreviventes = [(m, n) for m, n in to_purge if n.lower() in confirmacao]
+                if sobreviventes:
+                    for m, n in sobreviventes:
+                        print(f'[auto_purge] {n} REAPARECEU na confirmacao — a 1a busca '
+                              f'veio incompleta. Nao rebaixado, strike zerado.')
+                        await database.run_db(database.purge_strike_clear, str(m.id))
+                    nomes = ', '.join(n for _, n in sobreviventes)
+                    to_purge = [(m, n) for m, n in to_purge
+                                if n.lower() not in confirmacao]
+                    try:
+                        ch_id = await database.run_db(database.get_config, 'channel_logs')
+                        ch = discord_guild.get_channel(int(ch_id)) if ch_id else None
+                        if ch:
+                            await ch.send(
+                                f'ℹ️ **Auto-Purge:** {len(sobreviventes)} pessoa(s) '
+                                f'reapareceram na confirmacao e NAO foram rebaixadas '
+                                f'({nomes}). A primeira consulta a API veio incompleta.',
+                                allowed_mentions=SEM_MENCOES)
+                    except Exception as e:
+                        print(f'[auto_purge] nao consegui avisar sobre reaparecidos: {e!r}')
+
+                if not to_purge:
+                    print('[auto_purge] todos reapareceram na confirmacao — nada a fazer')
+
             changed = []
 
             for member, albion_nick in to_purge:

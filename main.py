@@ -1,3 +1,11 @@
+import sys
+# Saída linha a linha. No Railway não há terminal, então o Python acumulava os
+# prints num buffer e só despejava quando algum usava flush=True — no bot, o
+# [saude] de 5 em 5 minutos. Os horários do log saíam errados em até 5 min
+# (o "Evento postado" do evento 705 marcou 08:43:08; o tópico foi criado às
+# 08:42:35), e numa queda o que foi escrito por último — justamente o que
+# explicaria a queda — se perdia junto com o buffer.
+sys.stdout.reconfigure(line_buffering=True)
 import asyncio
 import os
 import discord

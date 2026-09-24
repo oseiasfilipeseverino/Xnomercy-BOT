@@ -10,48 +10,73 @@ import contextlib
 import discord
 from discord.ext import commands, tasks
 import datetime
-import os
-import pg8000
-from urllib.parse import urlparse
 import config
 import database
 from discord_utils import SEM_MENCOES
 
-def _db_conn():
-    url = urlparse(os.environ.get('DATABASE_URL', ''))
-    # ssl_context=True — igual database.get_connection(). Sem isso, o handshake
-    # com o Postgres do Railway podia falhar de forma intermitente (mascarado
-    # até agora pelo backoff/alert-once deste módulo).
-    return pg8000.connect(
-        host=url.hostname,
-        port=url.port or 5432,
-        user=url.username,
-        password=url.password,
-        database=url.path.lstrip('/'),
-        ssl_context=True,
-        timeout=15
-    )
-
-
 @contextlib.contextmanager
 def _db():
-    """Fecha a conexão SEMPRE, inclusive quando a query levanta exceção.
+    """Conexão do pool compartilhado (database.get_connection), devolvida SEMPRE.
 
-    Antes, o padrão aqui era `conn = _db_conn() ... conn.close()` solto: se
-    qualquer execute() no meio falhasse, o fluxo pulava direto pro except do
-    loop e a conexão nunca era fechada. Como estes loops rodam a cada 15-30s
-    24h por dia, uma instabilidade do banco vazava uma conexão por ciclo até
-    o Postgres recusar novas ligações — derrubando o bot inteiro, não só este
-    módulo.
+    Até 24/09 este módulo abria uma conexão pg8000 PRÓPRIA a cada ciclo — com
+    handshake TLS completo — nas quatro rotinas de 15 e 30 segundos: umas 8
+    conexões novas por minuto, 11 mil por dia, e cada uma dentro do loop do
+    Discord, travando o bot durante o aperto de mão. Agora pega do pool e todo
+    uso passa por database.run_db (fora do loop).
     """
-    conn = _db_conn()
+    conn = database.get_connection()
     try:
         yield conn
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        database.release(conn)
+
+
+def _ler_site_config(chave):
+    with _db() as conn:
+        c = conn.cursor()
+        c.execute('SELECT value FROM site_config WHERE key=%s', (chave,))
+        r = c.fetchone()
+    return r[0] if r else None
+
+
+def _limpar_site_config(chave):
+    with _db() as conn:
+        c = conn.cursor()
+        c.execute("UPDATE site_config SET value='' WHERE key=%s", (chave,))
+        conn.commit()
+
+
+def _gravar_site_config(chave, valor):
+    with _db() as conn:
+        c = conn.cursor()
+        c.execute("""INSERT INTO site_config (key, value) VALUES (%s, %s)
+                     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""", (chave, valor))
+        conn.commit()
+
+
+def _canal_de_logs():
+    with _db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT value FROM guild_config WHERE key='channel_logs'")
+        r = c.fetchone()
+    return r[0] if r and r[0] else ''
+
+
+def _tirar_logs_pendentes(limite=5):
+    """Até `limite` logs do site, já apagados da fila, + o canal de logs."""
+    with _db() as conn:
+        c = conn.cursor()
+        c.execute('SELECT id, message FROM pending_logs ORDER BY id LIMIT %s', (limite,))
+        rows = c.fetchall()
+        if not rows:
+            return [], ''
+        c.execute("SELECT value FROM guild_config WHERE key='channel_logs'")
+        ch_row = c.fetchone()
+        for row in rows:
+            c.execute('DELETE FROM pending_logs WHERE id=%s', (row[0],))
+        conn.commit()
+    return rows, (ch_row[0] if ch_row else '')
+
 
 EXCLUDE = ['gayzaoviadao']
 
@@ -93,6 +118,9 @@ class EnergyNotifications(commands.Cog):
     def _record_success(self, key):
         self._consecutive_failures.pop(key, None)
         self._backoff_until.pop(key, None)
+        # Recuperou: se quebrar DE NOVO, avisa de novo. Antes o aviso era um
+        # só por processo — a segunda queda (dias depois) passava calada.
+        self._alerted_errors.discard(key)
 
     async def _alert_once(self, key, detail):
         """Manda UM aviso pro canal de logs quando check_pending/check_logs/
@@ -135,47 +163,48 @@ class EnergyNotifications(commands.Cog):
         return None
 
     def _get_debtors(self):
-        """Busca devedores do banco (exclui players da lista).
+        """Busca devedores do banco (exclui players da lista). Roda via run_db.
 
-        Usa o `with _db()` só por consistência com o resto do módulo — esta
-        função já fechava a conexão corretamente (tinha finally próprio).
+        Erro de banco SOBE. Antes devolvia [] — igual a "ninguém devendo" — e a
+        notificação pendente, que já tinha sido apagada da fila, sumia sem
+        aviso nenhum.
         """
-        try:
-            with _db() as conn:
-                c = conn.cursor()
-                exclude_lower = [e.lower() for e in EXCLUDE]
-                if exclude_lower:
-                    placeholders = ','.join(['%s'] * len(exclude_lower))
-                    c.execute(f'''
-                        SELECT player, SUM(amount) as balance
-                        FROM energy_records
-                        WHERE LOWER(player) NOT IN ({placeholders})
-                        GROUP BY player
-                        HAVING SUM(amount) < 0
-                        ORDER BY SUM(amount) ASC
-                    ''', exclude_lower)
-                else:
-                    c.execute('''
-                        SELECT player, SUM(amount) as balance
-                        FROM energy_records
-                        GROUP BY player
-                        HAVING SUM(amount) < 0
-                        ORDER BY SUM(amount) ASC
-                    ''')
-                rows = c.fetchall()
-            return [{'player': r[0], 'debt': abs(r[1])} for r in rows]
-        except Exception as e:
-            print(f'[energy] Erro ao buscar devedores: {e}')
-            return []
+        with _db() as conn:
+            c = conn.cursor()
+            exclude_lower = [e.lower() for e in EXCLUDE]
+            if exclude_lower:
+                placeholders = ','.join(['%s'] * len(exclude_lower))
+                c.execute(f'''
+                    SELECT player, SUM(amount) as balance
+                    FROM energy_records
+                    WHERE LOWER(player) NOT IN ({placeholders})
+                    GROUP BY player
+                    HAVING SUM(amount) < 0
+                    ORDER BY SUM(amount) ASC
+                ''', exclude_lower)
+            else:
+                c.execute('''
+                    SELECT player, SUM(amount) as balance
+                    FROM energy_records
+                    GROUP BY player
+                    HAVING SUM(amount) < 0
+                    ORDER BY SUM(amount) ASC
+                ''')
+            rows = c.fetchall()
+        return [{'player': r[0], 'debt': abs(r[1])} for r in rows]
 
-    async def _send_notifications(self, message_template):
-        """Envia DM para cada devedor com a mensagem customizada."""
+    async def _send_notifications(self, message_template, debtors=None):
+        """Envia DM para cada devedor com a mensagem customizada.
+
+        debtors: lista já lida (check_pending lê ANTES de apagar a pendente).
+        Sem ela, lê aqui — e erro de banco sobe pra rotina que chamou."""
         guild = self._get_guild()
         if not guild:
             print('[energy] Guild não encontrada')
             return 0
 
-        debtors = self._get_debtors()
+        if debtors is None:
+            debtors = await database.run_db(self._get_debtors)
         if not debtors:
             print('[energy] Nenhum devedor')
             return 0
@@ -208,22 +237,16 @@ class EnergyNotifications(commands.Cog):
         if self._in_backoff('check_pending'):
             return
         try:
-            with _db() as conn:
-                c = conn.cursor()
-                c.execute("SELECT value FROM site_config WHERE key='energy_pending_msg'")
-                r = c.fetchone()
+            msg = await database.run_db(_ler_site_config, 'energy_pending_msg')
 
-            if r and r[0]:
-                msg = r[0]
+            if msg:
                 print(f'[energy] Notificação pendente encontrada: {msg[:50]}...')
-
-                # Limpar pendente antes de enviar
-                with _db() as conn2:
-                    c2 = conn2.cursor()
-                    c2.execute("UPDATE site_config SET value='' WHERE key='energy_pending_msg'")
-                    conn2.commit()
-
-                sent = await self._send_notifications(msg)
+                # Devedores ANTES de limpar a pendente: se o banco falhar aqui,
+                # a mensagem fica na fila e sai no próximo ciclo, em vez de
+                # sumir (a ordem antiga apagava primeiro).
+                devedores = await database.run_db(self._get_debtors)
+                await database.run_db(_limpar_site_config, 'energy_pending_msg')
+                sent = await self._send_notifications(msg, devedores)
                 print(f'[energy] Notificação enviada para {sent} devedores')
             self._record_success('check_pending')
         except Exception as e:
@@ -242,23 +265,10 @@ class EnergyNotifications(commands.Cog):
         if self._in_backoff('check_logs'):
             return
         try:
-            with _db() as conn:
-                c = conn.cursor()
-                c.execute('SELECT id, message FROM pending_logs ORDER BY id LIMIT 5')
-                rows = c.fetchall()
-                self._record_success('check_logs')  # query funcionou — tabela existe e DB está OK
-                if not rows:
-                    return
-
-                # Buscar canal de logs
-                c.execute("SELECT value FROM guild_config WHERE key='channel_logs'")
-                ch_row = c.fetchone()
-                log_channel_id = ch_row[0] if ch_row else ''
-
-                # Deletar logs processados
-                for row in rows:
-                    c.execute('DELETE FROM pending_logs WHERE id=%s', (row[0],))
-                conn.commit()
+            rows, log_channel_id = await database.run_db(_tirar_logs_pendentes)
+            self._record_success('check_logs')  # query funcionou — tabela existe e DB está OK
+            if not rows:
+                return
 
             if not log_channel_id:
                 print('[logs] Canal de logs não configurado')
@@ -296,23 +306,17 @@ class EnergyNotifications(commands.Cog):
         if self._in_backoff('check_broadcast'):
             return
         try:
-            with _db() as conn:
-                c = conn.cursor()
-                c.execute("SELECT value FROM site_config WHERE key='broadcast_pending'")
-                r = c.fetchone()
+            msg = await database.run_db(_ler_site_config, 'broadcast_pending')
             self._record_success('check_broadcast')
 
-            if not r or not r[0]:
+            if not msg:
                 return
 
-            msg = r[0]
             print(f'[broadcast] Mensagem pendente encontrada: {msg[:50]}...')
 
-            # Limpar pendente ANTES de enviar
-            with _db() as conn2:
-                c2 = conn2.cursor()
-                c2.execute("UPDATE site_config SET value='' WHERE key='broadcast_pending'")
-                conn2.commit()
+            # Limpar pendente ANTES de enviar: broadcast é pra TODOS, e mandar
+            # duas vezes (se o ciclo seguinte pegasse a mesma) é pior que falhar.
+            await database.run_db(_limpar_site_config, 'broadcast_pending')
 
             # Enviar DM para TODOS os membros do servidor
             guild = self._get_guild()
@@ -343,12 +347,9 @@ class EnergyNotifications(commands.Cog):
 
             # Posta resultado no canal de logs
             try:
-                with _db() as conn3:
-                    c3 = conn3.cursor()
-                    c3.execute("SELECT value FROM guild_config WHERE key='channel_logs'")
-                    ch = c3.fetchone()
-                if ch and ch[0]:
-                    channel = guild.get_channel(int(ch[0]))
+                ch = await database.run_db(_canal_de_logs)
+                if ch:
+                    channel = guild.get_channel(int(ch))
                     if channel:
                         await channel.send(
                             f'**Broadcast enviado**\nMensagem: {msg[:200]}\n'
@@ -385,17 +386,13 @@ class EnergyNotifications(commands.Cog):
                 return
             week_key = target.strftime('%Y-%m-%d')
 
-            with _db() as conn:
-                c = conn.cursor()
-                c.execute("SELECT value FROM site_config WHERE key='energy_weekly_enabled'")
-                r = c.fetchone()
-                c.execute("SELECT value FROM site_config WHERE key='energy_weekly_last_sent'")
-                last_sent = c.fetchone()
+            ligado = await database.run_db(_ler_site_config, 'energy_weekly_enabled')
+            last_sent = await database.run_db(_ler_site_config, 'energy_weekly_last_sent')
             self._record_success('weekly_check')
 
-            if not r or r[0] != '1':
+            if ligado != '1':
                 return
-            if last_sent and last_sent[0] == week_key:
+            if last_sent == week_key:
                 return  # já enviado essa semana
 
             msg = (
@@ -406,11 +403,7 @@ class EnergyNotifications(commands.Cog):
             )
             sent = await self._send_notifications(msg)
 
-            with _db() as conn2:
-                c2 = conn2.cursor()
-                c2.execute("""INSERT INTO site_config (key, value) VALUES ('energy_weekly_last_sent', %s)
-                              ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""", (week_key,))
-                conn2.commit()
+            await database.run_db(_gravar_site_config, 'energy_weekly_last_sent', week_key)
 
             print(f'[energy] Cobrança semanal enviada para {sent} devedores')
         except Exception as e:

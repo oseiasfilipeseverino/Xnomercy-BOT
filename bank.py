@@ -107,7 +107,11 @@ def _resolve_members(guild: discord.Guild, text: str):
     tenha um registro de saldo no banco (senão qualquer ID errado passaria) —
     necessário pra dar pra confiscar/zerar saldo de quem saiu com saldo positivo.
     Retorna (targets, invalid) — invalid tem os tokens que não bateram com
-    ninguém (nem no servidor, nem no banco)."""
+    ninguém (nem no servidor, nem no banco).
+
+    Consulta o banco (get_player): chamar SEMPRE via database.run_db. Chamada
+    direta travava o loop do Discord durante a ida ao banco — e esses comandos
+    ainda nem tinham respondido a interação, que expira em 3s."""
     ids, seen = [], set()
     for m1, m2 in _ID_RE.findall(text):
         uid = m1 or m2
@@ -282,11 +286,12 @@ class BankCog(commands.Cog):
             + (f' Motivo: {motivo}' if motivo else ''))
 
         try:
+            saldo_dest = await database.run_db(fmt_saldo, str(usuario.id))
             dm = discord.Embed(
                 title='🔄 Você recebeu uma transferência!',
                 description=(f'**{remetente.display_name}** te transferiu **{fmt(valor)}**.\n'
                              + (f'Motivo: {motivo}\n' if motivo else '')
-                             + f'Seu saldo atual: **{fmt_saldo(str(usuario.id))}**'),
+                             + f'Seu saldo atual: **{saldo_dest}**'),
                 color=discord.Color.blurple()
             )
             await usuario.send(embed=dm)
@@ -308,9 +313,12 @@ class BankCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         # 1. Menção ou ID cru resolve direto (inclusive de quem saiu, via banco).
-        alvos, _ = _resolve_members(interaction.guild, usuario)
+        alvos, _ = await database.run_db(_resolve_members, interaction.guild, usuario)
         if alvos:
-            did, nome = alvos[0].id, alvos[0].name
+            # display_name: _Target nao tem .name — era AttributeError em toda
+            # consulta por mencao ou ID (24/09, 2x no log). So o caminho por NOME
+            # funcionava, porque nao passa por aqui.
+            did, nome = alvos[0].id, alvos[0].display_name
         else:
             # 2. Senão é nome. Busca no banco, que guarda quem já saiu.
             achados = await database.run_db(database.buscar_jogador_por_nome, usuario)
@@ -495,7 +503,7 @@ class BankCog(commands.Cog):
         if valor is None:
             return
 
-        members, invalid = _resolve_members(interaction.guild, usuarios)
+        members, invalid = await database.run_db(_resolve_members, interaction.guild, usuarios)
         if not members:
             await interaction.response.send_message(
                 '❌ Nenhum player válido encontrado. Mencione (@player) ou cole o ID de quem vai receber.',
@@ -579,7 +587,7 @@ class BankCog(commands.Cog):
         if valor is None:
             return
 
-        members, invalid = _resolve_members(interaction.guild, usuarios)
+        members, invalid = await database.run_db(_resolve_members, interaction.guild, usuarios)
         if not members:
             await interaction.response.send_message(
                 '❌ Nenhum player válido encontrado. Mencione (@player) ou cole o ID de quem está sendo pago.',
@@ -662,7 +670,7 @@ class BankCog(commands.Cog):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
 
-        members, invalid = _resolve_members(interaction.guild, usuarios)
+        members, invalid = await database.run_db(_resolve_members, interaction.guild, usuarios)
         if not members:
             await interaction.response.send_message(
                 '❌ Nenhum player válido encontrado. Mencione (@player) ou cole o ID de quem vai ter o saldo zerado.',

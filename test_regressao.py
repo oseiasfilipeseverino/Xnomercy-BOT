@@ -765,8 +765,10 @@ secao('todo handler que consulta o banco tem que deferir')
 # antes de responder estoura isso com o banco carregado — e a pessoa fica no
 # "..." pra sempre, sem erro nenhum. Foi o sintoma que a guild reportou.
 #
-# Unica excecao: on_error, que trata interacao possivelmente JA respondida e
-# resolve isso com is_done() — deferir ali quebraria o caso comum.
+# Excecoes: on_error, que trata interacao possivelmente JA respondida e
+# resolve isso com is_done() — deferir ali quebraria o caso comum; e callback
+# de AUTOCOMPLETE (*_autocomplete), que o Discord nao deixa deferir — a
+# resposta e' a propria lista de sugestoes, e a consulta tem que ser rapida.
 _sem_defer = []
 for _p in sorted(_pl.Path('.').glob('*.py')):
     if _p.name.startswith(('test_', '_')):
@@ -776,7 +778,7 @@ for _p in sorted(_pl.Path('.').glob('*.py')):
             continue
         if 'interaction' not in [a.arg for a in _fn.args.args]:
             continue
-        if _fn.name == 'on_error':
+        if _fn.name == 'on_error' or _fn.name.endswith('_autocomplete'):
             continue
         _t = _ast.unparse(_fn)
         if 'run_db' in _t and 'defer(' not in _t:

@@ -17,6 +17,12 @@ def fmt(v):
     return f'{v:,.0f}'
 
 
+def _ou_indisp(v, formato=str):
+    """Estatística que não deu pra coletar aparece como tal — um 0 no relatório
+    parece dado real ("a guild ficou parada a semana toda") e ninguém desconfia."""
+    return 'indisponível' if v is None else formato(v)
+
+
 class WeeklyReportCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -28,64 +34,76 @@ class WeeklyReportCog(commands.Cog):
     def _get_guild(self):
         return config.get_home_guild(self.bot)
 
+    # As colunas de data do banco são TEXT (DEFAULT CURRENT_TIMESTAMP), e
+    # `created_at > NOW() - INTERVAL` comparava texto com data: o Postgres
+    # recusa ("operator does not exist: text > timestamp with time zone").
+    # Como tudo rodava num try só, a PRIMEIRA consulta com data derrubava as
+    # outras — e o relatório de domingo saía com "0 eventos, 0 splits, 0
+    # transações, 0 prata movimentada" (log de 20/09). O CASE garante a ordem:
+    # só converte o que tem cara de data.
+    @staticmethod
+    def _data(col):
+        return (f"(CASE WHEN {col} ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}' "
+                f"THEN {col}::timestamptz END)")
+
+    def _consultas(self):
+        semana = "NOW() - INTERVAL '7 days'"
+        d = self._data
+        return [
+            ('saldos', 'SELECT COUNT(*), COALESCE(SUM(balance),0) FROM players WHERE balance > 0'),
+            ('top_balances', 'SELECT username, balance FROM players WHERE balance > 0 '
+                             'ORDER BY balance DESC LIMIT 5'),
+            ('events_week', f'SELECT COUNT(*) FROM scheduled_events WHERE {d("created_at")} > {semana}'),
+            ('splits_week', f"SELECT COUNT(*) FROM scheduled_events WHERE status = 'split_done' "
+                            f"AND {d('created_at')} > {semana}"),
+            ('top_participants', f'SELECT username, COUNT(DISTINCT scheduled_event_id) AS events '
+                                 f'FROM slot_assignments WHERE {d("assigned_at")} > {semana} '
+                                 f'GROUP BY username ORDER BY events DESC LIMIT 5'),
+            ('top_debtors', "SELECT player, SUM(amount) AS balance FROM energy_records "
+                            "WHERE LOWER(player) != 'gayzaoviadao' GROUP BY player "
+                            "HAVING SUM(amount) < 0 ORDER BY SUM(amount) ASC LIMIT 5"),
+            ('transacoes', f'SELECT COUNT(*), COALESCE(SUM(ABS(amount)),0) FROM transactions '
+                           f'WHERE {d("created_at")} > {semana}'),
+        ]
+
     def _get_stats(self):
-        """Coleta estatísticas da semana."""
+        """Coleta estatísticas da semana. Roda no executor do banco (run_db).
+
+        Cada estatística isolada: a que falhar vira None e o relatório mostra
+        "indisponível" nela — nunca um zero que parece dado real."""
         stats = {}
         conn = database.get_connection()
         try:
-            c = conn.cursor()
-
-            # Total de membros com saldo
-            c.execute('SELECT COUNT(*), COALESCE(SUM(balance),0) FROM players WHERE balance > 0')
-            r = c.fetchone()
-            stats['members_with_balance'] = r[0] if r else 0
-            stats['total_balance'] = float(r[1]) if r else 0
-
-            # Top 5 saldos
-            c.execute('SELECT username, balance FROM players WHERE balance > 0 ORDER BY balance DESC LIMIT 5')
-            stats['top_balances'] = [{'name': r[0], 'balance': float(r[1])} for r in c.fetchall()]
-
-            # Eventos da semana (últimos 7 dias)
-            c.execute("""SELECT COUNT(*) FROM scheduled_events
-                        WHERE created_at > NOW() - INTERVAL '7 days'""")
-            r = c.fetchone()
-            stats['events_week'] = r[0] if r else 0
-
-            # Eventos com split feito
-            c.execute("""SELECT COUNT(*) FROM scheduled_events
-                        WHERE status = 'split_done'
-                        AND created_at > NOW() - INTERVAL '7 days'""")
-            r = c.fetchone()
-            stats['splits_week'] = r[0] if r else 0
-
-            # Top participantes da semana
-            c.execute("""SELECT username, COUNT(DISTINCT scheduled_event_id) as events
-                        FROM slot_assignments
-                        WHERE assigned_at > NOW() - INTERVAL '7 days'
-                        GROUP BY username
-                        ORDER BY events DESC LIMIT 5""")
-            stats['top_participants'] = [{'name': r[0], 'count': r[1]} for r in c.fetchall()]
-
-            # Devedores de energia
-            c.execute("""SELECT player, SUM(amount) as balance
-                        FROM energy_records
-                        WHERE LOWER(player) != 'gayzaoviadao'
-                        GROUP BY player HAVING SUM(amount) < 0
-                        ORDER BY SUM(amount) ASC LIMIT 5""")
-            stats['top_debtors'] = [{'name': r[0], 'debt': abs(r[1])} for r in c.fetchall()]
-
-            # Total de transações da semana
-            c.execute("""SELECT COUNT(*), COALESCE(SUM(ABS(amount)),0) FROM transactions
-                        WHERE created_at > NOW() - INTERVAL '7 days'""")
-            r = c.fetchone()
-            stats['transactions_week'] = r[0] if r else 0
-            stats['silver_moved'] = float(r[1]) if r else 0
-
-        except Exception as e:
-            print(f'[weekly_report] Erro ao coletar stats: {e}')
+            for nome, sql in self._consultas():
+                c = conn.cursor()
+                try:
+                    c.execute(sql)
+                    linhas = c.fetchall()
+                except Exception as e:
+                    print(f'[weekly_report] {nome} indisponivel: {e}')
+                    try:
+                        conn.rollback()   # transação abortada recusa a próxima consulta
+                    except Exception:
+                        pass
+                    linhas = None
+                if nome == 'saldos':
+                    stats['members_with_balance'] = linhas[0][0] if linhas else None
+                    stats['total_balance'] = float(linhas[0][1]) if linhas else None
+                elif nome == 'transacoes':
+                    stats['transactions_week'] = linhas[0][0] if linhas else None
+                    stats['silver_moved'] = float(linhas[0][1]) if linhas else None
+                elif linhas is None:
+                    stats[nome] = None
+                elif nome in ('events_week', 'splits_week'):
+                    stats[nome] = linhas[0][0]
+                elif nome == 'top_balances':
+                    stats[nome] = [{'name': r[0], 'balance': float(r[1])} for r in linhas]
+                elif nome == 'top_participants':
+                    stats[nome] = [{'name': r[0], 'count': r[1]} for r in linhas]
+                elif nome == 'top_debtors':
+                    stats[nome] = [{'name': r[0], 'debt': abs(r[1])} for r in linhas]
         finally:
             database.release(conn)
-
         return stats
 
     def _build_report(self, stats):
@@ -101,14 +119,14 @@ class WeeklyReportCog(commands.Cog):
         )
 
         # Eventos
-        events_text = f'Eventos criados: **{stats.get("events_week", 0)}**\n'
-        events_text += f'Splits realizados: **{stats.get("splits_week", 0)}**'
+        events_text = f'Eventos criados: **{_ou_indisp(stats.get("events_week"))}**\n'
+        events_text += f'Splits realizados: **{_ou_indisp(stats.get("splits_week"))}**'
         embed.add_field(name='Eventos', value=events_text, inline=True)
 
         # Financeiro
-        fin_text = f'Prata total no banco: **{fmt(stats.get("total_balance", 0))}**\n'
-        fin_text += f'Transacoes: **{stats.get("transactions_week", 0)}**\n'
-        fin_text += f'Prata movimentada: **{fmt(stats.get("silver_moved", 0))}**'
+        fin_text = f'Prata total no banco: **{_ou_indisp(stats.get("total_balance"), fmt)}**\n'
+        fin_text += f'Transacoes: **{_ou_indisp(stats.get("transactions_week"))}**\n'
+        fin_text += f'Prata movimentada: **{_ou_indisp(stats.get("silver_moved"), fmt)}**'
         embed.add_field(name='Financeiro', value=fin_text, inline=True)
 
         embed.add_field(name='\u200b', value='\u200b', inline=True)
@@ -121,6 +139,8 @@ class WeeklyReportCog(commands.Cog):
                 for i, p in enumerate(stats['top_participants'][:5])
             ])
             embed.add_field(name='Top Participacao', value=tp_text, inline=True)
+        elif stats.get('top_participants') is None:
+            embed.add_field(name='Top Participacao', value='indisponível', inline=True)
         else:
             embed.add_field(name='Top Participacao', value='Nenhum evento esta semana', inline=True)
 
@@ -131,6 +151,8 @@ class WeeklyReportCog(commands.Cog):
                 for i, b in enumerate(stats['top_balances'][:5])
             ])
             embed.add_field(name='Top Saldos', value=tb_text, inline=True)
+        elif stats.get('top_balances') is None:
+            embed.add_field(name='Top Saldos', value='indisponível', inline=True)
         else:
             embed.add_field(name='Top Saldos', value='Nenhum saldo registrado', inline=True)
 
@@ -179,7 +201,7 @@ class WeeklyReportCog(commands.Cog):
             if not channel:
                 return
 
-            stats = self._get_stats()
+            stats = await database.run_db(self._get_stats)
             embed = self._build_report(stats)
             await channel.send(embed=embed)
             await database.run_db(database.set_config, 'weekly_report_last_sent', week_key)

@@ -156,7 +156,9 @@ class MarketCog(commands.Cog):
     async def _item_autocomplete(self, interaction: discord.Interaction, current: str):
         if len(current) < 2:
             return []
-        rows = _search_items(current, limit=20)
+        # run_db: o autocomplete dispara a CADA TECLA. Consulta direta aqui
+        # parava o bot inteiro (todo mundo, todo comando) a cada letra digitada.
+        rows = await database.run_db(_search_items, current, limit=20)
         seen = set()
         choices = []
         for uid, name_pt, tier in rows:
@@ -185,18 +187,18 @@ class MarketCog(commands.Cog):
         # Se o usuário não escolheu uma sugestão (digitou livre), tenta achar o
         # melhor match agora — sem isso o comando falhava silenciosamente pra
         # qualquer entrada que não fosse exatamente um unique_name.
-        rows = _search_items(item, limit=1)
+        rows = await database.run_db(_search_items, item, limit=1)
         if not rows:
             await interaction.followup.send(f'❌ Nenhum item encontrado pra "{item}".')
             return
         uid, name_pt, tier = rows[0]
 
-        prices = _get_prices(uid)
+        prices = await database.run_db(_get_prices, uid)
         stale = False
         if not prices:
             # Ciclo do bot atrasou ou item de pouco giro — preço de até 24h ainda
             # é referência melhor que "sem preço" (o rodapé avisa que é antigo).
-            prices = _get_prices(uid, max_age_minutes=1440)
+            prices = await database.run_db(_get_prices, uid, max_age_minutes=1440)
             stale = bool(prices)
         if not prices:
             await interaction.followup.send(
@@ -262,29 +264,32 @@ class MarketCog(commands.Cog):
                             direcao: app_commands.Choice[str],
                             cidade: app_commands.Choice[str] = None,
                             qualidade: app_commands.Choice[int] = None):
-        rows = _search_items(item, limit=1)
+        # defer ANTES do banco: o Discord desiste da interacao em 3s, e sao
+        # duas consultas aqui (busca do item + criacao do alerta).
+        await interaction.response.defer(ephemeral=True)
+        rows = await database.run_db(_search_items, item, limit=1)
         if not rows:
-            await interaction.response.send_message(f'❌ Nenhum item encontrado pra "{item}".', ephemeral=True)
+            await interaction.followup.send(f'❌ Nenhum item encontrado pra "{item}".', ephemeral=True)
             return
         uid, name_pt, tier = rows[0]
         quality = qualidade.value if qualidade else 1
         city = cidade.value if cidade else None
 
-        alert_id = _create_alert(str(interaction.user.id), uid, quality, city, direcao.value, preco)
+        alert_id = await database.run_db(_create_alert, str(interaction.user.id), uid, quality, city, direcao.value, preco)
         if alert_id == 'limite':
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f'❌ Você já tem **{MAX_ALERTS_PER_USER} alertas ativos** (o máximo). '
                 f'Remova algum com `/remover_alerta` antes de criar outro — veja a lista '
                 f'em `/meus_alertas`.', ephemeral=True)
             return
         if alert_id is None:
-            await interaction.response.send_message('❌ Erro ao criar o alerta. Tente de novo.', ephemeral=True)
+            await interaction.followup.send('❌ Erro ao criar o alerta. Tente de novo.', ephemeral=True)
             return
 
         city_txt = f' em **{cidade.name}**' if cidade else ' em qualquer cidade'
         qual_txt = QUAL_LABELS.get(quality, 'Normal')
         cmp_txt = 'cair abaixo de' if direcao.value == 'below' else 'subir acima de'
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f'🔔 Alerta #{alert_id} criado: aviso por DM quando **{name_pt}** (T{tier}, {qual_txt}) '
             f'{cmp_txt} **{fmt(preco)}**{city_txt}.\nVeja seus alertas com `/meus_alertas`.',
             ephemeral=True
@@ -295,9 +300,10 @@ class MarketCog(commands.Cog):
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @app_commands.allowed_installs(guilds=True, users=True)
     async def meus_alertas(self, interaction: discord.Interaction):
-        alerts = _get_user_alerts(str(interaction.user.id))
+        await interaction.response.defer(ephemeral=True)
+        alerts = await database.run_db(_get_user_alerts, str(interaction.user.id))
         if not alerts:
-            await interaction.response.send_message('Você não tem alertas ativos. Crie um com `/alerta_preco`.', ephemeral=True)
+            await interaction.followup.send('Você não tem alertas ativos. Crie um com `/alerta_preco`.', ephemeral=True)
             return
         lines = []
         for alert_id, item_id, name_pt, quality, city, direction, target_price in alerts:
@@ -308,7 +314,7 @@ class MarketCog(commands.Cog):
             lines.append(f'`#{alert_id}` **{name}** ({qual_txt}) {cmp_txt} **{fmt(target_price)}** — {city_txt}')
         embed = discord.Embed(title='🔔 Meus Alertas de Preço', description='\n'.join(lines), color=discord.Color.gold())
         embed.set_footer(text='Remova um alerta com /remover_alerta id:<número>')
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ── /remover_alerta ────────────────────────────────────────────────────────
     @app_commands.command(name='remover_alerta', description='Remove um dos seus alertas de preço.')
@@ -316,11 +322,12 @@ class MarketCog(commands.Cog):
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @app_commands.allowed_installs(guilds=True, users=True)
     async def remover_alerta(self, interaction: discord.Interaction, id: int):
-        ok = _remove_alert(str(interaction.user.id), id)
+        await interaction.response.defer(ephemeral=True)
+        ok = await database.run_db(_remove_alert, str(interaction.user.id), id)
         if ok:
-            await interaction.response.send_message(f'✅ Alerta #{id} removido.', ephemeral=True)
+            await interaction.followup.send(f'✅ Alerta #{id} removido.', ephemeral=True)
         else:
-            await interaction.response.send_message(f'❌ Alerta #{id} não encontrado (ou não é seu).', ephemeral=True)
+            await interaction.followup.send(f'❌ Alerta #{id} não encontrado (ou não é seu).', ephemeral=True)
 
 
 async def setup(bot):

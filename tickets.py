@@ -101,7 +101,7 @@ class ReopenTicketView(LoggedView):
             # Volta pra categoria original do tipo (mesmo helper da criação). Se
             # não estiver configurada, fica onde está — melhor que sumir.
             tipo = await database.run_db(database.get_ticket_type_by_channel, str(interaction.channel.id))
-            categoria = (get_ticket_category(guild, tipo) if tipo else None) \
+            categoria = ((await database.run_db(get_ticket_category, guild, tipo)) if tipo else None) \
                 or interaction.channel.category
 
             # A categoria de tickets ABERTOS também bate os 50 — foi o
@@ -300,7 +300,7 @@ class TicketButton(discord.ui.Button):
             return
 
         # Categoria do ticket (mesma onde o painel foi postado)
-        category = get_ticket_category(guild, self.ticket_type)
+        category = await database.run_db(get_ticket_category, guild, self.ticket_type)
         if not category:
             # Fallback: mesma categoria do canal atual
             category = interaction.channel.category

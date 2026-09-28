@@ -4,6 +4,7 @@ bank.py — Banco da guild: saldos, ranking, ajustes, bônus
 
 import asyncio
 import re
+from datetime import datetime, timedelta, timezone
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -16,6 +17,25 @@ from discord_utils import (log_channel, add_lista, cortar, enviar_embed,
 
 def fmt(v: float) -> str:
     return f'{v:,.0f} prata'
+
+
+BRT = timezone(timedelta(hours=-3))
+
+
+def hora_brt(valor) -> str:
+    """'2026-09-27 22:46:19.67+00' (UTC, como o banco grava) -> '27/09/26 19:46'.
+
+    O extrato mostrava o texto cru fatiado — hora UTC, 3h adiantada. Quem
+    conferia um deposito das 21h via "00:xx" do dia seguinte."""
+    if not valor:
+        return ''
+    try:
+        d = datetime.fromisoformat(str(valor).replace('Z', '+00:00'))
+    except ValueError:
+        return str(valor)[:16].replace('T', ' ')
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)      # o banco grava em UTC
+    return d.astimezone(BRT).strftime('%d/%m/%y %H:%M')
 
 
 def fmt_saldo(discord_id) -> str:
@@ -214,7 +234,7 @@ class BankCog(commands.Cog):
             lines = []
             for t in txs:
                 sign = '+' if t['amount'] >= 0 else ''
-                data = (t['created_at'] or '')[:16].replace('T', ' ')
+                data = hora_brt(t['created_at'])
                 desc = t['description'] or t['type']
                 lines.append(f"`{data}` **{sign}{fmt(t['amount'])}** — {desc}")
             embed.description = '\n'.join(lines)
@@ -363,7 +383,7 @@ class BankCog(commands.Cog):
             lines = []
             for t in txs:
                 sign = '+' if t['amount'] >= 0 else ''
-                data = (t['created_at'] or '')[:16].replace('T', ' ')
+                data = hora_brt(t['created_at'])
                 desc = t['description'] or t['type']
                 by = f" (por {t['created_by']})" if t['created_by'] else ''
                 lines.append(f"`{data}` **{sign}{fmt(t['amount'])}** — {desc}{by}")
@@ -830,7 +850,7 @@ class BankCog(commands.Cog):
                 # split que não foi aprovado aparece marcado — senão some no meio
                 # dos outros e a soma do dia não bate com o que foi pago
                 marca = '' if s['status'] == 'approved' else f' ⚠️ {s["status"]}'
-                hora = str(s['quando'])[11:16]
+                hora = s['quando'].strftime('%H:%M') if s['quando'] else '--:--'
                 linhas.append(
                     f'**{hora}** · {cortar(s["titulo"], 40)}{marca}\n'
                     f'`{s["players"]:2}x {fmt(s["por_player"])}` — loot {fmt(s["loot"])}'

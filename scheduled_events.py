@@ -115,6 +115,7 @@ def build_embed(event, assignments):
 class ScheduledEventsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self._paineis_sumidos = set()   # ver _update_embed
         self.post_pending_task.start()
         self.notification_task.start()
         self.reopen_pending_task.start()
@@ -678,10 +679,22 @@ class ScheduledEventsCog(commands.Cog):
             if not channel:
                 return
 
-            msg = await channel.fetch_message(int(event["message_id"]))
+            try:
+                msg = await channel.fetch_message(int(event["message_id"]))
+            except discord.NotFound:
+                # Mensagem do painel apagada à mão no Discord (era como se limpava
+                # evento duplicado). O tópico segue vivo e as inscrições valem, mas
+                # não há mais painel pra editar. Antes: um "404 Unknown Message"
+                # anônimo a cada inscrição, sem dizer de qual evento.
+                if event_id not in self._paineis_sumidos:
+                    self._paineis_sumidos.add(event_id)
+                    print(f"[scheduled_events] evento {event_id}: a mensagem do painel "
+                          "foi apagada no Discord — inscrições continuam valendo, "
+                          "mas o painel não atualiza mais")
+                return
             await msg.edit(embed=embed)
         except Exception as e:
-            print("[scheduled_events] Erro update embed: " + str(e))
+            print(f"[scheduled_events] Erro update embed (evento {event_id}): {e}")
 
     # ── Notificações via DM ────────────────────────────────────────────────────
     @tasks.loop(minutes=1)
@@ -761,26 +774,35 @@ class ScheduledEventsCog(commands.Cog):
         except Exception as e:
             print("[scheduled_events] Erro notify_dm: " + str(e))
 
-    @commands.Cog.listener()
-    async def on_ready(self):
+    async def cog_load(self):
         # Destrava eventos que ficaram num estado intermediário porque o bot caiu
         # no meio do trabalho. 'posting' e 'reopening' são marcados ANTES da
         # chamada ao Discord (pra não processar duas vezes) — se o processo morre
         # nesse intervalo, ninguém mais pega o evento: as filas procuram
-        # 'pending_post' e 'pending_reopen'. Devolver pra fila no boot é seguro
-        # porque as duas operações são idempotentes: repostar só acontece se o
-        # post não chegou a salvar thread_id, e a releitura do tópico usa
-        # assign_slot, que não duplica inscrição.
+        # 'pending_post' e 'pending_reopen'.
+        #
+        # AQUI e não no on_ready: o cog carrega uma vez por processo, antes de
+        # conectar, e as filas só começam quando o bot fica pronto (before_loop).
+        # O on_ready dispara de novo a cada reconexão e junto com as filas —
+        # destravar ali podia devolver pra 'pending_post' um evento que a fila
+        # estava postando naquele instante, e ele saía duplicado.
+        # Só banco, sem Discord: não precisa esperar a conexão.
         try:
             destravados = await database.run_db(database.requeue_stuck_events)
             if destravados:
                 print("[scheduled_events] " + str(destravados)
                       + " evento(s) destravado(s) de posting/reopening")
         except Exception as e:
+            # nunca derrubar o carregamento do cog por isso
             print("[scheduled_events] erro ao destravar eventos: " + repr(e))
 
-        events = await database.run_db(database.get_active_scheduled_events)
-        print("[scheduled_events] " + str(len(events)) + " evento(s) ativo(s)")
+    @commands.Cog.listener()
+    async def on_ready(self):
+        try:
+            events = await database.run_db(database.get_active_scheduled_events)
+            print("[scheduled_events] " + str(len(events)) + " evento(s) ativo(s)")
+        except Exception as e:
+            print("[scheduled_events] erro ao contar eventos ativos: " + repr(e))
 
 
 async def setup(bot):

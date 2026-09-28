@@ -1374,27 +1374,44 @@ def mark_pending_split_posted(split_id, message_id):
     finally:
         release(conn)
 
+# Hora de Brasilia a partir do que o banco guarda — que e' UTC nos dois tipos
+# de coluna desta base:
+# - TEXT do DEFAULT CURRENT_TIMESTAMP ('2026-09-27 22:46:19.67+00'): precisa
+#   de ::timestamptz. O ::timestamp joga fora o "+00" e o AT TIME ZONE passa a
+#   ler a hora UTC como se fosse de Brasilia, adiantando 6h.
+# - TIMESTAMP sem fuso do DEFAULT NOW() (banco em UTC): precisa dizer que e'
+#   UTC antes de converter, pelo mesmo motivo.
+# Ate' 27/09 os dois estavam errados no /extrato_do_dia: das 18h a meia-noite
+# (o horario dos eventos) tudo caia no dia seguinte, e a hora saia 6h adiantada.
+def _hora_brt_texto(col):
+    return (f"(CASE WHEN {col} ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}' "
+            f"THEN {col}::timestamptz END) AT TIME ZONE 'America/Sao_Paulo'")
+
+
+def _hora_brt_utc(col):
+    return f"({col} AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')"
+
+
 def get_extrato_do_dia(dias_atras=0):
     """Splits e movimentacao de prata de um dia, no horario de Brasilia.
 
     Nasceu de "quero o extrato dos eventos depositados hoje" — que ate' entao
-    exigia consultar o banco na mao. As datas ficam como TEXT nesta base, dai o
-    NULLIF antes do cast: campo vazio nao vira timestamp e estoura a query.
+    exigia consultar o banco na mao. Ver _hora_brt_texto sobre o fuso.
 
-    Devolve (splits, movimentacao).
+    Devolve (splits, movimentacao). 'quando' de cada split ja' vem em Brasilia.
     """
     conn = get_connection()
     try:
         c = conn.cursor()
         alvo = f"(NOW() AT TIME ZONE 'America/Sao_Paulo')::date - {int(dias_atras)}"
+        quando = _hora_brt_utc('p.submitted_at')
         c.execute(f"""
             SELECT p.id, e.title, p.total_loot, p.repair_cost, p.guild_tax_pct,
                    p.vendor_tax_pct, p.per_player, p.num_players, p.submitted_by,
-                   p.reviewed_by, p.status,
-                   (p.submitted_at AT TIME ZONE 'America/Sao_Paulo')
+                   p.reviewed_by, p.status, {quando}
             FROM pending_splits p
             LEFT JOIN scheduled_events e ON e.id = p.event_id
-            WHERE (p.submitted_at AT TIME ZONE 'America/Sao_Paulo')::date = {alvo}
+            WHERE ({quando})::date = {alvo}
             ORDER BY p.submitted_at""")
         splits = [{'id': r[0], 'titulo': r[1] or f'evento {r[0]}', 'loot': r[2],
                    'reparo': r[3] or 0, 'taxa_guild': r[4], 'taxa_vendedor': r[5],
@@ -1405,7 +1422,7 @@ def get_extrato_do_dia(dias_atras=0):
         c.execute(f"""
             SELECT type, COUNT(*), COUNT(DISTINCT discord_id), SUM(amount)
             FROM transactions
-            WHERE (NULLIF(created_at,'')::timestamp AT TIME ZONE 'America/Sao_Paulo')::date = {alvo}
+            WHERE ({_hora_brt_texto('created_at')})::date = {alvo}
             GROUP BY type ORDER BY SUM(amount) DESC""")
         mov = [{'tipo': r[0], 'lancamentos': r[1], 'pessoas': r[2], 'total': r[3]}
                for r in c.fetchall()]

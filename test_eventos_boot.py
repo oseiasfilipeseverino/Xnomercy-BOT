@@ -137,6 +137,15 @@ finally:
 if not os.environ.get('DATABASE_URL'):
     print('\n  (sem DATABASE_URL: parte do banco pulada)')
 else:
+    print('\n-- conexoes com TCP_NODELAY (ver database.sem_nagle)')
+    import socket
+    import price_updater
+    for nome, fabrica in (('database', database.get_connection), ('price_updater', price_updater._get_conn)):
+        cx = fabrica()
+        ligado = cx._usock.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY)
+        cx.close()
+        checar(bool(ligado), f'{nome}: conexao nova com TCP_NODELAY ({ligado})')
+
     print('\n-- requeue_stuck_events no Postgres (tabela temporaria)')
     conn = database.get_connection()
     c = conn.cursor()

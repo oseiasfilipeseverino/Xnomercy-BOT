@@ -16,12 +16,19 @@ from urllib.parse import urlparse
 
 # ── Conexão direta ao PostgreSQL (mesma lógica do database.py do bot) ─────────
 def _get_conn():
+    import socket
     url = urlparse(os.getenv('DATABASE_URL'))
-    return pg8000.dbapi.connect(
+    conn = pg8000.dbapi.connect(
         host=url.hostname, port=url.port or 5432,
         database=url.path[1:], user=url.username,
         password=url.password, ssl_context=True, timeout=15
     )
+    # TCP_NODELAY: ver database.sem_nagle (este modulo nao importa database)
+    try:
+        conn._usock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except Exception as e:
+        print(f'[price_updater] TCP_NODELAY: {e!r}')
+    return conn
 
 
 @contextlib.contextmanager

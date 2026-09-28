@@ -5,7 +5,7 @@ OTIMIZADO: todas as funcoes protegidas contra vazamento de conexao
 
 import asyncio
 import functools
-import os, threading
+import os, socket, threading
 from concurrent.futures import ThreadPoolExecutor
 import pg8000.dbapi
 from urllib.parse import urlparse
@@ -82,11 +82,23 @@ def get_connection():
             except Exception: pass
 
     url = urlparse(DATABASE_URL)
-    return pg8000.dbapi.connect(
+    return sem_nagle(pg8000.dbapi.connect(
         host=url.hostname, port=url.port or 5432,
         database=url.path[1:], user=url.username,
         password=url.password, ssl_context=True, timeout=15
-    )
+    ))
+
+
+def sem_nagle(conn):
+    """Liga TCP_NODELAY — o pg8000 nao liga, o libpq (driver oficial) liga
+    sempre. No site, pelo proxy publico, a falta dele custava ~800ms por ida ao
+    banco (home de 810ms caiu pra 12ms em 28/09). Aqui a rede e' privada e o
+    efeito deve ser menor; fica pelo mesmo motivo do libpq."""
+    try:
+        conn._usock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except Exception as e:
+        print(f'[DB] TCP_NODELAY: {e!r}')
+    return conn
 
 def release(conn):
     if conn is None: return

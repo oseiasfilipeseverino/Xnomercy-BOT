@@ -76,12 +76,20 @@ def _init_table():
         # (fillfactor 80), a linha nova cabe na mesma página sem tocar índice.
         # Confere antes de mexer: DDL tranca a tabela mesmo quando não há nada
         # a fazer (ver test_migracao).
-        c.execute("""SELECT to_regclass('idx_pc_upd') IS NOT NULL,
-                            COALESCE('fillfactor=80' = ANY(reloptions), FALSE)
-                     FROM pg_class WHERE oid = 'prices_cache'::regclass""")
-        tem_idx_upd, ja_tem_folga = c.fetchone()
-        if tem_idx_upd:
-            c.execute('DROP INDEX IF EXISTS idx_pc_upd')
+        #
+        # O índice é procurado PELA TABELA (pg_index.indrelid) e removido pelo
+        # nome com o schema. Pelo nome solto, 'idx_pc_upd' pode resolver pra
+        # OUTRA tabela que não a 'prices_cache' daqui: foi assim que o teste com
+        # tabela temporária, em 30/09, acabou removendo o índice da tabela real.
+        c.execute("""SELECT (SELECT quote_ident(n.nspname) || '.' || quote_ident(i.relname)
+                             FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid
+                             JOIN pg_namespace n ON n.oid = i.relnamespace
+                             WHERE x.indrelid = t.oid AND i.relname = 'idx_pc_upd'),
+                            COALESCE('fillfactor=80' = ANY(t.reloptions), FALSE)
+                     FROM pg_class t WHERE t.oid = 'prices_cache'::regclass""")
+        idx_upd, ja_tem_folga = c.fetchone()
+        if idx_upd:
+            c.execute(f'DROP INDEX IF EXISTS {idx_upd}')
         if not ja_tem_folga:
             c.execute('ALTER TABLE prices_cache SET (fillfactor = 80)')
         # Fila de demanda: o site grava aqui os itens que precisou buscar ao vivo

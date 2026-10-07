@@ -48,9 +48,22 @@ c.execute("SELECT relpersistence FROM pg_class WHERE oid = 'prices_cache'::regcl
 checar(c.fetchone()[0] == 't', 'o teste usa a tabela temporaria')
 
 
+comandos = []
+
+
+class Cursor:
+    """Registra cada SQL — pra conferir ONDE o DROP INDEX aponta."""
+    def __init__(self, x): self._x = x
+    def __getattr__(self, k): return getattr(self._x, k)
+    def execute(self, sql, *a, **kw):
+        comandos.append(sql)
+        return self._x.execute(sql, *a, **kw)
+
+
 class Mesma:
     def __init__(self, x): self._x = x
     def __getattr__(self, k): return getattr(self._x, k)
+    def cursor(self): return Cursor(self._x.cursor())
     def close(self): pass
 
 
@@ -70,6 +83,12 @@ checar(not tem_idx, 'idx_pc_upd removido')
 checar(opts and 'fillfactor=80' in opts, f'folga de 20% nas paginas ({opts})')
 PU._init_table()                       # segundo boot: nada a fazer, nada quebra
 checar(tuple(estado()) == (False, opts), 'segundo boot nao muda nada')
+# Em 30/09 a versao anterior deste teste APAGOU o indice da tabela REAL: o DROP
+# era pelo nome solto, e na 2a chamada (temporario ja removido) 'idx_pc_upd'
+# resolvia pro public. Todo DROP tem que apontar pro schema da temporaria.
+drops = [x for x in comandos if 'DROP INDEX' in x.upper()]
+checar(len(drops) == 1 and 'pg_temp' in drops[0],
+       f'um DROP so, e no schema da temporaria ({drops})')
 
 print('\n-- _save_prices: regravar vira HOT')
 linhas = [{'item_id': f'T4_ITEM_{i}', 'city': cid, 'quality': 1, 'sell_price_min': 100 + i,

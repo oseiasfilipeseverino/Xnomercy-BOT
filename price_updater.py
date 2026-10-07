@@ -67,7 +67,23 @@ def _init_table():
             PRIMARY KEY (item_id, city, quality)
         )''')
         c.execute('CREATE INDEX IF NOT EXISTS idx_pc_item ON prices_cache (item_id)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_pc_upd  ON prices_cache (updated_at)')
+        # Este ciclo regrava ~105 mil linhas a cada 30 min, e o updated_at muda
+        # em todas. Com índice nele (idx_pc_upd), NENHUMA atualização podia ser
+        # HOT: cada uma gravava nos 3 índices. Medido em 30/09: 159 milhões de
+        # atualizações desde 23/08, 0 HOT, 124 GB de WAL em 38 dias — num volume
+        # de 500 MB. O índice tinha sido usado 62 vezes no período (quem lê
+        # filtra por item_id, que já tem índice). Sem ele e com folga na página
+        # (fillfactor 80), a linha nova cabe na mesma página sem tocar índice.
+        # Confere antes de mexer: DDL tranca a tabela mesmo quando não há nada
+        # a fazer (ver test_migracao).
+        c.execute("""SELECT to_regclass('idx_pc_upd') IS NOT NULL,
+                            COALESCE('fillfactor=80' = ANY(reloptions), FALSE)
+                     FROM pg_class WHERE oid = 'prices_cache'::regclass""")
+        tem_idx_upd, ja_tem_folga = c.fetchone()
+        if tem_idx_upd:
+            c.execute('DROP INDEX IF EXISTS idx_pc_upd')
+        if not ja_tem_folga:
+            c.execute('ALTER TABLE prices_cache SET (fillfactor = 80)')
         # Fila de demanda: o site grava aqui os itens que precisou buscar ao vivo
         # na AODP (não estavam no prices_cache) — este updater os incorpora no
         # próximo ciclo, então o cache converge pro que a guild realmente consulta.

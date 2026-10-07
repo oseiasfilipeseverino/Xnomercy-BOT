@@ -47,8 +47,26 @@ def _sem_acento(s):
 STRIKES_TO_PURGE = 2
 
 MIN_MEMBERS_SANITY = 5
-# Se mais de 30% dos membros checados sumirem de uma vez, tambem e' suspeito.
+# Se mais de 30% dos membros checados sumirem de uma vez, tambem e' suspeito —
+# A MENOS que a lista da API bata com a contagem oficial da guild (ver
+# _lista_completa). Sem essa saida, uma limpeza de verdade travava o purge pra
+# sempre: em 06/10 a lideranca tirou ~90 da guild de uma vez e o bot abortou
+# todo ciclo ("56 de 138 seriam rebaixados — parece falha da API"), com a API
+# respondendo 101 nomes pra uma guild de 97 membros oficiais.
 MAX_PURGE_RATIO = 0.30
+
+
+def _lista_completa(tamanho_lista, contagem_oficial):
+    """A lista de membros da API veio inteira?
+
+    Falha da API que preocupa e' a resposta PARCIAL (lista curta). A contagem
+    oficial vem de outra rota (/guilds/{id}, rapida) — lista do tamanho dela
+    nao e' resposta pela metade. Folga de 3 (ou 3%): as duas rotas nao
+    atualizam no mesmo instante. Sem contagem, nao da pra saber: False.
+    """
+    if not contagem_oficial or contagem_oficial < MIN_MEMBERS_SANITY:
+        return False
+    return tamanho_lista >= contagem_oficial - max(3, round(contagem_oficial * 0.03))
 
 # Quao parecido um apelido do Discord precisa ser de um nome da guild pra ser
 # tratado como "e a mesma pessoa, so escreveu diferente". Calibrado contra os
@@ -154,6 +172,15 @@ class AutoPurgeCog(commands.Cog):
                 return gid
         print(f'[auto_purge] nenhuma guild com o nome exato "{GUILD_NAME}"')
         return None
+
+    def _get_contagem_oficial(self, guild_id):
+        """MemberCount de /guilds/{id} — rota rapida (<1s), diferente da lista."""
+        dados = self._buscar(f'{ALBION_API}/guilds/{guild_id}',
+                             config.ALBION_TIMEOUT, 'contagem da guild')
+        try:
+            return int(dados.get('MemberCount')) if dados else None
+        except (TypeError, ValueError):
+            return None
 
     def _get_guild_members_albion(self, guild_id):
         # Timeout PROPRIO, maior. Esta rota leva 31-34s quando responde — com os
@@ -359,24 +386,34 @@ class AutoPurgeCog(commands.Cog):
 
                 to_purge.append((member, candidatos[0]))
 
-            if checked and len(to_purge) > max(MIN_MEMBERS_SANITY, checked * MAX_PURGE_RATIO):
-                print(f'[auto_purge] ABORTADO: {len(to_purge)} de {checked} membros seriam '
-                      f'rebaixados de uma vez — parece falha da API, nao saida real. '
-                      f'Nada foi alterado.')
-                try:
-                    ch_id = await database.run_db(database.get_config, 'channel_logs')
-                    if ch_id:
-                        ch = discord_guild.get_channel(int(ch_id))
-                        if ch:
-                            await ch.send(
-                                f'⚠️ **Auto-Purge abortado por seguranca:** a API do Albion indicou que '
-                                f'**{len(to_purge)} de {checked}** membros teriam saido da guild de uma vez. '
-                                f'Isso quase sempre e falha da API, entao nenhum cargo foi alterado. '
-                                f'Se a saida foi real mesmo, ajuste os cargos na mao.',
-                                allowed_mentions=SEM_MENCOES)
-                except Exception:
-                    pass
-                return
+            em_massa = checked and len(to_purge) > max(MIN_MEMBERS_SANITY, checked * MAX_PURGE_RATIO)
+            if em_massa:
+                oficial = await loop.run_in_executor(None, self._get_contagem_oficial, guild_id)
+                if _lista_completa(len(albion_members), oficial):
+                    print(f'[auto_purge] saida em massa CONFIRMADA: {len(to_purge)} de {checked} '
+                          f'— a lista da API tem {len(albion_members)} nomes e a guild tem '
+                          f'{oficial} membros oficialmente, entao a lista veio inteira.')
+                else:
+                    detalhe = (f'a lista veio com {len(albion_members)} nomes, mas a guild tem '
+                               f'{oficial} membros oficialmente' if oficial
+                               else 'nao deu pra conferir a contagem oficial da guild')
+                    print(f'[auto_purge] ABORTADO: {len(to_purge)} de {checked} membros seriam '
+                          f'rebaixados de uma vez e {detalhe} — parece falha da API, nao '
+                          f'saida real. Nada foi alterado.')
+                    try:
+                        ch_id = await database.run_db(database.get_config, 'channel_logs')
+                        if ch_id:
+                            ch = discord_guild.get_channel(int(ch_id))
+                            if ch:
+                                await ch.send(
+                                    f'⚠️ **Auto-Purge abortado por seguranca:** a API do Albion indicou que '
+                                    f'**{len(to_purge)} de {checked}** membros teriam saido da guild de uma vez, '
+                                    f'e {detalhe}. Isso quase sempre e falha da API, entao nenhum cargo foi '
+                                    f'alterado — o proximo ciclo confere de novo.',
+                                    allowed_mentions=SEM_MENCOES)
+                    except Exception:
+                        pass
+                    return
 
             # Avisa (sem rebaixar) quem tem apelido que nao dá pra conferir. Antes
             # esses casos eram rebaixados por engano; agora ficam visíveis pra

@@ -7,12 +7,19 @@ Cog de notificações de energia + logs + broadcast.
 """
 import asyncio
 import contextlib
+import re
+import time
 import discord
 from discord.ext import commands, tasks
 import datetime
 import config
 import database
 from discord_utils import SEM_MENCOES
+
+def _palavras(nome):
+    """'[Vice. Lider] ⚔️LKMAJOR' -> {'lkmajor'}: sem tags [..] e sem emoji."""
+    return set(re.findall(r'\w+', re.sub(r'\[[^\]]*\]', ' ', (nome or '').lower())))
+
 
 @contextlib.contextmanager
 def _db():
@@ -151,16 +158,23 @@ class EnergyNotifications(commands.Cog):
             pass
 
     def _find_member(self, guild, player_name):
-        """Encontra membro do Discord pelo nome Albion (busca no nick do servidor)."""
-        plow = player_name.lower()
-        for m in guild.members:
-            nick = (m.nick or '').lower()
-            display = (m.display_name or '').lower()
-            username = (m.name or '').lower()
-            # Nick do servidor tem formato "[NM] NomeDoGame"
-            if plow in nick or plow in display or plow == username:
-                return m
-        return None
+        """Membro do Discord pelo nome Albion — PALAVRA INTEIRA do nick.
+
+        Antes casava por trecho (`nome in nick`): o devedor "Rafa", já fora do
+        servidor, casava com "[NM] Rafael", e a cobrança de energia ia pra outra
+        pessoa. Os nicks vêm decorados ("[Vice. Lider] ⚔️LKMAJOR",
+        "[NM] BangziN  🐒") — por isso compara palavra a palavra, sem as tags
+        entre colchetes e sem emoji. Com mais de um candidato (conta principal e
+        alternativa), prefere quem tem nick no servidor.
+        """
+        alvo = (player_name or '').strip().lower()
+        if not alvo:
+            return None
+        achados = [m for m in guild.members
+                   if alvo == (m.name or '').lower()
+                   or alvo in _palavras(m.nick) or alvo in _palavras(m.display_name)]
+        achados.sort(key=lambda m: not m.nick)
+        return achados[0] if achados else None
 
     def _get_debtors(self):
         """Busca devedores do banco (exclui players da lista). Roda via run_db.
@@ -324,11 +338,30 @@ class EnergyNotifications(commands.Cog):
                 print('[broadcast] Guild não encontrada')
                 return
 
+            # Aviso de INÍCIO, com previsão: são ~2s por DM (a pausa abaixo + a
+            # ida ao Discord), e com ~750 pessoas o envio leva quase meia hora.
+            # Em 07/10 a liderança viu 38 nomes no log e achou que tinha travado
+            # — estava no meio. E reiniciar o bot nesse meio-tempo corta o envio
+            # (a pendente já foi limpa), então o aviso diz isso também.
+            destinatarios = [m for m in guild.members if not m.bot]
+            minutos = max(1, round(len(destinatarios) * 2.3 / 60))
+            try:
+                ch = await database.run_db(_canal_de_logs)
+                channel = guild.get_channel(int(ch)) if ch else None
+                if channel:
+                    await channel.send(
+                        f'📣 **Broadcast começou:** {len(destinatarios)} pessoas, uma DM a cada '
+                        f'~2s — termina em uns **{minutos} min** '
+                        f'(<t:{int(time.time()) + minutos * 60}:t>). Não reinicie o bot até '
+                        f'aparecer o resumo aqui; quem tem DM fechada não recebe.',
+                        allowed_mentions=SEM_MENCOES)
+            except Exception as e:
+                print(f'[broadcast] nao consegui avisar o inicio: {e!r}')
+            print(f'[broadcast] enviando para {len(destinatarios)} pessoas (~{minutos} min)')
+
             sent = 0
             failed = 0
-            for member in guild.members:
-                if member.bot:
-                    continue
+            for member in destinatarios:
                 try:
                     await member.send(msg, allowed_mentions=SEM_MENCOES)
                     sent += 1

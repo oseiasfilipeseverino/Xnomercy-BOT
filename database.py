@@ -2011,3 +2011,28 @@ def encerrar_evento_vencido(event_id):
         return mudou
     finally:
         release(conn)
+
+
+# ── Vigia: sinal de vida do bot (o site le e avisa se parar) ──────────────────
+def vigia_bater(servico='bot'):
+    """Grava 'estou vivo' agora. O site confere a cada minuto e, se o bot ficar
+    5 min sem bater, manda DM pro dono do servidor. Nunca levanta: falhar aqui
+    so' faria o site achar que o bot caiu, que e' o aviso certo."""
+    conn = None
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("""CREATE TABLE IF NOT EXISTS vigia (
+                        servico TEXT PRIMARY KEY,
+                        visto_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        alerta TEXT NOT NULL DEFAULT 'ok')""")
+        c.execute("""INSERT INTO vigia (servico, visto_em) VALUES (%s, NOW())
+                     ON CONFLICT (servico) DO UPDATE SET visto_em = NOW()""", (servico,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f'[vigia_bater] {e!r}')
+        return False
+    finally:
+        release(conn)
+

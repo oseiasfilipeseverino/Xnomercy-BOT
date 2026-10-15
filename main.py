@@ -26,7 +26,7 @@ intents.guild_messages  = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-COGS = ['tickets', 'events', 'bank', 'members', 'welcome', 'setup', 'scheduled_events', 'energy_notifications', 'weekly_report', 'auto_purge', 'market', 'help_cmd', 'albion_register', 'site_splits', 'conciliacao', 'backup']
+COGS = ['tickets', 'events', 'bank', 'members', 'welcome', 'setup', 'scheduled_events', 'energy_notifications', 'weekly_report', 'auto_purge', 'market', 'help_cmd', 'albion_register', 'site_splits', 'conciliacao', 'backup', 'vigia']
 
 @bot.event
 async def on_message(message):
@@ -229,7 +229,29 @@ async def on_app_command_error(interaction: discord.Interaction, error: Exceptio
         pass
     print('[ERRO] Comando: ' + str(interaction.command) + ' | Erro: ' + str(error))
 
+def desligar_no_sigterm(loop, cliente):
+    """Fecha a conexao com o Discord assim que o Railway mandar desligar.
+
+    Num deploy o Railway liga a versao nova e manda SIGTERM pra antiga. Sem
+    tratar o sinal, o bot antigo (processo principal do container) o ignorava e
+    seguia ~16s respondendo junto com o novo: em 15/10 isso deixou o painel do
+    evento 801 com "Vazio". Fechando na hora, a antiga sai antes de a nova
+    terminar de conectar. Devolve False onde nao da (Windows, pra rodar local).
+    """
+    import signal
+
+    def _sair():
+        print('[main] SIGTERM: desligando pra versao nova assumir', flush=True)
+        loop.create_task(cliente.close())
+    try:
+        loop.add_signal_handler(signal.SIGTERM, _sair)
+        return True
+    except (NotImplementedError, AttributeError, RuntimeError):
+        return False
+
+
 async def main():
+    desligar_no_sigterm(asyncio.get_running_loop(), bot)
     async with bot:
         for cog in COGS:
             try:

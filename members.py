@@ -2,6 +2,7 @@
 cogs/members.py — Detecção de saída de membros + confisco de saldo
 """
 
+import cores
 import discord
 from discord.ext import commands
 
@@ -75,7 +76,7 @@ class ConfiscarView(LoggedView):
 
         try:
             embed = interaction.message.embeds[0]
-            embed.color = discord.Color.red()
+            embed.color = cores.VERMELHO
             if balance > 0:
                 embed.add_field(name='✅ Ação Executada', value=f'Saldo confiscado por **{interaction.user.display_name}**', inline=False)
             else:
@@ -178,7 +179,7 @@ class MembersCog(commands.Cog):
 
         embed = discord.Embed(
             title='⚠️ Membro Saiu com Saldo Positivo',
-            color=discord.Color.orange()
+            color=cores.AMBAR
         )
         embed.add_field(name='Membro',     value=f'{member.display_name} (@{member.name})', inline=True)
         embed.add_field(name='💰 Saldo',   value=f'{fmt(balance)} prata',                   inline=True)

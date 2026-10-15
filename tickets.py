@@ -3,6 +3,7 @@
 tickets.py — Sistema de tickets com painéis separados por categoria
 """
  
+import cores
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -14,9 +15,9 @@ from view_utils import LoggedView
 
 
 TICKET_TYPES = {
-    'recrutamento': {'emoji': '⚔️', 'label': 'Recrutamento',   'color': discord.Color.blue(),   'btn_style': discord.ButtonStyle.primary},
-    'suporte':      {'emoji': '🆘', 'label': 'Suporte',         'color': discord.Color.orange(), 'btn_style': discord.ButtonStyle.danger},
-    'saque':        {'emoji': '💰', 'label': 'Solicitar Saque', 'color': discord.Color.gold(),   'btn_style': discord.ButtonStyle.success},
+    'recrutamento': {'emoji': '⚔️', 'label': 'Recrutamento',   'color': cores.OURO,   'btn_style': discord.ButtonStyle.primary},
+    'suporte':      {'emoji': '🆘', 'label': 'Suporte',         'color': cores.AMBAR, 'btn_style': discord.ButtonStyle.danger},
+    'saque':        {'emoji': '💰', 'label': 'Solicitar Saque', 'color': cores.OURO,   'btn_style': discord.ButtonStyle.success},
 }
  
 # Salva qual categoria cada tipo de ticket deve usar
@@ -537,7 +538,7 @@ class TicketsCog(commands.Cog):
         }
  
         title, desc, view = cfg_map[tipo]
-        embed = discord.Embed(title=title, description=desc, color=discord.Color.dark_gold())
+        embed = discord.Embed(title=title, description=desc, color=cores.OURO)
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
         embed.set_footer(text='XnoMercy Guild')

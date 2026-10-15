@@ -1,3 +1,4 @@
+import cores
 import sys
 # Saída linha a linha. No Railway não há terminal, então o Python acumulava os
 # prints num buffer e só despejava quando algum usava flush=True — no bot, o
@@ -207,7 +208,7 @@ async def _avisar_discord_voltou(minutos: float):
                 f'**{minutos:.0f} minutos** — não foi problema do bot nem do site.\n\n'
                 'Durante quedas assim, o site continua funcionando: '
                 'entre em https://xnomercy.com com usuário e senha.'),
-            color=discord.Color.green())
+            color=cores.VERDE)
         await canal.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
     except Exception as e:
         print(f'[saude] nao consegui avisar que a API voltou: {e!r}', flush=True)

@@ -10,6 +10,7 @@ Aprovar. A aprovação pela tela /gestao/splits do site continua funcionando em
 paralelo (mesmas funções de banco, atômicas — só uma das duas vias vence).
 """
 
+import cores
 import json
 import discord
 from discord.ext import commands, tasks
@@ -56,7 +57,7 @@ def _build_embed(split, title_prefix='⏳ Split Pendente (via site)'):
     embed = discord.Embed(
         title=cortar(f'{title_prefix} — {split.get("event_title", "Evento")}', LIM_TITULO),
         description=cortar(f'Enviado por: **{split["submitted_by"]}**', LIM_DESCRICAO),
-        color=discord.Color.orange(),
+        color=cores.AMBAR,
     )
     embed.add_field(name='📦 Loot Total', value=f'{_fmt(split["total_loot"])} prata', inline=True)
     embed.add_field(name='🔧 Reparo', value=f'{_fmt(split["repair_cost"])} prata', inline=True)
@@ -149,7 +150,7 @@ class SitePendingSplitView(LoggedView):
         # não pode deixar a aprovação parecendo travada se o Discord falhar aqui.
         try:
             embed = interaction.message.embeds[0]
-            embed.color = discord.Color.green()
+            embed.color = cores.VERDE
             embed.title = cortar(
                 f'✅ Split Aprovado — {split.get("event_title", event_title)}', LIM_TITULO)
             embed.set_footer(text=f'Aprovado por {interaction.user.display_name}')
@@ -207,7 +208,7 @@ class SitePendingSplitView(LoggedView):
                             description=cortar(
                                 f'**{_fmt(amt)}** do split de '
                                 f'**{split.get("event_title", event_title)}**.', LIM_DESCRICAO),
-                            color=discord.Color.gold()
+                            color=cores.OURO
                         )
                         await membro.send(embed=dm)
                 except Exception:
@@ -234,7 +235,7 @@ class SitePendingSplitView(LoggedView):
 
         try:
             embed = interaction.message.embeds[0]
-            embed.color = discord.Color.red()
+            embed.color = cores.VERMELHO
             embed.title = f'❌ Split Recusado — {split.get("event_title", "")}'
             embed.set_footer(text=f'Recusado por {interaction.user.display_name}')
             for item in self.children:
@@ -318,7 +319,7 @@ class SiteSplitsCog(commands.Cog):
                                     f'{split.get("num_players", "?")} participante(s)\n\n'
                                     f'_Lista completa em /gestao/splits no site._',
                                     LIM_DESCRICAO),
-                                color=discord.Color.orange())
+                                color=cores.AMBAR)
                             embed.set_footer(
                                 text='Split criado pelo site — clique abaixo pra aprovar ou recusar')
 

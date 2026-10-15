@@ -15,6 +15,7 @@ O `log_channel` também estava copiado igual em bank.py, events.py e members.py 
 o que significava que a correção precisaria ser feita em três lugares.
 """
 
+import cores
 import discord
 import database
 
@@ -204,7 +205,7 @@ async def alertar_financeiro(guild, titulo: str, detalhe: str):
         embed = discord.Embed(
             title='🚨 ' + titulo,
             description=detalhe,
-            color=discord.Color.red(),
+            color=cores.VERMELHO,
         )
         embed.set_footer(text='Nenhuma prata foi movimentada — a operação pode ser refeita')
         await ch.send(embed=embed, allowed_mentions=SEM_MENCOES)

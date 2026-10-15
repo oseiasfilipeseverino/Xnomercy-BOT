@@ -5,6 +5,7 @@ Players digitam numero para entrar, negativo para sair
 Notificacoes via DM 30min e 15min antes
 """
 
+import cores
 import asyncio
 import json
 import discord
@@ -58,7 +59,7 @@ def build_embed(event, assignments):
 
     embed = discord.Embed(
         title=cortar("Evento: " + event["title"], LIM_TITULO),
-        color=discord.Color.purple()
+        color=cores.OURO
     )
 
     if event.get("description"):
@@ -172,7 +173,7 @@ class ScheduledEventsCog(commands.Cog):
         embed = discord.Embed(
             title='📋 Conferencia — ' + str(event.get('title', 'Evento')),
             description='**' + str(len(fechados)) + '/' + str(len(slots)) + '** slots fechados',
-            color=discord.Color.green() if not vazios else discord.Color.orange(),
+            color=cores.VERDE if not vazios else cores.AMBAR,
         )
 
         # Usa o add_lista compartilhado (discord_utils): a versao local que ficava
@@ -734,7 +735,7 @@ class ScheduledEventsCog(commands.Cog):
     async def _notify_dm(self, event, minutes):
         try:
             emoji = "⏰" if minutes == 30 else "🚨"
-            color = discord.Color.yellow() if minutes == 30 else discord.Color.red()
+            color = cores.OURO if minutes == 30 else cores.VERMELHO
 
             thread_link = ""
             if event.get("thread_id") and event.get("channel_id"):

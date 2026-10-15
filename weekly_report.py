@@ -3,6 +3,7 @@ weekly_report.py — Relatório semanal automático da guild
 Posta todo domingo às 20h BRT um resumo da semana.
 """
 
+import cores
 import discord
 from discord.ext import commands, tasks
 import datetime
@@ -115,7 +116,7 @@ class WeeklyReportCog(commands.Cog):
         embed = discord.Embed(
             title='Relatorio Semanal — XnoMercy',
             description=f'Periodo: **{week_start}** a **{week_end}**',
-            color=discord.Color.gold()
+            color=cores.OURO
         )
 
         # Eventos

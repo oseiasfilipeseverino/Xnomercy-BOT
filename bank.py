@@ -2,6 +2,7 @@
 bank.py — Banco da guild: saldos, ranking, ajustes, bônus
 """
 
+import cores
 import asyncio
 import re
 from datetime import datetime, timedelta, timezone
@@ -206,7 +207,7 @@ class BankCog(commands.Cog):
             return
         rank    = await database.run_db(database.get_player_rank, str(user.id))
 
-        embed = discord.Embed(title='💰 Saldo do Membro', color=discord.Color.gold())
+        embed = discord.Embed(title='💰 Saldo do Membro', color=cores.OURO)
         embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
         embed.add_field(name='Membro',      value=user.mention,                  inline=True)
         embed.add_field(name='Saldo Atual', value=fmt(balance),                  inline=True)
@@ -226,7 +227,7 @@ class BankCog(commands.Cog):
         # Dai vieram os "[NM] DrumnKiller" e "AMG KRDemons" da auditoria.
         txs = await database.run_db(database.get_player_transactions, str(user.id), 15)
 
-        embed = discord.Embed(title='📜 Extrato de Saldo', color=discord.Color.gold())
+        embed = discord.Embed(title='📜 Extrato de Saldo', color=cores.OURO)
         embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
         if not txs:
             embed.description = 'Nenhuma movimentação registrada ainda.'
@@ -291,7 +292,7 @@ class BankCog(commands.Cog):
                 ephemeral=True)
             return
 
-        embed = discord.Embed(title='🔄 Transferência Realizada!', color=discord.Color.blurple())
+        embed = discord.Embed(title='🔄 Transferência Realizada!', color=cores.OURO)
         embed.set_author(name=remetente.display_name, icon_url=remetente.display_avatar.url)
         embed.add_field(name='➡️ Para',          value=usuario.mention, inline=True)
         embed.add_field(name='💸 Valor',          value=fmt(valor),      inline=True)
@@ -312,7 +313,7 @@ class BankCog(commands.Cog):
                 description=(f'**{remetente.display_name}** te transferiu **{fmt(valor)}**.\n'
                              + (f'Motivo: {motivo}\n' if motivo else '')
                              + f'Seu saldo atual: **{saldo_dest}**'),
-                color=discord.Color.blurple()
+                color=cores.OURO
             )
             await usuario.send(embed=dm)
         except Exception:
@@ -372,7 +373,7 @@ class BankCog(commands.Cog):
         txs = await database.run_db(database.get_player_transactions, did, 25)
 
         membro = interaction.guild.get_member(int(did)) if did.isdigit() else None
-        embed = discord.Embed(title='📜 Extrato (Auditoria)', color=discord.Color.gold())
+        embed = discord.Embed(title='📜 Extrato (Auditoria)', color=cores.OURO)
         if membro:
             embed.set_author(name=membro.display_name, icon_url=membro.display_avatar.url)
         else:
@@ -416,7 +417,7 @@ class BankCog(commands.Cog):
             return
         rank    = await database.run_db(database.get_player_rank, str(usuario.id))
 
-        embed = discord.Embed(title='💰 Saldo do Membro', color=discord.Color.gold())
+        embed = discord.Embed(title='💰 Saldo do Membro', color=cores.OURO)
         embed.set_author(name=usuario.display_name, icon_url=usuario.display_avatar.url)
         embed.add_field(name='Membro',      value=usuario.mention,               inline=True)
         embed.add_field(name='Saldo Atual', value=fmt(balance),                  inline=True)
@@ -494,7 +495,7 @@ class BankCog(commands.Cog):
             title = '💰 Saldos da Guild XnoMercy'
             if len(pages) > 1:
                 title += f' ({i+1}/{len(pages)})'
-            embed = discord.Embed(title=title, description=page, color=discord.Color.gold())
+            embed = discord.Embed(title=title, description=page, color=cores.OURO)
             if i == len(pages) - 1:
                 embed.add_field(name='📊 Total em circulação', value=fmt(total), inline=False)
             embed.set_footer(text=f'XnoMercy Guild | {len(balances)} players com saldo')
@@ -553,12 +554,12 @@ class BankCog(commands.Cog):
 
         if len(results) == 1:
             m, novo = results[0]
-            embed = discord.Embed(title='➕ Saldo Adicionado!', color=discord.Color.green())
+            embed = discord.Embed(title='➕ Saldo Adicionado!', color=cores.VERDE)
             embed.set_author(name=m.display_name, icon_url=m.display_avatar.url if m.display_avatar else None)
             embed.add_field(name='➕ Adicionado',  value=fmt(valor), inline=True)
             embed.add_field(name='💎 Saldo Atual', value=fmt(novo),  inline=True)
         else:
-            embed = discord.Embed(title=f'➕ Saldo Adicionado ({len(results)} players)!', color=discord.Color.green())
+            embed = discord.Embed(title=f'➕ Saldo Adicionado ({len(results)} players)!', color=cores.VERDE)
             # cortar(): a descricao tambem cresce com o numero de jogadores e
             # estoura em 4096 pelo mesmo caminho dos campos acima.
             embed.description = cortar('\n'.join(
@@ -583,7 +584,7 @@ class BankCog(commands.Cog):
                 dm = discord.Embed(
                     title='💰 Você recebeu prata!',
                     description=f'**{fmt(valor)}** adicionados ao seu saldo!\nMotivo: {motivo}\nSaldo atual: **{fmt(novo)}**',
-                    color=discord.Color.gold()
+                    color=cores.OURO
                 )
                 await m.send(embed=dm)
             except Exception:
@@ -642,12 +643,12 @@ class BankCog(commands.Cog):
 
         if len(results) == 1:
             m, novo = results[0]
-            embed = discord.Embed(title='✅ Pagamento Realizado!', color=discord.Color.green())
+            embed = discord.Embed(title='✅ Pagamento Realizado!', color=cores.VERDE)
             embed.set_author(name=m.display_name, icon_url=m.display_avatar.url if m.display_avatar else None)
             embed.add_field(name='💸 Pago',        value=fmt(valor), inline=True)
             embed.add_field(name='💎 Saldo Atual', value=fmt(novo),  inline=True)
         else:
-            embed = discord.Embed(title=f'✅ Pagamento Realizado ({len(results)} players)!', color=discord.Color.green())
+            embed = discord.Embed(title=f'✅ Pagamento Realizado ({len(results)} players)!', color=cores.VERDE)
             # cortar(): a descricao tambem cresce com o numero de jogadores e
             # estoura em 4096 pelo mesmo caminho dos campos acima.
             embed.description = cortar('\n'.join(
@@ -676,7 +677,7 @@ class BankCog(commands.Cog):
                 dm = discord.Embed(
                     title='✅ Você foi pago!',
                     description=f'**{fmt(valor)}** pagos e removidos do seu saldo.\nMotivo: {motivo}\nSaldo atual: **{fmt(novo)}**',
-                    color=discord.Color.green()
+                    color=cores.VERDE
                 )
                 await m.send(embed=dm)
             except Exception:
@@ -720,10 +721,10 @@ class BankCog(commands.Cog):
             embed = discord.Embed(
                 title='✅ Saldo Zerado',
                 description=f'Saldo de **{m.display_name}** zerado.\nValor pago: **{fmt(old)}**',
-                color=discord.Color.green()
+                color=cores.VERDE
             )
         else:
-            embed = discord.Embed(title=f'✅ Saldo Zerado ({len(results)} players)', color=discord.Color.green())
+            embed = discord.Embed(title=f'✅ Saldo Zerado ({len(results)} players)', color=cores.VERDE)
             embed.description = cortar(
                 '\n'.join(f'**{m.display_name}** — {fmt(old)}' for m, old in results),
                 LIM_DESCRICAO)
@@ -745,7 +746,7 @@ class BankCog(commands.Cog):
                 dm = discord.Embed(
                     title='💰 Seu saldo foi zerado!',
                     description=f'**{fmt(old)}** registrados como pagos.\nSaldo atual: **0 prata**.',
-                    color=discord.Color.gold()
+                    color=cores.OURO
                 )
                 await m.send(embed=dm)
             except Exception:
@@ -780,7 +781,7 @@ class BankCog(commands.Cog):
         # Público (não ephemeral): muda o payout de TODO evento/split futuro, então a
         # guild toda tem interesse em ver — mesmo critério dos outros comandos
         # financeiros (/adicionar_saldo, /pagar_saldo, /zerar_saldo).
-        embed = discord.Embed(title='✅ Taxas Atualizadas', description='\n'.join(changed), color=discord.Color.green())
+        embed = discord.Embed(title='✅ Taxas Atualizadas', description='\n'.join(changed), color=cores.VERDE)
         await interaction.followup.send(embed=embed)
 
         # Afeta o payout de TODO evento/split futuro — sem log aqui, uma mudança de
@@ -800,7 +801,7 @@ class BankCog(commands.Cog):
         guild_tax  = await database.run_db(database.get_config, 'guild_tax')
         vendor_tax = await database.run_db(database.get_config, 'vendor_tax')
 
-        embed = discord.Embed(title='⚙️ Taxas Configuradas', color=discord.Color.blurple())
+        embed = discord.Embed(title='⚙️ Taxas Configuradas', color=cores.OURO)
         embed.add_field(name='🏛️ Taxa da Guild',    value=f'{guild_tax}%',  inline=True)
         embed.add_field(name='🛒 Taxa do Vendedor', value=f'{vendor_tax}%', inline=True)
         embed.add_field(name='🔧 Reparo',           value='Informado pelo Puxador por evento',      inline=True)
@@ -836,7 +837,7 @@ class BankCog(commands.Cog):
         splits, mov = await database.run_db(database.get_extrato_do_dia, dias_atras)
 
         quando = {0: 'Hoje', 1: 'Ontem'}.get(dias_atras, f'{dias_atras} dias atras')
-        embed = discord.Embed(title=f'📊 Extrato — {quando}', color=discord.Color.gold())
+        embed = discord.Embed(title=f'📊 Extrato — {quando}', color=cores.OURO)
 
         if not splits:
             embed.description = '_Nenhum evento depositado nesse dia._'

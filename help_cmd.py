@@ -7,6 +7,7 @@ configurável por /configurar_permissao. Esta lista é só a vitrine legível �
 se um comando novo for criado, adicione uma linha em COMMAND_GROUPS.
 """
 
+import cores
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -97,7 +98,7 @@ class HelpCog(commands.Cog):
         embed = discord.Embed(
             title='Comandos do XnoMercy Bot',
             description='Cada grupo mostra o nível de acesso. ✓ = você pode usar.',
-            color=discord.Color.gold(),
+            color=cores.OURO,
         )
         for titulo, perm, cmds in COMMAND_GROUPS:
             mark = ' ✓' if can_use(perm) else ''

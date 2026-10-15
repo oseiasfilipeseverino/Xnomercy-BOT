@@ -7,6 +7,7 @@ deste bot (preços, ciclo de 30min). Este cog só junta as duas pra responder
 sem precisar abrir o site.
 """
 
+import cores
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -214,7 +215,7 @@ class MarketCog(commands.Cog):
         embed = discord.Embed(
             title=f'{name_pt} (T{tier})',
             description=f'`{uid}` · americas.albion-online-data.com',
-            color=discord.Color.gold()
+            color=cores.OURO
         )
         for q in sorted(by_q.keys()):
             lines = []
@@ -312,7 +313,7 @@ class MarketCog(commands.Cog):
             cmp_txt = 'abaixo de' if direction == 'below' else 'acima de'
             qual_txt = QUAL_LABELS.get(quality, 'Normal')
             lines.append(f'`#{alert_id}` **{name}** ({qual_txt}) {cmp_txt} **{fmt(target_price)}** — {city_txt}')
-        embed = discord.Embed(title='🔔 Meus Alertas de Preço', description='\n'.join(lines), color=discord.Color.gold())
+        embed = discord.Embed(title='🔔 Meus Alertas de Preço', description='\n'.join(lines), color=cores.OURO)
         embed.set_footer(text='Remova um alerta com /remover_alerta id:<número>')
         await interaction.followup.send(embed=embed, ephemeral=True)
 

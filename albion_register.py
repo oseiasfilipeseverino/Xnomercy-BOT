@@ -8,6 +8,7 @@ Comandos:
 Nick salvo como: [NM] NickDoGame
 """
 
+import cores
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -314,7 +315,7 @@ class AlbionRegister(commands.Cog):
             await interaction.followup.send('❌ Erro: ' + err, ephemeral=True)
             return
 
-        embed = discord.Embed(title='✅ Membro Registrado', color=0x22c55e)
+        embed = discord.Embed(title='✅ Membro Registrado', color=cores.VERDE)
         embed.add_field(name='Discord',    value=interaction.user.mention, inline=True)
         embed.add_field(name='Nick Albion', value=player_name, inline=True)
         embed.add_field(name='Guild',      value=guild_name, inline=True)
@@ -389,7 +390,7 @@ class AlbionRegister(commands.Cog):
             '✓ Está na guild **' + gname + '**' if ok_guild
             else '⚠️ Guild: **' + (gname or 'Sem guild') + '** (não é XnoMercy)')
 
-        embed = discord.Embed(title='✅ Membro Registrado (Manual)', color=0x3b82f6)
+        embed = discord.Embed(title='✅ Membro Registrado (Manual)', color=cores.OURO)
         embed.add_field(name='Discord',      value=usuario.mention, inline=True)
         embed.add_field(name='Nick Albion',  value=player_name, inline=True)
         embed.add_field(name='Guild',        value=gname or 'N/A', inline=True)
@@ -430,7 +431,7 @@ class AlbionRegister(commands.Cog):
                 'bot recebe **do servidor onde ele roda**.\n\n'
                 'Os cabeçalhos do Cloudflare são o que separa *bloqueado* de '
                 '*desafiado* de *só lento*.'),
-            color=discord.Color.blurple())
+            color=cores.OURO)
         for b in blocos:
             titulo, _, corpo = b.partition('\n')
             embed.add_field(name=cortar(titulo.strip('*'), LIM_NOME_CAMPO),

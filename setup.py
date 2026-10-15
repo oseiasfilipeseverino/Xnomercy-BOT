@@ -3,6 +3,7 @@
 setup.py — Cria e configura TUDO automaticamente
 """
  
+import cores
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -139,7 +140,7 @@ class SetupCog(commands.Cog):
         embed_criar = discord.Embed(
             title='⚔️ Criar Evento | XnoMercy',
             description='**Entre em uma call de voz** e clique no botão para criar um evento.\nUma call exclusiva será criada automaticamente!',
-            color=discord.Color.gold()
+            color=cores.OURO
         )
         await ch_criar.send(embed=embed_criar, view=CreateEventView())
  
@@ -152,7 +153,7 @@ class SetupCog(commands.Cog):
         embed_part = discord.Embed(
             title='⚔️ Eventos em Andamento | XnoMercy',
             description='Nenhum evento ativo no momento.',
-            color=discord.Color.gold()
+            color=cores.OURO
         )
         await ch_part.send(embed=embed_part)
  
@@ -160,7 +161,7 @@ class SetupCog(commands.Cog):
         embed = discord.Embed(
             title='✅ Setup Concluído!',
             description='\n'.join(created),
-            color=discord.Color.green()
+            color=cores.VERDE
         )
         embed.add_field(
             name='📋 Próximos passos',

@@ -2,6 +2,7 @@
 events.py — Sistema de eventos com participação proporcional (1-100%)
 """
 
+import cores
 import asyncio
 import discord
 from discord import app_commands
@@ -298,7 +299,7 @@ class RemovePlayerModal(discord.ui.Modal, title='Remover Player'):
 def _build_event_embed(event_id, title, creator, participants):
     embed = discord.Embed(
         title=f'⚔️ Evento #{event_id:04d} — {title}',
-        color=discord.Color.gold()
+        color=cores.OURO
     )
     embed.add_field(name='👑 Puxador', value=creator, inline=True)
     embed.add_field(name='👥 Participantes', value=str(len(participants)), inline=True)
@@ -354,7 +355,7 @@ async def _refresh_participar(guild):
             return
 
         active = await database.run_db(database.get_active_events, str(guild.id))
-        embed  = discord.Embed(title='⚔️ Eventos em Andamento | XnoMercy', color=discord.Color.gold())
+        embed  = discord.Embed(title='⚔️ Eventos em Andamento | XnoMercy', color=cores.OURO)
 
         if active:
             lines = [f'**#{ev["id"]:04d}** — {ev["title"]}  |  👑 {ev["creator_name"]}' for ev in active]
@@ -488,7 +489,7 @@ class ApproveDepositView(LoggedView):
         # se o Discord falhar (mesmo padrão do bug já corrigido em tickets.py).
         try:
             embed = interaction.message.embeds[0]
-            embed.color = discord.Color.green()
+            embed.color = cores.VERDE
             embed.title = f'✅ Depósito Aprovado — Evento #{self.event_id:04d}'
             embed.set_footer(text=f'Aprovado por {interaction.user.display_name}')
             for item in self.children: item.disabled = True
@@ -521,7 +522,7 @@ class ApproveDepositView(LoggedView):
                         dm = discord.Embed(
                             title='💰 Você recebeu prata!',
                             description=f'**{fmt(valor)}** do **Evento #{self.event_id:04d} — {event["title"]}**.',
-                            color=discord.Color.gold()
+                            color=cores.OURO
                         )
                         await membro.send(embed=dm)
                 except Exception:
@@ -542,7 +543,7 @@ class ApproveDepositView(LoggedView):
                     resumo = discord.Embed(
                         title=cortar(f'✅ Loot Aprovado — Evento #{self.event_id:04d}', LIM_TITULO),
                         description=cortar(f'**{event["title"]}**', LIM_DESCRICAO),
-                        color=discord.Color.green()
+                        color=cores.VERDE
                     )
                     # add_lista: com 25+ participantes esta lista passava dos 1024
                     # e o resumo do deposito nao era postado. Com 70 dá 3.219.
@@ -572,7 +573,7 @@ class ApproveDepositView(LoggedView):
 
         try:
             embed = interaction.message.embeds[0]
-            embed.color = discord.Color.red()
+            embed.color = cores.VERMELHO
             embed.title = f'❌ Depósito Recusado — Evento #{self.event_id:04d}'
             embed.set_footer(text=f'Recusado por {interaction.user.display_name}')
             for item in self.children: item.disabled = True
@@ -711,7 +712,7 @@ class EventsCog(commands.Cog):
 
         embed = discord.Embed(
             title=f'📊 Simulação — Evento #{event["id"]:04d} — {event["title"]}',
-            color=discord.Color.blurple()
+            color=cores.OURO
         )
         embed.add_field(name='📦 Valor Total',   value=f'{fmt(valor_total)} prata',           inline=True)
         embed.add_field(name='🏛️ Taxa Guild',    value=f'-{fmt(guild_cut)} ({guild_tax}%)',   inline=True)
@@ -810,7 +811,7 @@ class EventsCog(commands.Cog):
         embed = discord.Embed(
             title=f'⏳ Aprovação Pendente — Evento #{event["id"]:04d}',
             description=f'**{event["title"]}** | Puxador: {interaction.user.display_name}',
-            color=discord.Color.orange()
+            color=cores.AMBAR
         )
         embed.add_field(name='📦 Valor Total',   value=f'{fmt(valor_total)} prata',           inline=True)
         embed.add_field(name='🏛️ Taxa Guild',    value=f'-{fmt(guild_cut)} ({guild_tax}%)',   inline=True)

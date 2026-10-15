@@ -4,6 +4,7 @@ Checa todos com [NM] no nick a cada 6 horas via Albion API.
 Remove Membro, adiciona Amigo, troca [NM] por [AMG].
 """
 
+import cores
 import asyncio
 import re
 import time
@@ -578,7 +579,7 @@ class AutoPurgeCog(commands.Cog):
             embed = discord.Embed(
                 title='Auto-Purge — Cargos atualizados',
                 description=f'**{len(changed)}** membro(s) sairam da guild no Albion Online.\n**Membro** removido, **Amigo** adicionado, nick **[NM] → [AMG]**.',
-                color=discord.Color.orange()
+                color=cores.AMBAR
             )
 
             for item in changed[:15]:
@@ -672,7 +673,7 @@ class AutoPurgeCog(commands.Cog):
         from discord_utils import cortar, enviar_embed, LIM_DESCRICAO
         embed = discord.Embed(title='Rastreando Discord ID',
                               description=cortar(n.join(partes), LIM_DESCRICAO),
-                              color=discord.Color.blurple())
+                              color=cores.OURO)
         await enviar_embed(interaction.followup, embed, rotulo='quem_e', ephemeral=True)
 
     @discord.app_commands.command(
@@ -772,7 +773,7 @@ class AutoPurgeCog(commands.Cog):
         embed = discord.Embed(
             title='Amigos que voltaram pra guild',
             description=cortar(n.join(partes), LIM_DESCRICAO),
-            color=discord.Color.gold())
+            color=cores.OURO)
         from discord_utils import enviar_embed
         # Botão "corrigir" só pros que batem EXATO com o nome da guild. Os de
         # apelido parecido continuam à mão: lá o apelido também está errado, e

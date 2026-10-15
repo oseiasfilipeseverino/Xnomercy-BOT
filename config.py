@@ -3,8 +3,8 @@ config.py — Configuração central do XnoMercy Bot
 Edite aqui os nomes dos cargos do seu servidor Discord.
 """
 
+import cores
 import os
-import discord
 
 # ID do servidor principal da guild — usado pra restringir sincronização de
 # comandos administrativos e pra achar o servidor certo em auto_purge/
@@ -138,13 +138,13 @@ CATEGORIES = {
 
 # ── Cores dos embeds ───────────────────────────────────────────────────────────
 COLORS = {
-    'gold':    discord.Color.gold(),
-    'green':   discord.Color.green(),
-    'red':     discord.Color.red(),
-    'blue':    discord.Color.blue(),
-    'orange':  discord.Color.orange(),
-    'purple':  discord.Color.purple(),
-    'default': discord.Color.dark_gold(),
+    'gold':    cores.OURO,
+    'green':   cores.VERDE,
+    'red':     cores.VERMELHO,
+    'blue':    cores.OURO,
+    'orange':  cores.AMBAR,
+    'purple':  cores.OURO,
+    'default': cores.OURO,
 }
 
 # ── Mensagem de boas-vindas ────────────────────────────────────────────────────

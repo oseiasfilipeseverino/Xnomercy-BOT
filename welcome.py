@@ -2,6 +2,7 @@
 welcome.py — Boas-vindas + configurações + permissões
 """
  
+import cores
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -140,7 +141,7 @@ class WelcomeCog(commands.Cog):
                        .replace('{nome}', member.display_name)
                        .replace('{site}', f'[🌐 Acesse o site da guild]({site_url})'))
  
-            embed = discord.Embed(title=title, description=message, color=discord.Color.gold())
+            embed = discord.Embed(title=title, description=message, color=cores.OURO)
             embed.set_thumbnail(url=member.display_avatar.url)
             embed.set_footer(text='XnoMercy Guild')
  
@@ -189,7 +190,7 @@ class WelcomeCog(commands.Cog):
                        .replace('{nome}', member.display_name)
                        .replace('{site}', f'[🌐 Acesse o site da guild]({site_url})'))
 
-            embed = discord.Embed(title=title, description=message, color=discord.Color.dark_gold())
+            embed = discord.Embed(title=title, description=message, color=cores.OURO)
             embed.set_thumbnail(url=member.display_avatar.url)
             embed.set_footer(text='XnoMercy Guild')
 
@@ -233,7 +234,7 @@ class WelcomeCog(commands.Cog):
             return
         await database.run_db(database.set_config, 'goodbye_title', titulo)
         await database.run_db(database.set_config, 'goodbye_message', mensagem.replace('\\n', '\n'))
-        embed = discord.Embed(title='✅ Despedida Atualizada', color=discord.Color.green())
+        embed = discord.Embed(title='✅ Despedida Atualizada', color=cores.VERDE)
         embed.add_field(name='Título',   value=titulo,   inline=False)
         embed.add_field(name='Mensagem', value=mensagem, inline=False)
         embed.set_footer(text='A DM de despedida é best-effort — o Discord bloqueia o envio pra quem já saiu e não compartilha outro servidor com o bot. O aviso no canal de saídas sempre funciona.')
@@ -262,7 +263,7 @@ class WelcomeCog(commands.Cog):
                    .replace('{mention}', target.mention)
                    .replace('{nome}', target.display_name)
                    .replace('{site}', f'[🌐 Acesse o site da guild]({site_url})'))
-        embed = discord.Embed(title=title, description=message, color=discord.Color.dark_gold())
+        embed = discord.Embed(title=title, description=message, color=cores.OURO)
         embed.set_thumbnail(url=target.display_avatar.url)
         embed.set_footer(text='XnoMercy Guild | Mensagem de despedida (teste)')
         try:
@@ -305,7 +306,7 @@ class WelcomeCog(commands.Cog):
                    .replace('{nome}', target.display_name)
                    .replace('{site}', f'[🌐 Acesse o site da guild]({site_url})'))
  
-        embed = discord.Embed(title=title, description=message, color=discord.Color.gold())
+        embed = discord.Embed(title=title, description=message, color=cores.OURO)
         embed.set_thumbnail(url=target.display_avatar.url)
         embed.set_footer(text='XnoMercy Guild | Mensagem de boas-vindas')
  
@@ -342,7 +343,7 @@ class WelcomeCog(commands.Cog):
         ch_id = str(canal.id) if canal else await database.run_db(database.get_config, 'channel_boas_vindas')
         await database.run_db(database.set_welcome_config, titulo, mensagem.replace('\\n', '\n'), ch_id)
  
-        embed = discord.Embed(title='✅ Boas-vindas Atualizada', color=discord.Color.green())
+        embed = discord.Embed(title='✅ Boas-vindas Atualizada', color=cores.VERDE)
         embed.add_field(name='Título',   value=titulo,   inline=False)
         embed.add_field(name='Mensagem', value=mensagem, inline=False)
         if canal:
@@ -438,7 +439,7 @@ class WelcomeCog(commands.Cog):
             return
  
         all_perms = await database.run_db(database.get_all_permissions)
-        embed = discord.Embed(title='⚙️ Permissões Configuradas', color=discord.Color.blurple())
+        embed = discord.Embed(title='⚙️ Permissões Configuradas', color=cores.OURO)
  
         labels = {
             'financial':      '💰 Financeiro',

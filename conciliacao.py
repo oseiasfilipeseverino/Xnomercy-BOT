@@ -19,6 +19,7 @@ todo dia com o mesmo conteúdo e viraria ruído — e um alerta que sempre toca 
 igual a um alerta desligado.
 """
 
+import cores
 import datetime
 
 import discord
@@ -140,7 +141,7 @@ class ConciliacaoCog(commands.Cog):
                     'sem registrar no extrato — o dinheiro pode estar certo, '
                     'mas não há como auditar de onde veio.\n\n'
                     + '\n\n'.join(linhas)),
-                color=discord.Color.orange(),
+                color=cores.AMBAR,
                 timestamp=datetime.datetime.now(datetime.timezone.utc))
             if len(novos) > 15:
                 embed.set_footer(text=f'e mais {len(novos) - 15} conta(s)')

@@ -117,6 +117,7 @@ class ScheduledEventsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self._paineis_sumidos = set()   # ver _update_embed
+        self._travas_painel = {}         # evento -> asyncio.Lock, ver _update_embed
         self.post_pending_task.start()
         self.notification_task.start()
         self.reopen_pending_task.start()
@@ -668,6 +669,15 @@ class ScheduledEventsCog(commands.Cog):
                 pass
 
     async def _update_embed(self, event_id):
+        # Uma atualizacao por vez em cada evento, lendo o banco SO' quando chega a
+        # vez. Em 15/10 (evento 801) o "-5" e o "5" do Golldden vieram em
+        # segundos: a atualizacao do "-5" leu a vaga vazia, demorou no Discord e
+        # editou DEPOIS da do "5" - o painel ficou "Vazio" com ele inscrito.
+        trava = self._travas_painel.setdefault(event_id, asyncio.Lock())
+        async with trava:
+            await self._update_embed_agora(event_id)
+
+    async def _update_embed_agora(self, event_id):
         try:
             event       = await database.run_db(database.get_scheduled_event, event_id)
             assignments = await database.run_db(database.get_slot_assignments, event_id)

@@ -1992,3 +1992,22 @@ def set_event_status(event_id, status):
         conn.commit()
     finally:
         release(conn)
+
+
+def encerrar_evento_vencido(event_id):
+    """Encerra evento que passou do horario e ninguem encerrou. True se encerrou.
+
+    So' mexe se ainda estiver 'waiting'/'active': se alguem estiver lancando o
+    split agora (pending_split), o UPDATE nao pega e nada se perde. Encerrado o
+    evento segue aceitando split no site (vai pra lista de finalizados).
+    """
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE scheduled_events SET status='finished' "
+                  "WHERE id=%s AND status IN ('waiting','active')", (event_id,))
+        mudou = c.rowcount > 0
+        conn.commit()
+        return mudou
+    finally:
+        release(conn)

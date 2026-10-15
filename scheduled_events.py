@@ -113,11 +113,15 @@ def build_embed(event, assignments):
     return embed
 
 
+HORAS_PARA_ENCERRAR = 12   # evento aberto ha mais que isso depois do horario e' encerrado
+
+
 class ScheduledEventsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self._paineis_sumidos = set()   # ver _update_embed
         self._travas_painel = {}         # evento -> asyncio.Lock, ver _update_embed
+        self._paineis_conferidos = False # ver _conferir_paineis_depois_do_deploy
         self.post_pending_task.start()
         self.notification_task.start()
         self.reopen_pending_task.start()
@@ -728,6 +732,17 @@ class ScheduledEventsCog(commands.Cog):
 
                 diff = (dt - now).total_seconds() / 60
 
+                # Passou 12h do horario e ninguem encerrou: encerra. Em 15/10 havia
+                # 8 eventos de 11 a 15/10 presos em "aguardando" - continuavam na
+                # lista de ativos do site e o topico aceitava inscricao. O split
+                # continua possivel no site depois de encerrado.
+                if diff < -HORAS_PARA_ENCERRAR * 60:
+                    if await database.run_db(database.encerrar_evento_vencido, event["id"]):
+                        print("[scheduled_events] evento " + str(event["id"]) + " ('"
+                              + str(event.get("title", "?")) + "') encerrado: "
+                              + str(HORAS_PARA_ENCERRAR) + "h depois do horario")
+                    continue
+
                 if 29 <= diff <= 31 and not event["notify_30"]:
                     await self._notify_dm(event, 30)
                     await database.run_db(database.update_scheduled_event_notify, event["id"], notify_30=1)
@@ -814,6 +829,33 @@ class ScheduledEventsCog(commands.Cog):
             print("[scheduled_events] " + str(len(events)) + " evento(s) ativo(s)")
         except Exception as e:
             print("[scheduled_events] erro ao contar eventos ativos: " + repr(e))
+        # Uma vez por processo (o on_ready repete a cada reconexao).
+        if not self._paineis_conferidos:
+            self._paineis_conferidos = True
+            asyncio.create_task(self._conferir_paineis_depois_do_deploy())
+
+    async def _conferir_paineis_depois_do_deploy(self, espera=45):
+        """Redesenha os paineis abertos a partir do banco, depois que o bot antigo saiu.
+
+        Num deploy o Railway liga o bot novo antes de desligar o antigo: por uns
+        segundos os DOIS respondem no Discord. Em 15/10 (evento 801) o "-5" caiu
+        no antigo e o "5" no novo; a edicao atrasada do antigo passou por cima e
+        o painel ficou "Vazio" com o Golldden inscrito. A trava do _update_embed
+        nao alcanca outro processo; isto corrige qualquer painel que tenha ficado
+        velho nessa janela.
+        """
+        await asyncio.sleep(espera)
+        try:
+            events = await database.run_db(database.get_active_scheduled_events)
+        except Exception as e:
+            print("[scheduled_events] conferencia de paineis: " + repr(e))
+            return
+        n = 0
+        for ev in events or []:
+            if ev.get("message_id") and ev.get("channel_id"):
+                await self._update_embed(ev["id"])
+                n += 1
+        print("[scheduled_events] " + str(n) + " painel(is) redesenhado(s) depois do deploy")
 
 
 async def setup(bot):

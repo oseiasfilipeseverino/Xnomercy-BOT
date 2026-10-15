@@ -72,6 +72,38 @@ asyncio.run(rodar())
 checar(edicoes and edicoes[-1] == ['[AMG] Golldden'],
        f'painel termina mostrando quem esta no banco (edicoes: {edicoes})')
 
+print('\n-- depois do deploy: redesenha os paineis abertos, uma vez')
+# No deploy o bot antigo e o novo respondem juntos por uns segundos; a trava
+# nao alcanca outro processo. O bot novo redesenha tudo depois que o antigo saiu.
+redesenhados = []
+
+
+async def falso_update(eid):
+    redesenhados.append(eid)
+
+database.get_active_scheduled_events = lambda: [
+    {'id': 801, 'message_id': '1', 'channel_id': '2'},
+    {'id': 802, 'message_id': None, 'channel_id': '2'},   # ainda nao postado
+    {'id': 803, 'message_id': '9', 'channel_id': '2'}]
+cog._update_embed = falso_update
+cog._paineis_conferidos = False
+criadas = []
+real_create_task = asyncio.create_task
+
+
+async def deploy():
+    se.asyncio.create_task = lambda coro: criadas.append(coro) or real_create_task(coro)
+    await cog.on_ready()
+    await cog.on_ready()          # reconexao: nao pode agendar de novo
+    se.asyncio.create_task = real_create_task
+    for c in criadas:
+        c.close()                 # descarta a de 45s; roda a conferencia sem espera
+    await cog._conferir_paineis_depois_do_deploy(espera=0)
+
+asyncio.run(deploy())
+checar(len(criadas) == 1, f'agenda uma vez por processo, nao a cada reconexao ({len(criadas)})')
+checar(redesenhados == [801, 803], f'redesenha so os que tem painel ({redesenhados})')
+
 if falhas:
     print(f'\nFALHOU: {len(falhas)}')
     sys.exit(1)

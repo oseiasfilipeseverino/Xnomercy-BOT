@@ -282,7 +282,8 @@ class AlbionRegister(commands.Cog):
             await interaction.followup.send(
                 '⚠️ A **API do Albion** não está respondendo agora, então não deu '
                 'pra confirmar seu personagem.\n'
-                '> Não é problema no seu nick. Tente de novo em alguns minutos.',
+                '> Não é problema no seu nick. Tente de novo em alguns minutos.\n'
+                '> Se continuar por mais de meia hora, chame alguém da staff.',
                 ephemeral=True)
             return
 

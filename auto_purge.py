@@ -774,8 +774,59 @@ class AutoPurgeCog(commands.Cog):
             description=cortar(n.join(partes), LIM_DESCRICAO),
             color=discord.Color.gold())
         from discord_utils import enviar_embed
+        # Botão "corrigir" só pros que batem EXATO com o nome da guild. Os de
+        # apelido parecido continuam à mão: lá o apelido também está errado, e
+        # adivinhar o nick certo pode virar outra pessoa.
+        view = None
+        membro_role = discord.utils.get(guild.roles, name=ROLE_MEMBRO)
+        if exatos and membro_role:
+            view = CorrigirAmigosView(exatos, interaction.user.id, membro_role, amigo_role)
         await enviar_embed(interaction.followup, embed,
-                           rotulo='conferir_amigos', ephemeral=True)
+                           rotulo='conferir_amigos', ephemeral=True,
+                           **({'view': view} if view else {}))
+
+
+class CorrigirAmigosView(discord.ui.View):
+    """Devolve Membro e [NM] a quem está como Amigo mas está na guild.
+
+    Em 07/10 isso foi feito à mão em 16 pessoas depois de uma limpeza grande.
+    Só quem rodou o comando aperta; cada um é conferido de novo na hora (pode
+    ter mudado entre a lista e o clique)."""
+
+    def __init__(self, alvos, autor_id, membro_role, amigo_role):
+        super().__init__(timeout=600)
+        self.alvos, self.autor_id = alvos, autor_id
+        self.membro_role, self.amigo_role = membro_role, amigo_role
+        self.corrigir.label = f'Corrigir os {len(alvos)}'
+
+    @discord.ui.button(label='Corrigir', style=discord.ButtonStyle.success)
+    async def corrigir(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.autor_id:
+            await interaction.response.send_message('❌ Só quem rodou o comando pode corrigir.', ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        feitos, erros = [], []
+        for m, nome in self.alvos:
+            try:
+                if self.amigo_role in m.roles:
+                    await m.remove_roles(self.amigo_role, reason='Conferir amigos: está na guild no Albion')
+                if self.membro_role not in m.roles:
+                    await m.add_roles(self.membro_role, reason='Conferir amigos: está na guild no Albion')
+                try:
+                    await m.edit(nick=('[NM] ' + nome)[:32], reason='Conferir amigos')
+                except discord.Forbidden:
+                    pass   # dono do servidor / cargo acima do bot: cargo já foi
+                feitos.append(nome)
+            except Exception as e:
+                erros.append(f'{nome} ({type(e).__name__})')
+        button.disabled = True
+        try:
+            await interaction.edit_original_response(view=self)
+        except Exception:
+            pass
+        msg = f'✅ Corrigidos: {len(feitos)}' + (f' · ❌ falharam: {", ".join(erros)}' if erros else '')
+        print(f'[conferir_amigos] {msg} — por {interaction.user}')
+        await interaction.followup.send(msg, ephemeral=True)
 
 
 async def setup(bot):

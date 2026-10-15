@@ -26,10 +26,12 @@ COMMAND_GROUPS = [
         ('/extrato', 'Seu histórico de créditos e débitos na guild'),
         ('/transferir_saldo', 'Transfere prata do SEU saldo para outro membro'),
         ('/albion_register', 'Registra seu nick do Albion pra ganhar o cargo de Membro'),
+        ('/conferencia', 'No tópico de um evento: quem fechou cada slot'),
     ]),
     ('Staff', 'support_tickets', [
         ('/saldos', 'Ver todos os saldos da guild'),
         ('/mover_todos', 'Move todos de uma call de voz para outra'),
+        ('/extrato_dia', 'Extrato dos eventos depositados no dia'),
     ]),
     ('Recrutadores', 'recruit_tickets', [
         ('/registrar', 'Registra manualmente o nick de outro membro'),
@@ -47,6 +49,12 @@ COMMAND_GROUPS = [
         ('/extrato_membro', 'Ver o extrato de um membro (auditoria)'),
         ('/configurar_taxa', 'Configura as taxas de loot'),
         ('/ver_taxas', 'Ver as taxas configuradas'),
+        ('/backup_agora', 'Gera a cópia do banco agora e posta no canal privado'),
+    ]),
+    ('Líder / Vice — Membros', 'financial', [
+        ('/conferir_amigos', 'Quem está como Amigo mas está na guild no Albion'),
+        ('/quem_e', 'Descobre quem é um Discord ID (nome, saldo, histórico)'),
+        ('/diag_albion', 'Testa a API do Albion e mostra o que ela responde'),
     ]),
     ('Líder / Vice — Configuração', 'financial', [
         ('/setup', 'Cria e configura toda a estrutura do bot'),
@@ -57,6 +65,8 @@ COMMAND_GROUPS = [
         ('/configurar_despedida', 'Edita a mensagem de despedida'),
         ('/testar_despedida', 'Testa a DM de despedida'),
         ('/configurar_canal', 'Aponta uma função do bot para um canal'),
+        ('/configurar_cargo_entrada', 'Cargo que todo mundo recebe ao entrar no servidor'),
+        ('/arquivar', 'Apaga os canais dos tickets já fechados'),
         ('/configurar_permissao', 'Define quais cargos têm cada permissão'),
         ('/ver_permissoes', 'Ver todas as permissões configuradas'),
     ]),

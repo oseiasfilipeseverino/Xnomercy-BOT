@@ -58,6 +58,7 @@ def novo_cog():
     cog.bot = None
     cog.guild_id, cog.desde, cog.postados = None, None, set()
     cog.membros, cog.fila_mortes = [], []
+    cog._trava = asyncio.Lock()
 
     async def canal():
         return Canal()
@@ -95,6 +96,24 @@ async def rodar():
     checar('T6_MAIN_SPEAR' in (enviados[2].thumbnail.url or ''), 'na morte mostra a arma do nosso membro (quem morreu)')
 
 asyncio.run(rodar())
+
+
+async def juntas():
+    """kills e mortes comecam no mesmo instante: o ponto de partida e' buscado 1 vez."""
+    config.pop('killfeed_estado', None)
+    chamadas = []
+    original = K._get
+
+    def contar(rota, timeout=60):
+        chamadas.append(rota)
+        return original(rota, timeout)
+    K._get = contar
+    cog = novo_cog()
+    await asyncio.gather(cog._preparar(), cog._preparar())
+    K._get = original
+    checar(len(chamadas) == 1, f'kills e mortes juntas: prepara uma vez so ({len(chamadas)} buscas)')
+
+asyncio.run(juntas())
 
 if falhas:
     print(f'\nFALHOU: {len(falhas)}')

@@ -85,6 +85,7 @@ class KillFeed(commands.Cog):
         self.postados = set()
         self.membros = []
         self.fila_mortes = []
+        self._trava = asyncio.Lock()   # kills e mortes comecam juntas: preparar uma vez so'
         self.kills.start()
         self.mortes.start()
 
@@ -96,6 +97,10 @@ class KillFeed(commands.Cog):
         return await asyncio.get_running_loop().run_in_executor(None, fn, *a)
 
     async def _preparar(self):
+        async with self._trava:
+            return await self._preparar_agora()
+
+    async def _preparar_agora(self):
         if self.desde is not None:
             return True
         self.guild_id = (await database.run_db(database.get_config, 'albion_guild_id') or '').strip()

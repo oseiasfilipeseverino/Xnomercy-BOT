@@ -26,7 +26,9 @@ intents.guild_messages  = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-COGS = ['tickets', 'events', 'bank', 'members', 'welcome', 'setup', 'scheduled_events', 'energy_notifications', 'weekly_report', 'auto_purge', 'market', 'help_cmd', 'albion_register', 'site_splits', 'conciliacao', 'backup', 'vigia', 'killfeed']
+# Kill Feed (killfeed.py) DESLIGADO em 18/10/2026 a pedido do Oseias. O codigo, o canal
+# e o estado (config 'killfeed_estado') ficam; pra religar, e' so voltar 'killfeed' pra lista.
+COGS = ['tickets', 'events', 'bank', 'members', 'welcome', 'setup', 'scheduled_events', 'energy_notifications', 'weekly_report', 'auto_purge', 'market', 'help_cmd', 'albion_register', 'site_splits', 'conciliacao', 'backup', 'vigia']
 
 @bot.event
 async def on_message(message):

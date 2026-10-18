@@ -197,11 +197,28 @@ def _search_player(nick):
             # faria a pessoa esperar minutos pela mesma resposta.
             break
         respondeu = True
-        for p in players:
-            if p.get('Name', '').lower() == nick.lower():
-                return p
+        mesmos = [p for p in players if p.get('Name', '').lower() == nick.lower()]
+        if mesmos:
+            return _melhor_homonimo(mesmos, nick)
 
     return False if respondeu else None
+
+
+def _melhor_homonimo(candidatos, nick):
+    """Varios personagens com o mesmo nome (so muda maiuscula): qual e' o certo.
+
+    17/10/2026: a busca por "Golldden" devolveu CINCO personagens (contas
+    antigas/renomeadas); so o "GOLLDDEN" esta na XnoMercy. O bot pegava o
+    primeiro da lista, um sem guild, e o registro dizia "Sem guild" pra um
+    membro da guild. Ordem: na XnoMercy > mesma grafia digitada > com alguma
+    guild > mais fama de kill (conta em uso).
+    """
+    return max(candidatos, key=lambda p: (
+        (p.get('GuildName') or '').lower() == GUILD_NAME.lower(),
+        p.get('Name', '') == nick,
+        bool(p.get('GuildName')),
+        p.get('KillFame') or 0,
+    ))
 
 
 def _in_guild(player):

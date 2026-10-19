@@ -9,6 +9,7 @@ from discord.ext import commands, tasks
 import datetime
 
 import database
+from energia_membros import membros_guardados, so_membros
 import config
 
 BRT_OFFSET = datetime.timedelta(hours=-3)
@@ -62,7 +63,7 @@ class WeeklyReportCog(commands.Cog):
                                  f'GROUP BY username ORDER BY events DESC LIMIT 5'),
             ('top_debtors', "SELECT player, SUM(amount) AS balance FROM energy_records "
                             "WHERE LOWER(player) != 'gayzaoviadao' GROUP BY player "
-                            "HAVING SUM(amount) < 0 ORDER BY SUM(amount) ASC LIMIT 5"),
+                            "HAVING SUM(amount) < 0 ORDER BY SUM(amount) ASC LIMIT 500"),   # filtra membros abaixo
             ('transacoes', f'SELECT COUNT(*), COALESCE(SUM(ABS(amount)),0) FROM transactions '
                            f'WHERE {d("created_at")} > {semana}'),
         ]
@@ -102,6 +103,8 @@ class WeeklyReportCog(commands.Cog):
                 elif nome == 'top_participants':
                     stats[nome] = [{'name': r[0], 'count': r[1]} for r in linhas]
                 elif nome == 'top_debtors':
+                    # Só membros: quem saiu da guild fica na lista "fora da guild" do site.
+                    linhas = so_membros(linhas, membros_guardados(conn.cursor(), conn))[:5]
                     stats[nome] = [{'name': r[0], 'debt': abs(r[1])} for r in linhas]
         finally:
             database.release(conn)

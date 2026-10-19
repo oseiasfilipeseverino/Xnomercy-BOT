@@ -14,6 +14,7 @@ from discord.ext import commands, tasks
 import datetime
 import config
 import database
+from energia_membros import membros_guardados, so_membros
 from discord_utils import SEM_MENCOES
 
 def _palavras(nome):
@@ -205,6 +206,9 @@ class EnergyNotifications(commands.Cog):
                     ORDER BY SUM(amount) ASC
                 ''')
             rows = c.fetchall()
+            # Quem saiu da guild NÃO é cobrado (19/10/2026): a energia dele fica no
+            # banco e aparece no site em "fora da guild", só pra gestão saber.
+            rows = so_membros(rows, membros_guardados(c, conn))
         return [{'player': r[0], 'debt': abs(r[1])} for r in rows]
 
     async def _send_notifications(self, message_template, debtors=None):

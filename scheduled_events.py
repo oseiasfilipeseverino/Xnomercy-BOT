@@ -445,6 +445,24 @@ class ScheduledEventsCog(commands.Cog):
             await database.run_db(database.set_event_status, event["id"], "pending_post")
             print("[scheduled_events] Erro ao postar evento '" + str(event.get("title","?")) + "': " + str(e))
 
+    async def _confirmar(self, message, emoji, texto):
+        """Reação de confirmação; se o Discord recusar, confirma por escrito.
+
+        Quem BLOQUEOU o bot não pode receber reação (o Discord recusa). Antes a
+        exceção interrompia o on_message no meio: a pessoa ficava inscrita no
+        banco, mas a lista do evento não era atualizada e o slot aparecia
+        "Vazio" — sempre com o mesmo player (Golldden, 19/10/2026). E como o
+        discord.py não tinha log ligado, o erro nem aparecia.
+        """
+        try:
+            await message.add_reaction(emoji)
+        except discord.HTTPException as e:
+            print(f"[slots] reacao recusada para {message.author.display_name}: {e!r}")
+            try:
+                await message.reply(texto, mention_author=False)
+            except discord.HTTPException as e2:
+                print(f"[slots] nem a resposta foi: {e2!r}")
+
     async def _entrar_no_slot(self, message, event, abs_num, discord_id, username):
         """Coloca quem digitou no slot. True se o embed precisa ser atualizado.
 
@@ -454,7 +472,7 @@ class ScheduledEventsCog(commands.Cog):
         """
         result = await database.run_db(database.assign_slot, event["id"], abs_num, discord_id, username)
         if result == "ok":
-            await message.add_reaction("✅")
+            await self._confirmar(message, "✅", f"✅ **{username}** entrou no slot **{abs_num}**.")
         elif result == "has_slot":
             current = await database.run_db(database.get_player_slot, event["id"], discord_id)
             reply = await message.reply(
@@ -528,7 +546,7 @@ class ScheduledEventsCog(commands.Cog):
                 alvo_id, tirou_outro = dono, True
 
         if removed and tirou_outro:
-            await message.add_reaction("👋")
+            await self._confirmar(message, "👋", f"👋 Slot **{abs_num}** liberado.")
             # Fica registrado no tópico quem tirou quem — tirar alguém da
             # composição é decisão que a guild precisa conseguir auditar.
             await message.channel.send(
@@ -539,7 +557,7 @@ class ScheduledEventsCog(commands.Cog):
             return False
 
         if removed:
-            await message.add_reaction("👋")
+            await self._confirmar(message, "👋", f"👋 **{message.author.display_name}** saiu do slot **{abs_num}**.")
         else:
             await self._responder_e_limpar(
                 message, f"Voce nao esta no slot **{abs_num}**.")

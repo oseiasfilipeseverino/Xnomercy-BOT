@@ -8,6 +8,7 @@ import sys
 # explicaria a queda — se perdia junto com o buffer.
 sys.stdout.reconfigure(line_buffering=True)
 import asyncio
+import logging
 import os
 import discord
 from discord.ext import commands
@@ -261,6 +262,11 @@ async def main():
                 print('✅  Cog: ' + cog)
             except Exception as e:
                 print('❌  Erro em ' + cog + ': ' + str(e))
+        # bot.start() (diferente do bot.run) NÃO liga o log do discord.py, e a
+        # biblioteca põe um NullHandler: todo erro dentro de on_message sumia em
+        # silêncio. Foi assim que a inscrição do Golldden falhava sem deixar rastro
+        # (19/10/2026). WARNING pra cima: erros aparecem, o falatório do gateway não.
+        discord.utils.setup_logging(level=logging.WARNING)
         await bot.start(os.getenv('TOKEN'))
 
 if __name__ == '__main__':

@@ -36,7 +36,7 @@ async def run_db(fn, *a, **kw):
 database.run_db = run_db
 database.get_scheduled_event = lambda eid: {'id': eid, 'message_id': '1', 'channel_id': '2'}
 database.get_slot_assignments = lambda eid: [] if banco['vaga5'] is None else [{'slot_number': 5, 'username': banco['vaga5']}]
-se.build_embed = lambda event, assignments: [a['username'] for a in assignments] or ['Vazio']
+se.build_embed = lambda event, assignments, *_: [a['username'] for a in assignments] or ['Vazio']
 
 edicoes = []
 chamadas = [0]

@@ -17,6 +17,8 @@ import database
 from discord_utils import (SEM_MENCOES, mencoes_do_ping, cortar, add_lista,
                            LIM_TITULO, LIM_DESCRICAO, LIM_CAMPO)
 from permissions import can_manage_events
+import config
+import emojis_armas
 
 import re
 
@@ -42,7 +44,7 @@ def parse_slots(slots_json):
         return []
 
 
-def build_embed(event, assignments):
+def build_embed(event, assignments, emojis=None):
     slots      = parse_slots(event["slots"])
     assign_map = {a["slot_number"]: a["username"] for a in assignments}
     filled     = len(assign_map)
@@ -88,6 +90,8 @@ def build_embed(event, assignments):
             player     = assign_map.get(i)
             discord_id = id_map.get(i)
             slot_name  = (slot.get("name") or "Slot " + str(i))
+            if emojis:
+                slot_name = emojis_armas.com_emoji(slot_name, emojis)
             status = "<@" + str(discord_id) + ">" if (player and discord_id) else "`Vazio`"
             entradas.append("**" + str(i) + ".** " + slot_name + "\n" + status)
 
@@ -126,6 +130,19 @@ class ScheduledEventsCog(commands.Cog):
         self.notification_task.start()
         self.reopen_pending_task.start()
         self.delete_pending_task.start()
+
+    def _emojis_armas(self):
+        """{nome da arma: '<:Nome:id>'} dos emojis de arma que existem no servidor.
+
+        Lido do cache do Discord a cada montagem: emoji novo ou apagado vale no
+        próximo update do evento, sem reiniciar o bot. Nunca derruba o ping."""
+        try:
+            guild = config.get_home_guild(self.bot)
+            if not guild:
+                return {}
+            return {e.name: str(e) for e in guild.emojis if e.name in emojis_armas.ARMAS and e.available}
+        except Exception:
+            return {}   # sem emoji o ping sai como sempre saiu; não vale poluir o log
 
     def cog_unload(self):
         self.post_pending_task.cancel()
@@ -389,7 +406,7 @@ class ScheduledEventsCog(commands.Cog):
                 return
 
             assignments = []
-            embed = build_embed(event, assignments)
+            embed = build_embed(event, assignments, self._emojis_armas())
 
             try:
                 dt = datetime.fromisoformat(event["scheduled_time"])
@@ -703,7 +720,7 @@ class ScheduledEventsCog(commands.Cog):
         try:
             event       = await database.run_db(database.get_scheduled_event, event_id)
             assignments = await database.run_db(database.get_slot_assignments, event_id)
-            embed       = build_embed(event, assignments)
+            embed       = build_embed(event, assignments, self._emojis_armas())
 
             if not event.get("message_id") or not event.get("channel_id"):
                 return

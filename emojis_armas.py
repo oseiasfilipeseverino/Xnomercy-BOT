@@ -13,7 +13,7 @@ import re
 import unicodedata
 
 ARMAS = {
-    'FuraBruma': ('bruma', 'furabruma'),   # Fura-bruma do Ancião (T8_2H_BOW_AVALON)
+    'FuraBruma': ('bruma', 'fb', 'furabruma'),   # Fura-bruma do Ancião (T8_2H_BOW_AVALON)
     'Enraizado': ('arvore', 'enraizado'),   # Cajado Enraizado do Ancião (T8_2H_SHAPESHIFTER_SET2)
     'Pustulento': ('postulento', 'pustulento'),   # Cajado Pustulento do Ancião (T8_2H_NATURESTAFF_HELL)
     'ArcoLongo': ('arcolongo',),   # Arco Longo do Ancião (T8_2H_LONGBOW)

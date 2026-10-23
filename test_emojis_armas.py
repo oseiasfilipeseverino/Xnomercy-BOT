@@ -26,7 +26,8 @@ for vaga, esperado in (('QUEDA SANTA BEAM', 'QuedaSanta'), ('CALLER/ESTRONDOSO',
                        ('MAÇA PESADA', 'MacaPesada'), ('Maça', 'Maca'), ('ENIGMATICO', 'Enigmatico'),
                        ('PUTRIDO', 'Putrido'), ('G.A', 'GA'), ('PRISMA', 'PrismaGeleterno'),
                        ('CALLER', None), ('DPS', None), ('PT HEAL', None), ('DEFF TANK', None),
-                       ('ESCUDO', None), ('DISCORD', None)):
+                       ('ESCUDO', None), ('DISCORD', None), ('Bruma', 'FuraBruma'), ('FURA BRUMA', 'FuraBruma'),
+                       ('Fulgurante', 'Fulgurante'), ('Badonico', 'Badonico'), ('BADON', 'Badonico')):
     checar(E.arma_da_vaga(vaga) == esperado, f'{vaga!r} -> {E.arma_da_vaga(vaga)}')
 
 servidor = {'QuedaSanta': '<:QuedaSanta:1>', 'Sussurrante': '<:Sussurrante:2>', 'Besta': '<:Besta:3>',

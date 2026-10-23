@@ -13,6 +13,7 @@ import re
 import unicodedata
 
 ARMAS = {
+    'FuraBruma': ('bruma', 'furabruma'),   # Fura-bruma do Ancião (T8_2H_BOW_AVALON)
     'Enraizado': ('arvore', 'enraizado'),   # Cajado Enraizado do Ancião (T8_2H_SHAPESHIFTER_SET2)
     'Pustulento': ('postulento', 'pustulento'),   # Cajado Pustulento do Ancião (T8_2H_NATURESTAFF_HELL)
     'ArcoLongo': ('arcolongo',),   # Arco Longo do Ancião (T8_2H_LONGBOW)
@@ -42,7 +43,7 @@ ARMAS = {
     'Redencao': ('redencao',),   # Cajado da Redenção do Ancião
     'PrismaGeleterno': ('prisma', 'prismageleterno'),   # Prisma Geleterno do Ancião
     'Sincelo': ('sincelo',),   # Cajado de Sincelo do Ancião
-    'Fulgurante': ('fulgurante',),   # Cajado Fulgurante do Ancião
+    'Fulgurante': ('fulgurante', 'fulg'),   # Cajado Fulgurante do Ancião
     'Bracadeiras': ('bracadeiras', 'bracadeirasdebatalha', 'bracadeirasdecombate', 'bracers'),   # Braçadeiras de Batalha do Ancião
     'Cravadas': ('cravadas',),   # Manoplas Cravadas do Ancião
     'Sussurrante': ('sussurante', 'sussurrante', 'susurrante'),   # Arco Sussurrante do Ancião

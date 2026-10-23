@@ -13,10 +13,13 @@ import re
 import unicodedata
 
 ARMAS = {
+    'Enraizado': ('arvore', 'enraizado'),   # Cajado Enraizado do Ancião (T8_2H_SHAPESHIFTER_SET2)
+    'Pustulento': ('postulento', 'pustulento'),   # Cajado Pustulento do Ancião (T8_2H_NATURESTAFF_HELL)
+    'ArcoLongo': ('arcolongo',),   # Arco Longo do Ancião (T8_2H_LONGBOW)
     'GA': ('arcanoelevado', 'ga'),   # Cajado Arcano Elevado do Ancião
     'Astral': ('astral',),   # Cajado Astral do Ancião
     'Oculto': ('oculto',),   # Cajado Oculto do Ancião
-    'QuebraReino': ('quebrareino', 'quebrareinos'),   # Quebra-reino do Ancião
+    'QuebraReino': ('quebra', 'quebrareino', 'quebrareinos'),   # Quebra-reino do Ancião
     'ArcoPlangente': ('arcoplangente', 'plangente'),   # Arco Plangente do Ancião
     'Badonico': ('badon', 'badonico'),   # Arco Badônico do Ancião
     'MongeNegro': ('monge', 'mongenegro'),   # Cajado de Monge Negro do Ancião
@@ -40,7 +43,7 @@ ARMAS = {
     'PrismaGeleterno': ('prisma', 'prismageleterno'),   # Prisma Geleterno do Ancião
     'Sincelo': ('sincelo',),   # Cajado de Sincelo do Ancião
     'Fulgurante': ('fulgurante',),   # Cajado Fulgurante do Ancião
-    'Bracadeiras': ('bracadeiras', 'bracadeirasdebatalha'),   # Braçadeiras de Batalha do Ancião
+    'Bracadeiras': ('bracadeiras', 'bracadeirasdebatalha', 'bracadeirasdecombate', 'bracers'),   # Braçadeiras de Batalha do Ancião
     'Cravadas': ('cravadas',),   # Manoplas Cravadas do Ancião
     'Sussurrante': ('sussurante', 'sussurrante', 'susurrante'),   # Arco Sussurrante do Ancião
     'MacaPesada': ('macapesada', 'pesada'),   # Maça Pesada do Ancião
@@ -73,7 +76,10 @@ ARMAS = {
 }
 
 
-ARMA_DO_CALLER = 'Maca'
+# Padrões da guild (Oseias, 23/10/2026): vaga só com a função usa esta arma, a não
+# ser que a vaga já cite outra ("CALLER/ESTRONDOSO" fica só com o Estrondoso).
+ARMA_DA_FUNCAO = {'caller': 'Maca', 'debuff': 'ChamaSombra', 'finalizador': 'Dessangrador'}
+ARMA_DO_CALLER = ARMA_DA_FUNCAO['caller']
 
 
 def chave(texto):
@@ -96,6 +102,36 @@ def arma_da_vaga(nome_vaga):
     return melhor
 
 
+def armas_da_vaga(nome_vaga):
+    """Todas as armas citadas no texto, na ordem em que aparecem ("Quebra-Bracers" = duas).
+
+    Trechos que se sobrepõem ficam com o apelido mais comprido: "MAÇA PESADA" é só a
+    Maça Pesada, não Maça + Maça Pesada."""
+    k = chave(nome_vaga)
+    if not k:
+        return []
+    achados = []
+    for emoji, apelidos in ARMAS.items():
+        for a in apelidos:
+            if len(a) < 4:
+                if k == a:
+                    achados.append((0, len(a), emoji))
+            else:
+                ini = k.find(a)
+                while ini >= 0:
+                    achados.append((ini, ini + len(a), emoji))
+                    ini = k.find(a, ini + 1)
+    escolhidos = []
+    for ini, fim, emoji in sorted(achados, key=lambda x: -(x[1] - x[0])):
+        if all(fim <= i or ini >= f for i, f, _ in escolhidos):
+            escolhidos.append((ini, fim, emoji))
+    ordem = []
+    for _, _, emoji in sorted(escolhidos):
+        if emoji not in ordem:
+            ordem.append(emoji)
+    return ordem
+
+
 def com_emoji(nome_vaga, emojis_do_servidor):
     """'<:Nome:id> NOME DA VAGA' se a arma tem emoji no servidor; senão o nome como veio.
 
@@ -103,12 +139,15 @@ def com_emoji(nome_vaga, emojis_do_servidor):
     marcas = []
     partes = re.split(r'[/|]', nome_vaga or '')
     for parte in partes:
-        arma = arma_da_vaga(parte)
-        marca = emojis_do_servidor.get(arma) if arma else None
-        if marca and marca not in marcas:
-            marcas.append(marca)
-    # Padrão da guild (Oseias, 23/10/2026): vaga de CALLER usa a Maça, a não ser
-    # que a vaga já cite a arma ("CALLER/ESTRONDOSO" fica só com o Estrondoso).
-    if not marcas and any(chave(p).startswith('caller') for p in partes) and emojis_do_servidor.get(ARMA_DO_CALLER):
-        marcas.append(emojis_do_servidor[ARMA_DO_CALLER])
+        for arma in armas_da_vaga(parte):
+            marca = emojis_do_servidor.get(arma)
+            if marca and marca not in marcas:
+                marcas.append(marca)
+    if not marcas:
+        for parte in partes:
+            k = chave(parte)
+            for funcao, arma in ARMA_DA_FUNCAO.items():
+                marca = emojis_do_servidor.get(arma)
+                if k.startswith(funcao) and marca and marca not in marcas:
+                    marcas.append(marca)
     return ''.join(marcas) + ' ' + nome_vaga if marcas else nome_vaga

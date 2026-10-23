@@ -40,6 +40,15 @@ checar(E.com_emoji('CALLER', servidor) == '<:Maca:5> CALLER', 'CALLER sem arma: 
 checar(E.com_emoji('CALLER/ESTRONDOSO', servidor) == '<:MarteloEstrondoso:6> CALLER/ESTRONDOSO',
        'CALLER que cita a arma: so a arma citada')
 
+print('\n-- vagas do evento 830 (23/10/2026)')
+servidor.update({'Enraizado': '<:Enraizado:7>', 'Pustulento': '<:Pustulento:8>', 'ArcoLongo': '<:ArcoLongo:9>',
+                 'QuebraReino': '<:QuebraReino:10>', 'Bracadeiras': '<:Bracadeiras:11>',
+                 'ChamaSombra': '<:ChamaSombra:12>', 'Dessangrador': '<:Dessangrador:13>'})
+for vaga, esperado in (('Árvore', '<:Enraizado:7>'), ('Postulento', '<:Pustulento:8>'), ('Arco-longo', '<:ArcoLongo:9>'),
+                       ('Quebra-Bracers', '<:QuebraReino:10><:Bracadeiras:11>'), ('Debuff', '<:ChamaSombra:12>'),
+                       ('Finalizador/Looter', '<:Dessangrador:13>'), ('MAÇA PESADA', '<:MacaPesada:4>')):
+    checar(E.com_emoji(vaga, servidor) == f'{esperado} {vaga}', f'{vaga!r} -> {E.com_emoji(vaga, servidor)}')
+
 print('\n-- o ping de verdade')
 evento = {'id': 1, 'title': 'DG', 'scheduled_time': '2026-10-23T21:00:00',
           'slots': json.dumps([{'name': 'CALLER'}, {'name': 'QUEDA SANTA BEAM'}, {'name': 'MAÇA PESADA'}])}

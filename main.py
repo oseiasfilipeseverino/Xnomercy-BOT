@@ -25,7 +25,14 @@ intents.message_content = True
 intents.members         = True
 intents.guild_messages  = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+# Padrão do bot inteiro: nunca @everyone/@here nem cargo. Várias respostas
+# repetem texto de terceiros (título de evento, apelido) e não passavam
+# allowed_mentions — um apelido "@everyone" pingava o servidor (revisão de
+# 29/10, B-21). O post do evento libera o ping escolhido com mencoes_do_ping;
+# menção de pessoa continua valendo (o ticket avisa quem abriu).
+bot = commands.Bot(command_prefix='!', intents=intents,
+                   allowed_mentions=discord.AllowedMentions(everyone=False, roles=False,
+                                                            users=True, replied_user=True))
 
 # Kill Feed (killfeed.py) DESLIGADO em 18/10/2026 a pedido do Oseias. O codigo, o canal
 # e o estado (config 'killfeed_estado') ficam; pra religar, e' so voltar 'killfeed' pra lista.

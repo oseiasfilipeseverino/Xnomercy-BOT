@@ -1484,9 +1484,18 @@ def reject_pending_split(split_id, reviewed_by):
         c = conn.cursor()
         c.execute("UPDATE pending_splits SET status='rejected', reviewed_by=%s, reviewed_at=NOW() WHERE id=%s AND status='pending'",
                   (reviewed_by, split_id))
-        c.execute("UPDATE scheduled_events SET status='finished' WHERE id=(SELECT event_id FROM pending_splits WHERE id=%s)", (split_id,))
+        # O resultado é o da RECUSA. Antes lia o rowcount do UPDATE do evento,
+        # que casa sempre: recusar um split que outro líder acabou de aprovar
+        # devolvia True e voltava o evento split_done para 'finished' — ele
+        # podia ser dividido de novo e pago em dobro (revisão de 29/10, B-08).
+        # Mesma correção no db.py do site.
+        venceu = c.rowcount > 0
+        if venceu:
+            c.execute("UPDATE scheduled_events SET status='finished' "
+                      "WHERE id=(SELECT event_id FROM pending_splits WHERE id=%s) AND status='pending_split'",
+                      (split_id,))
         conn.commit()
-        return c.rowcount > 0
+        return venceu
     finally:
         release(conn)
 

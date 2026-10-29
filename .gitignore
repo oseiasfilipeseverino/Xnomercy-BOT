@@ -25,3 +25,8 @@ auditoria*.log
 diag_*.txt
 *.dump
 *.sql.gz
+
+# Registro das ferramentas do Claude Code (comandos e caminhos da maquina de
+# quem rodou). Nao e' codigo e o `railway up` sobe o que nao esta ignorado.
+receipts/
+review-receipts/

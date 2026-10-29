@@ -240,8 +240,9 @@ class ScheduledEventsCog(commands.Cog):
                 # ║  FIX: Atualiza status ANTES de qualquer chamada Discord  ║
                 # ║  Evita duplo-post quando o loop roda antes de terminar   ║
                 # ╚══════════════════════════════════════════════════════════╝
-                await database.run_db(database.set_event_status, event["id"], "posting")
-                await self._post_event(event)
+                # Condicional: só posta quem venceu (ver reivindicar_evento).
+                if await database.run_db(database.reivindicar_evento, event["id"], "pending_post", "posting"):
+                    await self._post_event(event)
         except Exception as e:
             print("[scheduled_events] Erro post_pending_task: " + str(e))
 
@@ -256,8 +257,8 @@ class ScheduledEventsCog(commands.Cog):
             for event in await database.run_db(database.get_pending_reopen_events):
                 # Trava o status ANTES de qualquer chamada ao Discord, senão o
                 # proximo ciclo pega o mesmo evento e reprocessa em paralelo.
-                await database.run_db(database.set_event_status, event["id"], "reopening")
-                await self._reopen_event(event)
+                if await database.run_db(database.reivindicar_evento, event["id"], "pending_reopen", "reopening"):
+                    await self._reopen_event(event)
         except Exception as e:
             print("[scheduled_events] Erro reopen_pending_task: " + str(e))
 
@@ -273,8 +274,8 @@ class ScheduledEventsCog(commands.Cog):
                 # Trava o status ANTES de falar com o Discord, igual às outras
                 # tasks: sem isso o próximo ciclo pega o mesmo evento e tenta
                 # apagar o tópico duas vezes.
-                await database.run_db(database.set_event_status, event["id"], "deleting")
-                await self._delete_event(event)
+                if await database.run_db(database.reivindicar_evento, event["id"], "pending_delete", "deleting"):
+                    await self._delete_event(event)
         except Exception as e:
             print("[scheduled_events] Erro delete_pending_task: " + str(e))
 

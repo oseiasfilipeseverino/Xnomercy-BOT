@@ -51,7 +51,13 @@ _vigia_iniciado = False
 @bot.event
 async def on_ready():
     global _price_updater_started
-    await database.run_db(database.init_db)
+    # Banco fora no boot não pode derrubar o resto do on_ready (sync dos
+    # comandos, price_updater, vigia) até a próxima reconexão (B-27). As
+    # tabelas já existem; o init_db roda de novo no próximo on_ready.
+    try:
+        await database.run_db(database.init_db)
+    except Exception as e:
+        print(f'⚠️  init_db falhou no boot (segue sem ele): {e!r}')
     print('✅  XnoMercy Bot online como ' + str(bot.user))
     # Carrega as permissoes pra memoria ANTES de o pessoal comecar a usar
     # comandos — senao a primeira checagem de cada uma ainda paga a consulta

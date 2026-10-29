@@ -1653,19 +1653,28 @@ def revert_pending_split(split_id):
 
 
 # ── Auto-purge: confirmação em múltiplas verificações ──────────────────────────
+STRIKE_JANELA_HORAS = 5   # o ciclo do purge é de 6h
+
+
 def purge_strike_add(discord_id, albion_nick):
     """Registra que este membro apareceu como fora da guild AGORA e devolve quantas
-    verificações consecutivas isso já aconteceu."""
+    verificações consecutivas isso já aconteceu.
+
+    Só conta uma por janela de STRIKE_JANELA: o ciclo do purge roda a cada 6h,
+    mas também logo que o bot sobe — dois deploys com minutos de diferença
+    davam 2 strikes e rebaixavam quem a API deixou de fora uma vez (B-22)."""
     conn = get_connection()
     try:
         c = conn.cursor()
         c.execute('''INSERT INTO purge_strikes (discord_id, albion_nick, strikes, updated_at)
                      VALUES (%s, %s, 1, NOW())
                      ON CONFLICT (discord_id) DO UPDATE SET
-                       strikes = purge_strikes.strikes + 1,
+                       strikes = CASE WHEN purge_strikes.updated_at < NOW() - make_interval(hours => %s)
+                                      THEN purge_strikes.strikes + 1 ELSE purge_strikes.strikes END,
                        albion_nick = EXCLUDED.albion_nick,
-                       updated_at = NOW()
-                     RETURNING strikes''', (discord_id, albion_nick))
+                       updated_at = CASE WHEN purge_strikes.updated_at < NOW() - make_interval(hours => %s)
+                                         THEN NOW() ELSE purge_strikes.updated_at END
+                     RETURNING strikes''', (discord_id, albion_nick, STRIKE_JANELA_HORAS, STRIKE_JANELA_HORAS))
         row = c.fetchone()
         conn.commit()
         return int(row[0]) if row else 1
@@ -2020,6 +2029,25 @@ def set_event_status(event_id, status):
         c = conn.cursor()
         c.execute("UPDATE scheduled_events SET status=%s WHERE id=%s", (status, event_id))
         conn.commit()
+    finally:
+        release(conn)
+
+
+def reivindicar_evento(event_id, de, para):
+    """Troca o status SÓ se ainda estiver em `de`; True se esta chamada venceu.
+
+    As tasks de postar/reabrir/apagar faziam set_event_status incondicional.
+    Durante um deploy o bot velho e o novo rodam juntos por alguns segundos:
+    os dois liam o evento em 'pending_post' e os dois postavam — mensagem e
+    ping em dobro (revisão de 29/10, B-19)."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE scheduled_events SET status=%s WHERE id=%s AND status=%s",
+                  (para, event_id, de))
+        venceu = c.rowcount > 0
+        conn.commit()
+        return venceu
     finally:
         release(conn)
 

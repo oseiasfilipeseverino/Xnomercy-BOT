@@ -17,6 +17,8 @@ from discord_utils import (log_channel, add_lista, cortar, enviar_embed,
 
 
 def fmt(v: float) -> str:
+    if v is None:
+        return '? prata'
     return f'{v:,.0f} prata'
 
 
@@ -178,6 +180,34 @@ async def _ler_valor(interaction, texto):
 async def _log(guild, message: str):
     # Ver discord_utils.log_channel — texto de log nunca pinga ninguem.
     await log_channel(guild, message)
+
+
+# ── Lote de prata que falha no meio ────────────────────────────────────────────
+# /adicionar_saldo, /pagar_saldo e /zerar_saldo fazem um commit por pessoa.
+# Antes uma falha de banco na 3a pessoa subia como exceção: o líder via só
+# "Erro inesperado", sem saber que as duas primeiras já tinham recebido, e
+# rodava de novo — pagando em dobro (revisão de 29/10, B-03). Agora cada
+# pessoa é tratada sozinha e a resposta diz exatamente quem ficou de fora.
+
+async def _saldo_ou_none(m):
+    """Saldo atual pra exibir; None se a leitura falhar (a prata já mudou)."""
+    try:
+        return (await database.run_db(database.get_player_balance_display, str(m.id)))[1]
+    except Exception as e:
+        print(f'[bank] saldo de {m.id} pra exibir: {e!r}')
+        return None
+
+
+def _listar_falhas(embed, falharam):
+    if falharam:
+        add_lista(embed, '🚨 NÃO processados (falha no banco) — rode de novo SÓ para estes',
+                  [m.display_name for m in falharam])
+
+
+async def _avisar_lote_falhou(interaction, falharam, o_que):
+    await interaction.followup.send(
+        f'❌ Falha no banco: {o_que}. Pode rodar o comando de novo para: '
+        + ', '.join(m.display_name for m in falharam), ephemeral=True)
 
 
 class BankCog(commands.Cog):
@@ -543,14 +573,22 @@ class BankCog(commands.Cog):
         # run_db em cada uma: sao 3 consultas POR PESSOA, e o comando aceita
         # varios de uma vez. Rodando no laço de eventos, uma chamada com 20
         # jogadores travava o bot inteiro por segundos.
+        falharam = []
         for m in members:
             # extrato= grava a linha do /extrato na MESMA transacao do saldo. Eram
             # duas chamadas separadas, cada uma com seu commit: se a segunda
             # falhasse, a prata mudava e o extrato nao registrava nada.
-            await database.run_db(database.update_player_balance, str(m.id), m.display_name, valor,
-                                  ('bonus', motivo, interaction.user.display_name))
-            ok_saldo = await database.run_db(database.get_player_balance_display, str(m.id))
-            results.append((m, ok_saldo[1]))
+            try:
+                await database.run_db(database.update_player_balance, str(m.id), m.display_name, valor,
+                                      ('bonus', motivo, interaction.user.display_name))
+            except Exception as e:
+                print(f'[adicionar_saldo] {m.id}: {e!r}')
+                falharam.append(m)
+                continue
+            results.append((m, await _saldo_ou_none(m)))
+        if not results:
+            await _avisar_lote_falhou(interaction, falharam, 'Nenhum saldo foi alterado')
+            return
 
         if len(results) == 1:
             m, novo = results[0]
@@ -573,6 +611,7 @@ class BankCog(commands.Cog):
         embed.add_field(name='📝 Motivo', value=motivo, inline=False)
         if invalid:
             add_lista(embed, '⚠️ Não encontrados no servidor', invalid)
+        _listar_falhas(embed, falharam)
         embed.set_footer(text=f'Por {interaction.user.display_name}')
         await enviar_embed(interaction.followup, embed, rotulo='adicionar_saldo')
 
@@ -624,18 +663,30 @@ class BankCog(commands.Cog):
         # antes de proposito: continuam usando response.send_message efemero.
         await interaction.response.defer()
 
+        falharam = []
         for m in members:
             # Débito atômico (checa saldo e debita na mesma query) — ler o saldo e
             # só depois debitar deixava dois Líderes pagarem a mesma pessoa ao
             # mesmo tempo e o saldo ficar NEGATIVO.
-            novo = await database.run_db(database.debit_player_balance, str(m.id), m.display_name, valor,
-                                         ('payment', motivo, interaction.user.display_name))
+            try:
+                novo = await database.run_db(database.debit_player_balance, str(m.id), m.display_name, valor,
+                                             ('payment', motivo, interaction.user.display_name))
+            except Exception as e:
+                print(f'[pagar_saldo] {m.id}: {e!r}')
+                falharam.append(m)
+                continue
             if novo is None:
-                saldo = await database.run_db(fmt_saldo, str(m.id))
+                try:
+                    saldo = await database.run_db(fmt_saldo, str(m.id))
+                except Exception:
+                    saldo = '?'
                 insufficient.append(f'{m.display_name} (tem só {saldo})')
                 continue
             results.append((m, novo))
 
+        if not results and falharam:
+            await _avisar_lote_falhou(interaction, falharam, 'Ninguém foi pago')
+            return
         if not results:
             await interaction.followup.send(
                 '❌ Saldo insuficiente pra todo mundo listado:\n' + '\n'.join(insufficient), ephemeral=True)
@@ -666,6 +717,7 @@ class BankCog(commands.Cog):
             # O mais provavel dos tres: numa CTA de 30 pessoas cada linha e'
             # "Fulano (tem so 12.500)" — uns 25 nomes ja estouram o campo.
             add_lista(embed, '⚠️ Saldo insuficiente (pulado)', insufficient)
+        _listar_falhas(embed, falharam)
         embed.set_footer(text=f'Por {interaction.user.display_name}')
         await enviar_embed(interaction.followup, embed, rotulo='pagar_saldo')
 
@@ -707,14 +759,23 @@ class BankCog(commands.Cog):
         # antes de proposito: continuam usando response.send_message efemero.
         await interaction.response.defer()
 
+        falharam = []
         for m in members:
             # Zera e devolve o saldo antigo na mesma query — ler e só depois zerar
             # deixava dois admins zerando junto registrarem DUAS transações do
             # mesmo valor, inflando o débito no extrato de auditoria.
-            old = await database.run_db(database.zero_player_balance, str(m.id), m.display_name,
-                                        ('withdrawal', 'Saldo zerado — pagamento efetuado',
-                                         interaction.user.display_name))
+            try:
+                old = await database.run_db(database.zero_player_balance, str(m.id), m.display_name,
+                                            ('withdrawal', 'Saldo zerado — pagamento efetuado',
+                                             interaction.user.display_name))
+            except Exception as e:
+                print(f'[zerar_saldo] {m.id}: {e!r}')
+                falharam.append(m)
+                continue
             results.append((m, old))
+        if not results:
+            await _avisar_lote_falhou(interaction, falharam, 'Nenhum saldo foi zerado')
+            return
 
         if len(results) == 1:
             m, old = results[0]
@@ -735,6 +796,7 @@ class BankCog(commands.Cog):
         # estes campos ficaram de fora daquela passada.
         if invalid:
             add_lista(embed, '⚠️ Não encontrados no servidor', invalid)
+        _listar_falhas(embed, falharam)
         embed.set_footer(text=f'Por {interaction.user.display_name}')
         await enviar_embed(interaction.followup, embed, rotulo='zerar_saldo')
 
@@ -845,9 +907,12 @@ class BankCog(commands.Cog):
             linhas, loot_tot, rep_tot, pago_tot = [], 0, 0, 0
             for s in splits:
                 pago = s['por_player'] * s['players']
-                loot_tot += s['loot']
-                rep_tot += s['reparo']
-                pago_tot += pago
+                # Só o aprovado entra no fechamento: somar recusado/pendente
+                # dobrava o "loot bruto" e o "pago aos players" do dia (B-12).
+                if s['status'] == 'approved':
+                    loot_tot += s['loot']
+                    rep_tot += s['reparo']
+                    pago_tot += pago
                 # split que não foi aprovado aparece marcado — senão some no meio
                 # dos outros e a soma do dia não bate com o que foi pago
                 marca = '' if s['status'] == 'approved' else f' ⚠️ {s["status"]}'

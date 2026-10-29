@@ -4,6 +4,7 @@ events.py — Sistema de eventos com participação proporcional (1-100%)
 
 import cores
 import asyncio
+import re
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -429,15 +430,43 @@ async def _do_finalize(guild, event_id, by_name):
 
 # ── Aprovação no #financeiro ───────────────────────────────────────────────────
 
+_EVENTO_NO_TITULO = re.compile(r'Evento #(\d+)')
+
+
 class ApproveDepositView(LoggedView):
-    def __init__(self, event_id: int, distribution: dict, participants: list):
+    """Botões de aprovar/recusar depósito no #financeiro.
+
+    Antes a view só existia na memória do processo: depois de qualquer deploy
+    ou restart os botões das aprovações pendentes davam "Esta interação
+    falhou" e o depósito ficava preso em 'pending' pra sempre (não há outro
+    caminho pra aprovar). Agora uma instância sem estado é registrada no boot
+    (EventsCog.__init__) e, no clique, descobre o evento pelo título do embed e
+    remonta a distribuição pelo banco — os participantes ficam congelados
+    enquanto o evento está pendente (ver /atualizar_participacao).
+    """
+    def __init__(self, event_id: int = None, distribution: dict = None, participants: list = None):
         super().__init__(timeout=None)
         self.event_id     = event_id
-        self.distribution = distribution  # {discord_id: valor}
+        self.distribution = distribution  # {discord_id: valor}; None = remontar do banco
         self.participants = participants
+
+    @staticmethod
+    def _do_embed(interaction):
+        """Instância com o id do evento lido do título do embed, ou None."""
+        embeds = getattr(interaction.message, 'embeds', None) or []
+        achou = _EVENTO_NO_TITULO.search(embeds[0].title or '') if embeds else None
+        return ApproveDepositView(int(achou.group(1))) if achou else None
 
     @discord.ui.button(label='✅ Aprovar', style=discord.ButtonStyle.success, custom_id='xnm:aprovar_dep')
     async def aprovar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.event_id is None:
+            real = self._do_embed(interaction)
+            if real is None:
+                await interaction.response.send_message(
+                    '❌ Não reconheci o evento desta mensagem.', ephemeral=True)
+                return
+            return await real.aprovar.callback(interaction)
+
         if not is_financial(interaction.user):
             await interaction.response.send_message('❌ Apenas Líder ou Vice Líder.', ephemeral=True)
             return
@@ -449,6 +478,20 @@ class ApproveDepositView(LoggedView):
         await interaction.response.defer(ephemeral=True)
 
         event = await database.run_db(database.get_event, self.event_id)
+        if not event:
+            await interaction.followup.send('❌ Não consegui ler o evento agora. Tente de novo.', ephemeral=True)
+            return
+        if self.distribution is None:
+            # Depois de um restart: remonta a mesma conta do /depositar_evento.
+            # get_event_participants devolve [] em erro de banco — sem a
+            # checagem o evento seria aprovado sem creditar ninguém.
+            self.participants = await database.run_db(database.get_event_participants, self.event_id)
+            if not self.participants:
+                await interaction.followup.send(
+                    '❌ Não consegui ler os participantes agora. Nada foi aprovado; tente de novo.',
+                    ephemeral=True)
+                return
+            self.distribution = _calc_distribution(self.participants, float(event['net_value'] or 0))
         # approve_event agora é um UPDATE condicional atômico (WHERE status='pending')
         # — a checagem antiga (ler status, depois decidir) deixava uma janela onde 2
         # cliques quase simultâneos passavam os dois e creditavam a prata em dobro.
@@ -556,6 +599,14 @@ class ApproveDepositView(LoggedView):
 
     @discord.ui.button(label='❌ Recusar', style=discord.ButtonStyle.danger, custom_id='xnm:recusar_dep')
     async def recusar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.event_id is None:
+            real = self._do_embed(interaction)
+            if real is None:
+                await interaction.response.send_message(
+                    '❌ Não reconheci o evento desta mensagem.', ephemeral=True)
+                return
+            return await real.recusar.callback(interaction)
+
         # defer antes de tudo: as consultas abaixo passam pelo run_db (nao
         # travam o bot), mas ainda demoram — e o Discord desiste da interacao
         # em 3s. Sem isto a pessoa fica no "..." e a resposta nunca chega.
@@ -603,6 +654,7 @@ class EventsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         bot.add_view(CreateEventView())
+        bot.add_view(ApproveDepositView())   # botões de depósito postados antes do restart
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -640,6 +692,14 @@ class EventsCog(commands.Cog):
                     '❌ Este canal não é um canal de evento. Use este comando dentro do canal do evento.',
                     ephemeral=True
                 )
+                return
+            # Depois do /depositar_evento a distribuição já foi mostrada no
+            # #financeiro; mexer na participação agora mudaria quem recebe sem
+            # ninguém ver (a aprovação depois de um restart recalcula do banco).
+            if event['status'] not in ('active', 'finished'):
+                await interaction.followup.send(
+                    '❌ Este evento já foi enviado para aprovação; a participação não pode mais mudar.',
+                    ephemeral=True)
                 return
 
             valor = max(0, min(100, valor))

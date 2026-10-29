@@ -14,6 +14,7 @@ from discord.ext import commands
 from discord import app_commands
 import requests
 import asyncio
+import re
 import time
 from typing import Optional
 import config
@@ -228,6 +229,26 @@ def _in_guild(player):
     return gname.lower() == GUILD_NAME.lower(), gname
 
 
+_TAG = re.compile(r'^\s*\[[^\]]*\]\s*')
+_NOME = re.compile(r'[A-Za-z0-9_]+')
+
+
+def _nome_albion_do_apelido(apelido):
+    """'[NM] Fulano 🏹' -> 'fulano'. Nome do Albion é só letra/número."""
+    achou = _NOME.search(_TAG.sub('', apelido or ''))
+    return achou.group(0).lower() if achou else ''
+
+
+def _quem_ja_usa(guild, player_name, autor):
+    """Outro membro do servidor cujo apelido já é esse personagem, ou None."""
+    alvo = player_name.lower()
+    for m in guild.members:
+        if m.id != autor.id and not getattr(m, 'bot', False) \
+                and _nome_albion_do_apelido(m.nick or m.display_name) == alvo:
+            return m
+    return None
+
+
 async def _apply_member(member, guild, player_name, reason):
     """
     Aplica o registro: remove Forasteiro, adiciona Membro, muda nick para [NM] Nome.
@@ -323,6 +344,24 @@ class AlbionRegister(commands.Cog):
                 ephemeral=True)
             return
 
+        # O bot só confere se o personagem está na guild — não se é de quem
+        # digitou. Sem isto, um Forasteiro rodava /albion_register com o nick de
+        # um membro (até do líder) e ganhava o cargo Membro e o "[NM] Nick"
+        # (revisão de 29/10, B-02). Se outra conta do servidor já usa esse
+        # personagem, para e manda pra staff, que tem o /registrar.
+        dono = _quem_ja_usa(interaction.guild, player_name, interaction.user)
+        if dono is not None:
+            await interaction.followup.send(
+                '⚠️ O personagem **' + player_name + '** já está registrado para outra conta '
+                'deste servidor.\n> Se ele é seu, chame alguém da staff para conferir.',
+                ephemeral=True)
+            await _log(interaction.guild, discord.Embed(
+                title='⚠️ /albion_register recusado',
+                description=(f'{interaction.user.mention} tentou registrar **{player_name}**, '
+                             f'que já é usado por {dono.mention}.'),
+                color=cores.AMBAR))
+            return
+
         ok, err = await _apply_member(
             interaction.user, interaction.guild,
             player_name,
@@ -341,14 +380,19 @@ class AlbionRegister(commands.Cog):
 
         # Confirmação pública — o resto do fluxo (erros, "já é membro") continua
         # privado, mas o registro concluído é visível pra guild ver quem entrou.
-        await interaction.followup.send(
-            '✅ **Registro concluído!**\n\n'
-            '> 🎮 Nick: **' + player_name + '**\n'
-            '> 🏷️ Nick Discord: **' + NICK_PREFIX + player_name + '**\n'
-            '> 🏰 Guild: **' + guild_name + '** ✓\n'
-            '> 🎖️ Cargo **' + ROLE_MEMBRO + '** atribuído\n\n'
-            'Bem-vindo à **XnoMercy**, ' + player_name + '! ⚔️',
-            ephemeral=False)
+        # Pelo canal: depois de defer(ephemeral=True) o 1o followup herda o
+        # privado e o ephemeral=False era ignorado (B-25).
+        texto = ('✅ **Registro concluído!**\n\n'
+                 '> 🎮 Nick: **' + player_name + '**\n'
+                 '> 🏷️ Nick Discord: **' + NICK_PREFIX + player_name + '**\n'
+                 '> 🏰 Guild: **' + guild_name + '** ✓\n'
+                 '> 🎖️ Cargo **' + ROLE_MEMBRO + '** atribuído\n\n'
+                 'Bem-vindo à **XnoMercy**, ' + player_name + '! ⚔️')
+        try:
+            await interaction.channel.send(texto)
+            await interaction.followup.send('✅ Pronto!', ephemeral=True)
+        except Exception:
+            await interaction.followup.send(texto, ephemeral=True)
 
     # ── /registrar ────────────────────────────────────────────────────────────
     @app_commands.command(

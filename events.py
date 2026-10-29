@@ -37,7 +37,9 @@ async def _get_aguardando(guild):
             return ch
     return None
 
-ERRO_TAXAS = '❌ Não consegui ler as taxas da guild agora. Nada foi enviado — tente de novo.'
+MAX_EVENTOS_NO_PAINEL = 10
+
+ERRO_TAXAS ='❌ Não consegui ler as taxas da guild agora. Nada foi enviado — tente de novo.'
 
 
 async def _taxas():
@@ -174,6 +176,13 @@ class JoinEventButton(discord.ui.Button):
                 return
 
             added = await database.run_db(database.add_event_participant, self.event_id, str(interaction.user.id), interaction.user.display_name)
+            if added is None:
+                # None = o banco falhou (ver add_event_participant). Antes caía no
+                # "você já estava no evento": a pessoa achava que estava inscrita
+                # e não recebia nada no split (revisão de 29/10, B-04).
+                await interaction.followup.send(
+                    '❌ Não consegui te registrar no evento agora. Clique em Entrar de novo.', ephemeral=True)
+                return
 
             voice_ch = interaction.guild.get_channel(int(self.voice_ch_id)) if self.voice_ch_id else None
             if voice_ch:
@@ -189,9 +198,10 @@ class JoinEventButton(discord.ui.Button):
             # Detalhe interno (str(e) pode carregar mensagem de driver de banco) só no
             # log — pro usuário vai a mensagem genérica, mesma política do handler global.
             print(f'[JoinEventButton] {e}')
+            # Sem o `if not response.is_done()`: depois do defer ele é sempre
+            # True, e o aviso de erro nunca saía — a pessoa ficava sem resposta.
             try:
-                if not interaction.response.is_done():
-                    await interaction.followup.send('❌ Erro ao entrar no evento. Tente novamente.', ephemeral=True)
+                await interaction.followup.send('❌ Erro ao entrar no evento. Tente novamente.', ephemeral=True)
             except Exception:
                 pass
 
@@ -236,7 +246,10 @@ class FinalizeEventButton(discord.ui.Button):
 class ParticipateView(LoggedView):
     def __init__(self, events: list):
         super().__init__(timeout=None)
-        for i, ev in enumerate(events[:12]):
+        # O Discord aceita 5 linhas de botões (0 a 4); são 2 botões por evento,
+        # então cabem 10. Com events[:12] o 11º evento caía na linha 5, a View
+        # levantava ValueError e o painel #participar sumia (B-11).
+        for i, ev in enumerate(events[:MAX_EVENTOS_NO_PAINEL]):
             row = i // 2
             voice_id = dict(ev).get('voice_channel_id', '') or ''
             self.add_item(JoinEventButton(ev['id'], ev['title'], voice_id, row))
@@ -380,8 +393,15 @@ async def _refresh_participar(guild):
         if active:
             lines = [f'**#{ev["id"]:04d}** — {ev["title"]}  |  👑 {ev["creator_name"]}' for ev in active]
             embed.description = 'Entre em uma **call de voz** e clique para participar ou finalizar.\n\n' + '\n'.join(lines)
+            if len(active) > MAX_EVENTOS_NO_PAINEL:
+                embed.description += (f'\n\n⚠️ Só os {MAX_EVENTOS_NO_PAINEL} mais recentes têm botão. '
+                                      'Finalize os eventos que já acabaram.')
         else:
             embed.description = 'Nenhum evento ativo no momento.'
+
+        # A View é montada ANTES de apagar o painel antigo: se ela falhar, o
+        # painel velho continua lá em vez de o canal ficar vazio.
+        view = ParticipateView(active) if active else None
 
         # Limpa mensagens antigas do bot
         to_delete = []
@@ -392,8 +412,8 @@ async def _refresh_participar(guild):
             try: await msg.delete()
             except Exception: pass
 
-        if active:
-            await ch.send(embed=embed, view=ParticipateView(active))
+        if view:
+            await ch.send(embed=embed, view=view)
         else:
             await ch.send(embed=embed)
 

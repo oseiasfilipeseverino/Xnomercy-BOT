@@ -323,7 +323,10 @@ def init_db():
 
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-def get_config(key):
+def get_config(key, estrito=False):
+    """estrito=True: erro de banco PROPAGA em vez de virar ''. Usado nas taxas
+    do depósito: '' virava o padrão (10/5) e a divisão ia pra aprovação com a
+    taxa errada e cara de normal (revisão de 29/10, B-17)."""
     conn = get_connection()
     try:
         c = conn.cursor()
@@ -332,6 +335,8 @@ def get_config(key):
         return row[0] if row else ''
     except Exception as e:
         print(f'[get_config] {key}: {e!r}')
+        if estrito:
+            raise
         return ''
     finally:
         release(conn)
@@ -939,6 +944,22 @@ def deposit_event(event_id, total, repair, net):
         won = c.rowcount > 0
         conn.commit()
         return won
+    finally:
+        release(conn)
+
+def undo_deposit_event(event_id, status_anterior):
+    """Desfaz o deposit_event quando a mensagem de aprovação não chegou ao
+    #financeiro — sem ela não há botão pra aprovar e o evento ficava preso
+    em 'pending' (B-06). Só mexe se ainda está pendente."""
+    if status_anterior not in ('active', 'finished'):
+        status_anterior = 'finished'
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE events SET status=%s WHERE id=%s AND status='pending'",
+                  (status_anterior, event_id))
+        conn.commit()
+        return c.rowcount > 0
     finally:
         release(conn)
 

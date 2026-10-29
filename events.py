@@ -37,6 +37,25 @@ async def _get_aguardando(guild):
             return ch
     return None
 
+ERRO_TAXAS = '❌ Não consegui ler as taxas da guild agora. Nada foi enviado — tente de novo.'
+
+
+async def _taxas():
+    """(taxa da guild, taxa do vendedor) em %, ou None se o banco falhou.
+
+    Antes era float(get_config(...) or 10): erro de banco virava '' e o padrão
+    10/5 entrava no lugar da taxa salva sem ninguém ver (B-17). E aceita vírgula:
+    até 29/10 o site gravava "10,5" cru e o float() derrubava o comando."""
+    try:
+        g = await database.run_db(database.get_config, 'guild_tax', True)
+        v = await database.run_db(database.get_config, 'vendor_tax', True)
+        return (float(str(g or 10).replace(',', '.')),
+                float(str(v or 5).replace(',', '.')))
+    except Exception as e:
+        print(f'[events] taxas: {e!r}')
+        return None
+
+
 def _calc_distribution(participants, net: float) -> dict:
     """Calcula distribuição proporcional. Players com 0% são excluídos.
 
@@ -758,8 +777,11 @@ class EventsCog(commands.Cog):
             await interaction.followup.send('❌ Nenhum participante registrado.', ephemeral=True)
             return
 
-        guild_tax  = float(await database.run_db(database.get_config, 'guild_tax') or 10)
-        vendor_tax = float(await database.run_db(database.get_config, 'vendor_tax') or 5)
+        taxas = await _taxas()
+        if taxas is None:
+            await interaction.followup.send(ERRO_TAXAS, ephemeral=True)
+            return
+        guild_tax, vendor_tax = taxas
         guild_cut  = valor_total * (guild_tax / 100)
         vendor_cut = valor_total * (vendor_tax / 100)
         net        = valor_total - guild_cut - vendor_cut - reparo
@@ -788,7 +810,7 @@ class EventsCog(commands.Cog):
 
         lines = []
         for p in participants:
-            w     = float(p['share'] or 100)
+            w     = float(p['share'] or 0)   # 0% aparecia como "(100%) → 0 prata" (B-13)
             valor = distribution[p['discord_id']]
             lines.append(f'• <@{p["discord_id"]}> ({w:.0f}%) → **{fmt(valor)} prata**')
         # add_lista: com 70 players esta lista passa dos 1024 e o Discord recusa
@@ -840,14 +862,28 @@ class EventsCog(commands.Cog):
             await interaction.followup.send('❌ Nenhum participante registrado.', ephemeral=True)
             return
 
-        guild_tax  = float(await database.run_db(database.get_config, 'guild_tax') or 10)
-        vendor_tax = float(await database.run_db(database.get_config, 'vendor_tax') or 5)
+        taxas = await _taxas()
+        if taxas is None:
+            await interaction.followup.send(ERRO_TAXAS, ephemeral=True)
+            return
+        guild_tax, vendor_tax = taxas
         guild_cut  = valor_total * (guild_tax / 100)
         vendor_cut = valor_total * (vendor_tax / 100)
         net        = valor_total - guild_cut - vendor_cut - reparo
 
         if net <= 0:
             await interaction.followup.send('❌ Valor líquido negativo!', ephemeral=True)
+            return
+
+        # O canal ANTES de marcar o evento como pendente (B-06): sem canal
+        # configurado (ou apagado) ninguém recebia os botões, o evento ficava
+        # 'pending' pra sempre e o puxador ainda lia "Enviado para aprovação".
+        ch_id  = await database.run_db(database.get_config, 'channel_financeiro')
+        fin_ch = interaction.guild.get_channel(int(ch_id)) if str(ch_id or '').isdigit() else None
+        if not fin_ch:
+            await interaction.followup.send(
+                '❌ O canal financeiro não está configurado (ou foi apagado). Nada foi enviado — '
+                'peça à liderança para configurar e tente de novo.', ephemeral=True)
             return
 
         # Reivindica o evento atomicamente ANTES de montar a mensagem de aprovação —
@@ -859,12 +895,9 @@ class EventsCog(commands.Cog):
             return
         distribution = _calc_distribution(participants, net)
 
-        ch_id  = await database.run_db(database.get_config, 'channel_financeiro')
-        fin_ch = interaction.guild.get_channel(int(ch_id)) if ch_id else None
-
         lines = []
         for p in participants:
-            w     = float(p['share'] or 100)
+            w     = float(p['share'] or 0)
             valor = distribution[p['discord_id']]
             lines.append(f'• <@{p["discord_id"]}> ({w:.0f}%) → **{fmt(valor)} prata**')
 
@@ -886,8 +919,15 @@ class EventsCog(commands.Cog):
         add_lista(embed, '💰 Distribuição', lines)
 
         view = ApproveDepositView(event['id'], distribution, [dict(p) for p in participants])
-        if fin_ch:
+        try:
             await fin_ch.send(embed=embed, view=view)
+        except Exception as e:
+            print(f'[events] depósito do evento #{event["id"]}: envio ao financeiro falhou: {e!r}')
+            await database.run_db(database.undo_deposit_event, event['id'], event['status'])
+            await interaction.followup.send(
+                '❌ Não consegui postar no canal financeiro. Nada foi enviado — o evento voltou '
+                'ao estado anterior, pode tentar de novo.', ephemeral=True)
+            return
 
         await _log(interaction.guild,
             f'⏳ **{interaction.user.display_name}** enviou depósito de **{fmt(valor_total)} prata** '

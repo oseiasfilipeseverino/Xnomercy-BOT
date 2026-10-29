@@ -328,6 +328,7 @@ class AutoPurgeCog(commands.Cog):
             # permite abortar tudo se o resultado parecer um falso positivo em
             # massa (ver MAX_PURGE_RATIO) antes de mexer no cargo de alguem.
             to_purge = []
+            cands_de = {}   # member.id -> todos os candidatos do apelido (ver a confirmação)
             checked = 0
             nao_verificaveis = []
             apelidos_divergentes = []   # apelido != nome no Albion
@@ -386,6 +387,7 @@ class AutoPurgeCog(commands.Cog):
                     continue
 
                 to_purge.append((member, candidatos[0]))
+                cands_de[member.id] = candidatos
 
             em_massa = checked and len(to_purge) > max(MIN_MEMBERS_SANITY, checked * MAX_PURGE_RATIO)
             if em_massa:
@@ -512,15 +514,19 @@ class AutoPurgeCog(commands.Cog):
                 # Quem reapareceu na segunda busca NÃO sai da fila em silêncio: é
                 # sinal de que a primeira resposta veio incompleta, e isso precisa
                 # ficar registrado pra a gente saber com que frequência acontece.
-                sobreviventes = [(m, n) for m, n in to_purge if n.lower() in confirmacao]
+                # Confere TODOS os candidatos, como a 1a passada. Antes só o
+                # primeiro (o apelido inteiro, ex. "Fulano 🏹"), que nunca casa
+                # com a API — quem reaparecia era rebaixado mesmo assim (B-07).
+                def reapareceu(m, n):
+                    return any(c.lower() in confirmacao for c in cands_de.get(m.id, [n]))
+                sobreviventes = [(m, n) for m, n in to_purge if reapareceu(m, n)]
                 if sobreviventes:
                     for m, n in sobreviventes:
                         print(f'[auto_purge] {n} REAPARECEU na confirmacao — a 1a busca '
                               f'veio incompleta. Nao rebaixado, strike zerado.')
                         await database.run_db(database.purge_strike_clear, str(m.id))
                     nomes = ', '.join(n for _, n in sobreviventes)
-                    to_purge = [(m, n) for m, n in to_purge
-                                if n.lower() not in confirmacao]
+                    to_purge = [(m, n) for m, n in to_purge if not reapareceu(m, n)]
                     try:
                         ch_id = await database.run_db(database.get_config, 'channel_logs')
                         ch = discord_guild.get_channel(int(ch_id)) if ch_id else None
@@ -545,7 +551,11 @@ class AutoPurgeCog(commands.Cog):
                     await member.add_roles(amigo_role, reason='Auto-purge: saiu da guild no Albion')
 
                     # Troca [NM] por [AMG] no nick
-                    new_nick = ('[AMG] ' + albion_nick)[:32]
+                    # O nome limpo (só letras/números, como no Albion) em vez do
+                    # apelido cru: "[AMG] Fulano 🏹" levava o emoji junto.
+                    limpo = next((c for c in reversed(cands_de.get(member.id, []))
+                                  if re.fullmatch(r'[A-Za-z0-9_]+', c)), albion_nick)
+                    new_nick = ('[AMG] ' + limpo)[:32]
                     try:
                         await member.edit(nick=new_nick, reason='Auto-purge: saiu da guild')
                     except discord.Forbidden:

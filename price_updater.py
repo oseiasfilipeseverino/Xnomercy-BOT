@@ -4,7 +4,7 @@ Autossuficiente: não depende de db.py nem database.py.
 
 Como usar no main.py do bot (já foi adicionado):
     from price_updater import start_price_updater
-    asyncio.create_task(start_price_updater())  # dentro do on_ready
+    asyncio.create_task(start_price_updater(bot))  # dentro do on_ready
 """
 
 import asyncio
@@ -124,50 +124,73 @@ def _init_table():
         try: conn.close()
         except Exception: pass
 
-def _save_prices(prices_data):
-    """Salva lista de precos no banco. Preserva precos antigos quando novo=0."""
-    if not prices_data:
-        return 0
-    rows = []
-    for r in prices_data:
+_SQL_PRECOS_INICIO = '''INSERT INTO prices_cache
+       (item_id, city, quality, sell_min, sell_max, buy_max, date_sell, updated_at)
+       VALUES '''
+_SQL_PRECOS_LINHA = '(%s,%s,%s,%s,%s,%s,%s,NOW())'   # só marcadores: os valores vão como parâmetros
+_SQL_PRECOS_FIM = '''
+       ON CONFLICT (item_id, city, quality) DO UPDATE SET
+       sell_min=CASE WHEN EXCLUDED.sell_min>0 THEN EXCLUDED.sell_min ELSE prices_cache.sell_min END,
+       sell_max=CASE WHEN EXCLUDED.sell_max>0 THEN EXCLUDED.sell_max ELSE prices_cache.sell_max END,
+       buy_max=CASE WHEN EXCLUDED.buy_max>0 THEN EXCLUDED.buy_max ELSE prices_cache.buy_max END,
+       date_sell=CASE WHEN EXCLUDED.sell_min>0 THEN EXCLUDED.date_sell ELSE prices_cache.date_sell END,
+       updated_at=NOW()'''
+
+
+def _linhas_de_preco(prices_data):
+    """Linhas do chunk, uma por (item, cidade, qualidade) — a última vence.
+    Repetida no mesmo INSERT o Postgres recusa o comando inteiro ("ON CONFLICT
+    DO UPDATE command cannot affect row a second time")."""
+    unicas = {}
+    for r in prices_data or []:
         iid  = r.get('item_id', '')
         city = r.get('city', '')
         if not iid or not city:
             continue
-        rows.append((iid, city,
-                     r.get('quality', 1),
-                     r.get('sell_price_min', 0),
-                     r.get('sell_price_max', 0),
-                     r.get('buy_price_max', 0),
-                     r.get('sell_price_min_date', '')))
+        q = r.get('quality', 1)
+        unicas[(iid, city, q)] = (iid, city, q,
+                                  r.get('sell_price_min', 0),
+                                  r.get('sell_price_max', 0),
+                                  r.get('buy_price_max', 0),
+                                  r.get('sell_price_min_date', ''))
+    return list(unicas.values())
+
+
+def _save_prices(prices_data, conn=None):
+    """Salva os preços de um chunk num comando SÓ. Preserva o preço antigo quando o novo é 0.
+
+    Era executemany, que no pg8000 é um execute por linha: 2.463 itens x 8
+    cidades x 5 qualidades = ~98 mil idas ao banco por ciclo, ~840s a cada
+    30 min e a CPU do bot dobrada (revisão de 29/10, B-10). Agora é um INSERT
+    com todas as linhas do chunk (~800) — umas 124 idas por ciclo.
+
+    `conn`: a conexão do ciclo (update_prices_once abre uma só). Sem ela, abre
+    e fecha a sua — cada conexão nova é um handshake TLS."""
+    rows = _linhas_de_preco(prices_data)
     if not rows:
         return 0
-    conn = _get_conn()
+    propria = conn is None
+    if propria:
+        conn = _get_conn()
     try:
         c = conn.cursor()
-        # executemany em vez de 1 execute() por linha — até ~800 linhas por chunk,
-        # isso era 1 round-trip ao Postgres por item antes (lento, mas roda em
-        # background no executor a cada 30min, então nunca travou usuário).
-        c.executemany(
-            '''INSERT INTO prices_cache
-               (item_id, city, quality, sell_min, sell_max, buy_max, date_sell, updated_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-               ON CONFLICT (item_id, city, quality) DO UPDATE SET
-               sell_min=CASE WHEN EXCLUDED.sell_min>0 THEN EXCLUDED.sell_min ELSE prices_cache.sell_min END,
-               sell_max=CASE WHEN EXCLUDED.sell_max>0 THEN EXCLUDED.sell_max ELSE prices_cache.sell_max END,
-               buy_max=CASE WHEN EXCLUDED.buy_max>0 THEN EXCLUDED.buy_max ELSE prices_cache.buy_max END,
-               date_sell=CASE WHEN EXCLUDED.sell_min>0 THEN EXCLUDED.date_sell ELSE prices_cache.date_sell END,
-               updated_at=NOW()''',
-            rows
-        )
+        sql = _SQL_PRECOS_INICIO + ','.join([_SQL_PRECOS_LINHA] * len(rows)) + _SQL_PRECOS_FIM
+        c.execute(sql, [v for r in rows for v in r])
         conn.commit()
         return len(rows)
     except Exception as e:
         print(f'[price_updater] Erro ao salvar: {e}')
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if not propria:
+            raise   # o ciclo descarta a conexão e abre outra
         return 0
     finally:
-        try: conn.close()
-        except Exception: pass
+        if propria:
+            try: conn.close()
+            except Exception: pass
 
 # ── Configuração AODP Americas ─────────────────────────────────────────────────
 AODP      = 'https://west.albion-online-data.com/api/v2/stats/prices/'
@@ -179,6 +202,7 @@ HEADERS   = {
     'User-Agent':      'XnoMercy-Bot/2.0 (price-cache; west server)',
 }
 CHUNK_SIZE       = 20    # itens por request (limite AODP)
+TENTATIVAS_429   = 3     # mesmo chunk, com espera crescente, antes de desistir dele
 DELAY_BETWEEN    = 0.4   # segundos entre requests (~150 req/min, seguro)
 INTERVAL_MINUTES = 30    # atualização a cada 30 minutos
 
@@ -407,10 +431,12 @@ async def _check_price_alerts(bot):
     prices_cache que acabou de ser atualizado e avisa por DM quem cadastrou."""
     if bot is None:
         return
-    alerts = _get_active_alerts()
+    loop = asyncio.get_event_loop()
+    # No executor: era chamada direto, e a consulta (com conexão TLS nova)
+    # rodava dentro do event loop, travando o bot (B-15).
+    alerts = await loop.run_in_executor(None, _get_active_alerts)
     if not alerts:
         return
-    loop = asyncio.get_event_loop()
     fired = 0
     for alert_id, discord_id, item_id, quality, city, direction, target_price in alerts:
         rows = await loop.run_in_executor(None, lambda i=item_id, q=quality, c=city: _get_matching_prices(i, q, c))
@@ -481,32 +507,54 @@ async def update_prices_once(bot=None):
     print(f'[price_updater] Iniciando: {len(scan_items)} itens '
           f'({len(demand)} da fila de demanda), {total_ch} chunks')
 
-    for i in range(0, len(scan_items), CHUNK_SIZE):
-        chunk = ','.join(scan_items[i:i+CHUNK_SIZE])
-        url   = f'{AODP}{chunk}.json?locations={LOCATIONS}&qualities={QUALITIES}'
-        try:
-            # run_in_executor: não bloqueia o event loop do bot durante o request HTTP
-            resp = await loop.run_in_executor(
-                None,
-                lambda u=url: _session.get(u, timeout=15)
-            )
-            if resp.ok:
-                data = resp.json()
-                saved = await loop.run_in_executor(None, lambda d=data: _save_prices(d))
-                total_rows += saved
-            elif resp.status_code == 429:
-                print(f'[price_updater] Rate limit no chunk {i//CHUNK_SIZE+1}/{total_ch}, aguardando 15s...')
-                await asyncio.sleep(15)
-                continue
-            else:
-                errors += 1
-                print(f'[price_updater] HTTP {resp.status_code} no chunk {i//CHUNK_SIZE+1}')
-        except Exception as e:
-            errors += 1
-            print(f'[price_updater] Erro no chunk {i//CHUNK_SIZE+1}: {e}')
+    conn = None   # uma conexão pro ciclo inteiro (ver _save_prices)
+    try:
+        for i in range(0, len(scan_items), CHUNK_SIZE):
+            chunk = ','.join(scan_items[i:i+CHUNK_SIZE])
+            url   = f'{AODP}{chunk}.json?locations={LOCATIONS}&qualities={QUALITIES}'
+            # 429: espera e repete O MESMO chunk. Antes o `continue` avançava
+            # pro próximo e os 20 itens ficavam fora do ciclo (B-14).
+            for tentativa in range(1, TENTATIVAS_429 + 1):
+                try:
+                    # run_in_executor: não bloqueia o event loop do bot durante o request HTTP
+                    resp = await loop.run_in_executor(
+                        None,
+                        lambda u=url: _session.get(u, timeout=15)
+                    )
+                    if resp.status_code == 429 and tentativa < TENTATIVAS_429:
+                        print(f'[price_updater] Rate limit no chunk {i//CHUNK_SIZE+1}/{total_ch}, '
+                              f'aguardando {15 * tentativa}s (tentativa {tentativa})...')
+                        await asyncio.sleep(15 * tentativa)
+                        continue
+                    if resp.ok:
+                        data = resp.json()
+                        if conn is None:
+                            conn = await loop.run_in_executor(None, _get_conn)
+                        try:
+                            saved = await loop.run_in_executor(
+                                None, lambda d=data, k=conn: _save_prices(d, k))
+                        except Exception:
+                            # conexão suspeita: descarta, o próximo chunk abre outra
+                            errors += 1
+                            with contextlib.suppress(Exception):
+                                conn.close()
+                            conn = None
+                            saved = 0
+                        total_rows += saved
+                    else:
+                        errors += 1
+                        print(f'[price_updater] HTTP {resp.status_code} no chunk {i//CHUNK_SIZE+1}')
+                except Exception as e:
+                    errors += 1
+                    print(f'[price_updater] Erro no chunk {i//CHUNK_SIZE+1}: {e}')
+                break
 
-        # Controla velocidade: ~150 req/min (limite oficial: 180/min)
-        await asyncio.sleep(DELAY_BETWEEN)
+            # Controla velocidade: ~150 req/min (limite oficial: 180/min)
+            await asyncio.sleep(DELAY_BETWEEN)
+    finally:
+        if conn is not None:
+            with contextlib.suppress(Exception):
+                conn.close()
 
     elapsed = time.time() - start
     print(f'[price_updater] Concluído: {total_rows} registros, {errors} erros, {elapsed:.0f}s')

@@ -24,6 +24,20 @@ import re
 
 BRT = timezone(timedelta(hours=-3))
 
+# Nome de tópico no Discord: no máximo 100 caracteres. O site aceita título de
+# até 120, e com " -- Inscricoes" (14) qualquer título acima de 86 fazia o
+# create_thread falhar DEPOIS do ping: o evento voltava pra pending_post e o
+# @everyone saía de novo a cada 10s, sem fim (revisão de 29/10, B-01).
+LIM_NOME_TOPICO = 100
+SUFIXO_TOPICO = " -- Inscricoes"
+# Teto de pings por evento quando o post falha depois de pingar: a partir daí
+# as novas tentativas saem sem ping.
+MAX_PINGS_POST = 1
+
+
+def nome_do_topico(titulo):
+    return (titulo or "Evento")[:LIM_NOME_TOPICO - len(SUFIXO_TOPICO)] + SUFIXO_TOPICO
+
 # "-13 @Fulano" — só o negativo aceita alvo: tirar alguém do slot é ação de
 # organização, colocar alguém no lugar dela não (a pessoa é que escolhe o slot).
 _SLOT_COM_ALVO = re.compile(r'\s*(-\d+)\s+<@!?(\d+)>\s*')
@@ -124,6 +138,7 @@ class ScheduledEventsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self._paineis_sumidos = set()   # ver _update_embed
+        self._pings_saidos = {}          # evento -> quantas vezes o ping saiu, ver _post_event
         self._travas_painel = {}         # evento -> asyncio.Lock, ver _update_embed
         self._paineis_conferidos = False # ver _conferir_paineis_depois_do_deploy
         self.post_pending_task.start()
@@ -430,6 +445,11 @@ class ScheduledEventsCog(commands.Cog):
             else:
                 ping_str = ""
 
+            # Depois de MAX_PINGS_POST tentativas que chegaram a pingar e falharam
+            # adiante, as próximas saem sem ping (ver o except lá embaixo).
+            if self._pings_saidos.get(event["id"], 0) >= MAX_PINGS_POST:
+                ping_str, ping_type = "", "none"
+
             content = (ping_str + " " + event["title"] + " -- " + time_str).strip()
 
             # Envia a mensagem no canal (único ping). O allowed_mentions libera só
@@ -438,12 +458,22 @@ class ScheduledEventsCog(commands.Cog):
             # mesmo com ping_type='none' e sem passar por permissão nenhuma.
             msg = await channel.send(content=content, embed=embed,
                                      allowed_mentions=mencoes_do_ping(ping_type))
+            if ping_str:
+                self._pings_saidos[event["id"]] = self._pings_saidos.get(event["id"], 0) + 1
 
-            # Cria tópico para inscrições
-            thread = await msg.create_thread(
-                name=event["title"] + " -- Inscricoes",
-                auto_archive_duration=1440
-            )
+            try:
+                thread = await msg.create_thread(
+                    name=nome_do_topico(event["title"]),
+                    auto_archive_duration=1440
+                )
+            except Exception:
+                # A mensagem (com o ping) já saiu: apaga pra a nova tentativa não
+                # deixar duas no canal.
+                try:
+                    await msg.delete()
+                except Exception as e2:
+                    print("[scheduled_events] nao consegui apagar a mensagem orfa: " + repr(e2))
+                raise
 
             # Instrucoes no tópico. INSTRUCTIONS é constante fixa, então hoje não
             # tem como pingar ninguém — o allowed_mentions vai junto pra regra ser
@@ -454,6 +484,7 @@ class ScheduledEventsCog(commands.Cog):
             # Salva IDs e atualiza status para "waiting"
             await database.run_db(database.update_scheduled_event_thread, event["id"], str(thread.id), str(msg.id))
             await database.run_db(database.set_event_status, event["id"], "waiting")
+            self._pings_saidos.pop(event["id"], None)
 
             print("[scheduled_events] Evento postado: " + event["title"] + " | thread=" + str(thread.id))
 

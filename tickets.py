@@ -300,48 +300,64 @@ class TicketButton(discord.ui.Button):
             )
             return
 
-        # Categoria do ticket (mesma onde o painel foi postado)
-        category = await database.run_db(get_ticket_category, guild, self.ticket_type)
-        if not category:
-            # Fallback: mesma categoria do canal atual
-            category = interaction.channel.category
- 
-        # Permissões do canal
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            user:               discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            guild.me:           discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True),
-        }
- 
-        # Adiciona cargos com permissão de ver este tipo de ticket
-        perm_map = {
-            'recrutamento': 'recruit_tickets',
-            'suporte':      'support_tickets',
-            'saque':        'saque_tickets',
-        }
-        for role_name in await database.run_db(database.get_permission_roles, perm_map[self.ticket_type]):
-            role = discord.utils.get(guild.roles, name=role_name)
-            if role:
-                overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
- 
+        # Daqui até confirmar_ticket, QUALQUER falha solta a reserva. Antes só a
+        # criação do canal soltava: um erro em get_permission_roles (None em
+        # falha de banco -> TypeError no for) ou na categoria deixava a reserva
+        # presa, e a pessoa via "você já tem um ticket aberto: já existe" pra
+        # sempre, sem canal nenhum (revisão de 29/10, B-05).
+        ch = None
         try:
+            # Categoria do ticket (mesma onde o painel foi postado)
+            category = await database.run_db(get_ticket_category, guild, self.ticket_type)
+            if not category:
+                # Fallback: mesma categoria do canal atual
+                category = interaction.channel.category
+
+            # Permissões do canal
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                user:               discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                guild.me:           discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True),
+            }
+
+            # Adiciona cargos com permissão de ver este tipo de ticket. None =
+            # banco falhou: sem a lista a staff não veria o ticket, então para.
+            perm_map = {
+                'recrutamento': 'recruit_tickets',
+                'suporte':      'support_tickets',
+                'saque':        'saque_tickets',
+            }
+            cargos = await database.run_db(database.get_permission_roles, perm_map[self.ticket_type])
+            if cargos is None:
+                raise RuntimeError('cargos do ticket indisponíveis (banco)')
+            for role_name in cargos:
+                role = discord.utils.get(guild.roles, name=role_name)
+                if role:
+                    overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
             ch = await guild.create_text_channel(
                 name=f'🎫│{self.ticket_type}-{user.name[:15].lower()}',
                 overwrites=overwrites,
                 category=category,
                 topic=f'Ticket de {self.ticket_type} | {user.display_name}'
             )
+            if await database.run_db(database.confirmar_ticket, ticket_id, ch.id) is False:
+                raise RuntimeError('confirmar_ticket não gravou o canal')
         except Exception as e:
-            # Sem soltar a reserva, a pessoa ficaria travada sem conseguir abrir
-            # esse tipo de ticket pra sempre — o índice único barraria toda
-            # tentativa seguinte por causa de uma linha que não virou canal.
-            print(f'[tickets] falha ao criar canal de {user.id}: {e!r}')
-            await database.run_db(database.cancelar_reserva_ticket, ticket_id)
+            print(f'[tickets] falha ao abrir ticket de {user.id}: {e!r}')
+            if ch is not None:
+                try:
+                    await ch.delete(reason='ticket não registrado')
+                except Exception as e2:
+                    print(f'[tickets] canal órfão {ch.id} não apagado: {e2!r}')
+            try:
+                await database.run_db(database.cancelar_reserva_ticket, ticket_id)
+            except Exception as e3:
+                print(f'[tickets] reserva {ticket_id} não cancelada: {e3!r}')
             await interaction.followup.send(
-                '⚠️ Não consegui criar o canal do ticket. Avise a liderança.', ephemeral=True)
+                '⚠️ Não consegui abrir o ticket agora. Tente de novo em instantes; '
+                'se continuar, avise a liderança.', ephemeral=True)
             return
-
-        await database.run_db(database.confirmar_ticket, ticket_id, ch.id)
 
         # Mensagem editavel do ticket - get_ticket_message() volta None se ninguem
         # configurou esse tipo ainda (/configurar_ticket) OU se o banco teve um

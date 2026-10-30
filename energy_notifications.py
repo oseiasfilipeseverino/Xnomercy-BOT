@@ -2,11 +2,13 @@
 Cog de notificações de energia + logs + broadcast.
 - check_pending (30s): notificação instantânea de energia para devedores
 - check_logs (15s): posta logs pendentes no canal de logs do Discord
-- check_broadcast (30s): envia DM em massa para TODOS os membros
+- check_broadcast (30s): envia DM em massa para todos, ou só para os cargos
+  escolhidos no site; também publica a lista de cargos pro site (10 min)
 - weekly_check (1h): cobrança semanal de energia (segunda 12h BRT)
 """
 import asyncio
 import contextlib
+import json
 import re
 import time
 import discord
@@ -86,6 +88,32 @@ def _tirar_logs_pendentes(limite=5):
     return rows, (ch_row[0] if ch_row else '')
 
 
+def _lista_de_cargos(guild):
+    """[{'nome', 'membros'}] do cargo mais alto pro mais baixo, pra a tela de
+    broadcast do site. Sem o @everyone e sem os cargos de bot (managed)."""
+    cargos = sorted((r for r in guild.roles if not r.is_default() and not r.managed),
+                    key=lambda r: r.position, reverse=True)
+    return [{'nome': r.name, 'membros': sum(1 for m in r.members if not m.bot)} for r in cargos]
+
+
+def _cargos_do_broadcast(texto):
+    """Os cargos que o site gravou junto da mensagem; [] (todo mundo) se vazio.
+    JSON estragado NÃO vira "todo mundo": levanta, e a mensagem fica parada."""
+    if not texto:
+        return []
+    lista = json.loads(texto)
+    return [str(c) for c in lista if str(c).strip()]
+
+
+def _destinatarios(membros, cargos):
+    """Quem recebe: sem cargo, todo mundo (menos bots); com cargo, quem tem PELO
+    MENOS UM deles. Pelo nome, igual o site mostra."""
+    if not cargos:
+        return [m for m in membros if not m.bot]
+    alvo = set(cargos)
+    return [m for m in membros if not m.bot and any(r.name in alvo for r in m.roles)]
+
+
 EXCLUDE = ['gayzaoviadao']
 
 class EnergyNotifications(commands.Cog):
@@ -108,6 +136,33 @@ class EnergyNotifications(commands.Cog):
 
     def _get_guild(self):
         return config.get_home_guild(self.bot)
+
+    _cargos_publicados_em = 0.0   # time.time() da última publicação (ver _publicar_cargos)
+
+    async def _publicar_cargos(self, intervalo=600):
+        """Grava em site_config a lista de cargos, pra o site montar a escolha do
+        broadcast. A cada 10 min, e só se mudou. Falhar aqui não segura o broadcast."""
+        if time.time() - self._cargos_publicados_em < intervalo:
+            return
+        self._cargos_publicados_em = time.time()
+        try:
+            guild = self._get_guild()
+            if not guild:
+                return
+            novo = json.dumps(_lista_de_cargos(guild), ensure_ascii=False)
+            if novo != await database.run_db(_ler_site_config, 'discord_cargos'):
+                await database.run_db(_gravar_site_config, 'discord_cargos', novo)
+        except Exception as e:
+            print(f'[broadcast] nao publiquei os cargos: {e!r}')
+
+    async def _aviso_broadcast(self, guild, texto):
+        try:
+            ch = await database.run_db(_canal_de_logs)
+            channel = guild.get_channel(int(ch)) if ch else None
+            if channel:
+                await channel.send(texto, allowed_mentions=SEM_MENCOES)
+        except Exception as e:
+            print(f'[broadcast] aviso no canal de logs: {e!r}')
 
     def _in_backoff(self, key):
         """True se essa rotina falhou repetidamente e ainda está no período de
@@ -324,6 +379,7 @@ class EnergyNotifications(commands.Cog):
         if self._in_backoff('check_broadcast'):
             return
         try:
+            await self._publicar_cargos()
             msg = await database.run_db(_ler_site_config, 'broadcast_pending')
             self._record_success('check_broadcast')
 
@@ -331,12 +387,14 @@ class EnergyNotifications(commands.Cog):
                 return
 
             print(f'[broadcast] Mensagem pendente encontrada: {msg[:50]}...')
+            # O site grava os cargos junto, na mesma transação (db.add_broadcast).
+            cargos = _cargos_do_broadcast(await database.run_db(_ler_site_config, 'broadcast_cargos'))
 
             # Limpar pendente ANTES de enviar: broadcast é pra TODOS, e mandar
             # duas vezes (se o ciclo seguinte pegasse a mesma) é pior que falhar.
             await database.run_db(_limpar_site_config, 'broadcast_pending')
+            await database.run_db(_limpar_site_config, 'broadcast_cargos')
 
-            # Enviar DM para TODOS os membros do servidor
             guild = self._get_guild()
             if not guild:
                 print('[broadcast] Guild não encontrada')
@@ -347,14 +405,19 @@ class EnergyNotifications(commands.Cog):
             # Em 07/10 a liderança viu 38 nomes no log e achou que tinha travado
             # — estava no meio. E reiniciar o bot nesse meio-tempo corta o envio
             # (a pendente já foi limpa), então o aviso diz isso também.
-            destinatarios = [m for m in guild.members if not m.bot]
+            destinatarios = _destinatarios(guild.members, cargos)
+            publico = ('cargo ' + ', '.join(cargos)) if cargos else 'todos'
+            if cargos and not destinatarios:
+                await self._aviso_broadcast(guild, f'📣 **Broadcast não enviado:** ninguém tem o cargo '
+                                                   f'{", ".join(cargos)}. Mensagem: {msg[:200]}')
+                return
             minutos = max(1, round(len(destinatarios) * 2.3 / 60))
             try:
                 ch = await database.run_db(_canal_de_logs)
                 channel = guild.get_channel(int(ch)) if ch else None
                 if channel:
                     await channel.send(
-                        f'📣 **Broadcast começou:** {len(destinatarios)} pessoas, uma DM a cada '
+                        f'📣 **Broadcast começou** ({publico}): {len(destinatarios)} pessoas, uma DM a cada '
                         f'~2s — termina em uns **{minutos} min** '
                         f'(<t:{int(time.time()) + minutos * 60}:t>). Não reinicie o bot até '
                         f'aparecer o resumo aqui; quem tem DM fechada não recebe.',
@@ -389,7 +452,7 @@ class EnergyNotifications(commands.Cog):
                     channel = guild.get_channel(int(ch))
                     if channel:
                         await channel.send(
-                            f'**Broadcast enviado**\nMensagem: {msg[:200]}\n'
+                            f'**Broadcast enviado** ({publico})\nMensagem: {msg[:200]}\n'
                             f'Enviadas: {sent} | Falharam: {failed}',
                             allowed_mentions=SEM_MENCOES)
             except Exception:

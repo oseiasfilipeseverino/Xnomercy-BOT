@@ -116,6 +116,12 @@ def _init_table():
             triggered_at TIMESTAMP
         )''')
         c.execute('CREATE INDEX IF NOT EXISTS idx_pa_active ON price_alerts (item_id, active)')
+        # Quando o ciclo conferiu cada item na AODP (ver _save_prices). O site
+        # cria a mesma tabela: quem subir primeiro, cria.
+        c.execute('''CREATE TABLE IF NOT EXISTS prices_scan (
+            item_id    TEXT PRIMARY KEY,
+            scanned_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )''')
         conn.commit()
         print('[price_updater] Tabela prices_cache pronta.')
     except Exception as e:
@@ -134,7 +140,16 @@ _SQL_PRECOS_FIM = '''
        sell_max=CASE WHEN EXCLUDED.sell_max>0 THEN EXCLUDED.sell_max ELSE prices_cache.sell_max END,
        buy_max=CASE WHEN EXCLUDED.buy_max>0 THEN EXCLUDED.buy_max ELSE prices_cache.buy_max END,
        date_sell=CASE WHEN EXCLUDED.sell_min>0 THEN EXCLUDED.date_sell ELSE prices_cache.date_sell END,
-       updated_at=NOW()'''
+       updated_at=NOW()
+       WHERE (EXCLUDED.sell_min>0 AND EXCLUDED.sell_min IS DISTINCT FROM prices_cache.sell_min)
+          OR (EXCLUDED.sell_max>0 AND EXCLUDED.sell_max IS DISTINCT FROM prices_cache.sell_max)
+          OR (EXCLUDED.buy_max>0 AND EXCLUDED.buy_max IS DISTINCT FROM prices_cache.buy_max)
+          OR (EXCLUDED.sell_min>0 AND EXCLUDED.date_sell IS DISTINCT FROM prices_cache.date_sell)'''
+
+# Itens conferidos neste chunk: o "ainda vale" do preço que não mudou (B-10b).
+_SQL_SCAN_INICIO = 'INSERT INTO prices_scan (item_id, scanned_at) VALUES '
+_SQL_SCAN_LINHA = '(%s,NOW())'
+_SQL_SCAN_FIM = ' ON CONFLICT (item_id) DO UPDATE SET scanned_at=EXCLUDED.scanned_at'
 
 
 def _linhas_de_preco(prices_data):
@@ -156,7 +171,7 @@ def _linhas_de_preco(prices_data):
     return list(unicas.values())
 
 
-def _save_prices(prices_data, conn=None):
+def _save_prices(prices_data, conn=None, contagem=None):
     """Salva os preços de um chunk num comando SÓ. Preserva o preço antigo quando o novo é 0.
 
     Era executemany, que no pg8000 é um execute por linha: 2.463 itens x 8
@@ -165,10 +180,20 @@ def _save_prices(prices_data, conn=None):
     com todas as linhas do chunk (~800) — umas 124 idas por ciclo.
 
     `conn`: a conexão do ciclo (update_prices_once abre uma só). Sem ela, abre
-    e fecha a sua — cada conexão nova é um handshake TLS."""
+    e fecha a sua — cada conexão nova é um handshake TLS.
+
+    Só regrava a linha cujo preço mudou (o WHERE do ON CONFLICT). Antes as ~100
+    mil linhas eram reescritas a cada 30 min só pra andar o updated_at, que é o
+    que o /preco e o site usam pra saber se o preço ainda vale. Esse "ainda
+    vale" passou pra prices_scan: uma linha por ITEM conferido, na mesma
+    transação — ~2,5 mil por ciclo em vez de ~100 mil (revisão de 29/10, B-10b).
+    Quem lê usa o mais novo dos dois (ver market._get_prices).
+
+    `contagem`: dict opcional; soma em 'gravadas' quantas linhas mudaram."""
     rows = _linhas_de_preco(prices_data)
     if not rows:
         return 0
+    itens = list(dict.fromkeys(r[0] for r in rows))
     propria = conn is None
     if propria:
         conn = _get_conn()
@@ -176,6 +201,9 @@ def _save_prices(prices_data, conn=None):
         c = conn.cursor()
         sql = _SQL_PRECOS_INICIO + ','.join([_SQL_PRECOS_LINHA] * len(rows)) + _SQL_PRECOS_FIM
         c.execute(sql, [v for r in rows for v in r])
+        if contagem is not None:
+            contagem['gravadas'] = contagem.get('gravadas', 0) + max(0, c.rowcount or 0)
+        c.execute(_SQL_SCAN_INICIO + ','.join([_SQL_SCAN_LINHA] * len(itens)) + _SQL_SCAN_FIM, itens)
         conn.commit()
         return len(rows)
     except Exception as e:
@@ -498,6 +526,7 @@ async def update_prices_once(bot=None):
     start      = time.time()
     total_rows = 0
     errors     = 0
+    contagem   = {'gravadas': 0}   # linhas que mudaram de verdade (ver _save_prices)
     loop       = asyncio.get_event_loop()
 
     demand     = await loop.run_in_executor(None, _get_demand_items)
@@ -532,7 +561,7 @@ async def update_prices_once(bot=None):
                             conn = await loop.run_in_executor(None, _get_conn)
                         try:
                             saved = await loop.run_in_executor(
-                                None, lambda d=data, k=conn: _save_prices(d, k))
+                                None, lambda d=data, k=conn: _save_prices(d, k, contagem))
                         except Exception:
                             # conexão suspeita: descarta, o próximo chunk abre outra
                             errors += 1
@@ -557,7 +586,8 @@ async def update_prices_once(bot=None):
                 conn.close()
 
     elapsed = time.time() - start
-    print(f'[price_updater] Concluído: {total_rows} registros, {errors} erros, {elapsed:.0f}s')
+    print(f'[price_updater] Concluído: {total_rows} registros ({contagem["gravadas"]} mudaram), '
+          f'{errors} erros, {elapsed:.0f}s')
 
     # Checa alertas de preço com os dados que acabaram de ser salvos — precisa
     # do `bot` pra mandar DM, por isso só roda quando chamado a partir do loop

@@ -43,6 +43,8 @@ c.execute('''CREATE TEMP TABLE prices_cache (
     PRIMARY KEY (item_id, city, quality))''')
 c.execute('CREATE INDEX idx_pc_item ON prices_cache (item_id)')
 c.execute('CREATE INDEX idx_pc_upd ON prices_cache (updated_at)')
+# prices_scan também temporária: o _save_prices grava nela (B-10b)
+c.execute('CREATE TEMP TABLE prices_scan (item_id TEXT PRIMARY KEY, scanned_at TIMESTAMP NOT NULL DEFAULT NOW())')
 conn.commit()
 c.execute("SELECT relpersistence FROM pg_class WHERE oid = 'prices_cache'::regclass")
 checar(c.fetchone()[0] == 't', 'o teste usa a tabela temporaria')
@@ -97,18 +99,40 @@ linhas = [{'item_id': f'T4_ITEM_{i}', 'city': cid, 'quality': 1, 'sell_price_min
 checar(PU._save_prices(linhas) == 40, 'insere 40 linhas')
 c.execute("SELECT oid FROM pg_class WHERE oid = 'pg_temp.prices_cache'::regclass")
 oid = c.fetchone()[0]
+def atualizacoes():
+    c.execute('SELECT pg_stat_force_next_flush()')
+    conn.commit()
+    c.execute('SELECT n_tup_upd, n_tup_hot_upd FROM pg_stat_user_tables WHERE relid = %s', (oid,))
+    return c.fetchone() or (0, 0)
+
+
 for rodada in range(2):                 # dois ciclos de 30 min, preco igual
     PU._save_prices(linhas)
-c.execute('SELECT pg_stat_force_next_flush()')
-conn.commit()
-c.execute('SELECT n_tup_upd, n_tup_hot_upd FROM pg_stat_user_tables WHERE relid = %s', (oid,))
-r = c.fetchone()
-upd, hot = (r or (0, 0))
-checar(upd >= 80 and hot >= upd * 0.8,
-       f'regravacoes HOT: {hot} de {upd} (antes: 0 de 159 milhoes em producao)')
-c.execute("SELECT count(*), min(updated_at) > NOW() - interval '1 minute' FROM prices_cache")
+upd0, _ = atualizacoes()
+checar(upd0 == 0, f'preco igual nao regrava a linha ({upd0} atualizacao(oes); B-10b)')
+c.execute("SELECT count(*), min(scanned_at) > NOW() - interval '1 minute' FROM prices_scan")
 n, fresco = c.fetchone()
-checar(n == 40 and fresco, 'updated_at continua avancando (site e /preco dependem dele)')
+checar(n == 20 and fresco, 'mas o item fica marcado como conferido agora (prices_scan)')
+
+for rodada in range(2):                 # dois ciclos com o preco mudando
+    for l in linhas:
+        l['sell_price_min'] += 1
+    PU._save_prices(linhas)
+upd, hot = atualizacoes()
+checar(upd >= 80 and hot >= upd * 0.8,
+       f'preco que muda regrava, e HOT: {hot} de {upd} (antes: 0 de 159 milhoes em producao)')
+
+print('\n-- leitura: preco que nao mudou continua valendo')
+c.execute("UPDATE prices_cache SET updated_at = NOW() - interval '3 hours'")
+conn.commit()
+import market
+market.database.get_connection = lambda: conn   # a temporaria so' existe nesta conexao
+market.database.release = lambda x: None
+achou = market._get_prices('T4_ITEM_0')
+checar(len(achou) == 2, f'/preco acha o preco antigo conferido agora ({len(achou)} linha(s))')
+c.execute("UPDATE prices_scan SET scanned_at = NOW() - interval '3 hours'")
+conn.commit()
+checar(market._get_prices('T4_ITEM_0') == [], 'sem conferencia recente, o preco velho some como antes')
 
 print('\n-- a tabela real nao foi tocada')
 c.execute("SELECT to_regclass('public.idx_pc_upd') IS NOT NULL")

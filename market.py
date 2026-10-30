@@ -71,9 +71,13 @@ def _get_prices(unique_name, max_age_minutes=35):
     conn = database.get_connection()
     try:
         c = conn.cursor()
-        c.execute('''SELECT city, quality, sell_min, buy_max, date_sell
-                     FROM prices_cache WHERE item_id=%s AND updated_at > NOW() - make_interval(mins => %s)
-                     ORDER BY quality''', (unique_name, int(max_age_minutes)))
+        # Vale o mais novo entre a última mudança da linha e a última vez que o
+        # bot conferiu o item: preço que não muda não é mais regravado (B-10b).
+        c.execute('''SELECT p.city, p.quality, p.sell_min, p.buy_max, p.date_sell
+                     FROM prices_cache p LEFT JOIN prices_scan s ON s.item_id = p.item_id
+                     WHERE p.item_id=%s
+                       AND GREATEST(p.updated_at, s.scanned_at) > NOW() - make_interval(mins => %s)
+                     ORDER BY p.quality''', (unique_name, int(max_age_minutes)))
         return c.fetchall()
     except Exception as e:
         print(f'[market] preços: {e}')

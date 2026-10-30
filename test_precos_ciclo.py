@@ -34,6 +34,8 @@ execs, conexoes = [], []
 
 
 class Cur:
+    rowcount = 7    # o pg8000 conta as linhas inseridas/atualizadas
+
     def execute(self, sql, params=()):
         execs.append((sql, list(params)))
 
@@ -94,7 +96,14 @@ pu._get_active_alerts = alertas
 async def rodar():
     total = await pu.update_prices_once(bot=object())
     print(f'  ({len(execs)} comando(s) no banco, {len(conexoes)} conexão(ões), {total} linhas)')
-    checar(len(execs) == 2, f'um INSERT por chunk ({len(execs)} comandos para 2 chunks)')
+    precos = [e for e in execs if 'INTO prices_cache' in e[0]]
+    scans = [e for e in execs if 'INTO prices_scan' in e[0]]
+    checar(len(precos) == 2 and len(execs) == 4,
+           f'um INSERT de preços + um de conferência por chunk ({len(execs)} comandos para 2 chunks)')
+    checar(precos and 'IS DISTINCT FROM' in precos[0][0].split('ON CONFLICT')[1],
+           'preço igual não é regravado (WHERE no ON CONFLICT, B-10b)')
+    checar(sorted(i for _, p in scans for i in p) == sorted(ITENS),
+           'cada item do ciclo fica marcado como conferido, uma vez só')
     checar(len(conexoes) == 1, f'uma conexão pro ciclo ({len(conexoes)})')
     checar(total == 160, f'todas as linhas do ciclo, sem a repetida (160 = 40 itens x 4; veio {total})')
     primeiro = [u for u in pedidos if 'T4_X0,' in u]

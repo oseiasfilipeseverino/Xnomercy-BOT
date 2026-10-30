@@ -148,7 +148,9 @@ import re
 for arquivo, funcao in [('bank.py', 'update_player_balance'),
                         ('bank.py', 'debit_player_balance'),
                         ('bank.py', 'zero_player_balance'),
-                        ('members.py', 'zero_player_balance')]:
+                        # desde 29/10 o confisco usa confiscar_saida (aviso +
+                        # saldo + extrato numa transação; ver test_confisco.py)
+                        ('members.py', 'confiscar_saida')]:
     fonte = (pathlib.Path(__file__).parent / arquivo).read_text(encoding='utf-8')
     # a chamada tem que existir e NAO pode haver add_transaction logo depois
     checar(f'database.{funcao}' in fonte, f'{arquivo}: chama {funcao}')

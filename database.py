@@ -670,7 +670,7 @@ def get_player_transactions(discord_id, limit=15):
         c = conn.cursor()
         c.execute('''SELECT amount, type, description, created_by, created_at
                      FROM transactions WHERE discord_id=%s
-                     ORDER BY created_at::timestamptz DESC LIMIT %s''', (discord_id, limit))
+                     ORDER BY NULLIF(created_at, '')::timestamptz DESC NULLS LAST LIMIT %s''', (discord_id, limit))
         return [{'amount': float(r[0]), 'type': r[1], 'description': r[2],
                   'created_by': r[3], 'created_at': r[4]} for r in c.fetchall()]
     finally:

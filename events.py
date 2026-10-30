@@ -564,17 +564,28 @@ class ApproveDepositView(LoggedView):
                 self.event_id, event["title"], creditos, interaction.user.display_name)
         except Exception as e:
             print(f'[events] FALHA ao creditar evento #{self.event_id}: {e!r}')
-            await database.run_db(database.revert_event_approval, self.event_id)
-            await alertar_financeiro(
-                interaction.guild,
-                'Falha ao creditar evento',
-                f'**Evento #{self.event_id:04d} — {event["title"]}** com {len(creditos)} participante(s).\n'
-                f'Aprovado por {interaction.user.display_name}, mas o crédito falhou.\n\n'
-                f'O evento voltou para **pendente** — basta clicar em Aprovar de novo.\n'
-                f'Erro: `{str(e)[:300]}`')
+            # Só diz "voltou" se voltou: na mesma queda a devolução também pode
+            # falhar, e aí "clique em Aprovar de novo" era mentira (revisão de 30/10).
+            try:
+                voltou = await database.run_db(database.revert_event_approval, self.event_id)
+            except Exception as e2:
+                print(f'[events] devolver evento #{self.event_id} para pendente: {e2!r}')
+                voltou = False
+            situacao = ('O evento voltou para **pendente** — basta clicar em Aprovar de novo.' if voltou else
+                        f'**O evento #{self.event_id:04d} ficou preso como aprovado sem pagamento** — '
+                        'precisa de correção manual no banco (status de volta para pending).')
+            try:
+                await alertar_financeiro(
+                    interaction.guild,
+                    'Falha ao creditar evento',
+                    f'**Evento #{self.event_id:04d} — {event["title"]}** com {len(creditos)} participante(s).\n'
+                    f'Aprovado por {interaction.user.display_name}, mas o crédito falhou.\n\n'
+                    f'{situacao}\n'
+                    f'Erro: `{str(e)[:300]}`')
+            except Exception as e3:
+                print(f'[events] alerta da falha do evento #{self.event_id}: {e3!r}')
             await interaction.followup.send(
-                '❌ Falha ao creditar — **nenhuma prata foi movimentada**. '
-                'O evento voltou pra pendente, pode clicar em Aprovar de novo.',
+                f'❌ Falha ao creditar — **nenhuma prata foi movimentada**. {situacao}',
                 ephemeral=True)
             return
 

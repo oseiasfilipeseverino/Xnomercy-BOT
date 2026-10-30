@@ -115,14 +115,28 @@ class SitePendingSplitView(LoggedView):
             await interaction.followup.send('❌ Já processado.', ephemeral=True)
             return
 
+        # Tudo que pode falhar vem ANTES de aprovar. Com a leitura do evento e o
+        # json.loads depois do approve, uma oscilação ali deixava o split 'approved'
+        # sem crédito e sem volta: novo clique dava "Já processado" (revisão
+        # independente de 30/10). O título é só texto: sem ele, o pagamento segue.
+        try:
+            participants = json.loads(split['participants_json'])
+        except (TypeError, ValueError) as e:
+            print(f'[site_splits] split {self.split_id} com participantes ilegíveis: {e!r}')
+            await interaction.followup.send(
+                '❌ Não consegui ler os participantes deste split. Nada foi aprovado.', ephemeral=True)
+            return
+        try:
+            event = await database.run_db(database.get_scheduled_event, split['event_id'])
+            event_title = event.get('title', '') if event else ''
+        except Exception as e:
+            print(f'[site_splits] título do evento do split {self.split_id}: {e!r}')
+            event_title = split.get('event_title') or ''
+
         # Atômico — se o site aprovou primeiro (tela /gestao/splits), perde a corrida aqui.
         if not await database.run_db(database.approve_pending_split, self.split_id, interaction.user.display_name):
             await interaction.followup.send('❌ Já processado por outra pessoa.', ephemeral=True)
             return
-
-        event = await database.run_db(database.get_scheduled_event, split['event_id'])
-        event_title = event.get('title', '') if event else ''
-        participants = json.loads(split['participants_json'])
 
         # O crédito é tudo-ou-nada (uma transação só). Se falhar, NADA foi
         # creditado — então devolve o split pra 'pending' pra dar pra tentar de
@@ -132,17 +146,28 @@ class SitePendingSplitView(LoggedView):
             await database.run_db(database.save_split_participants, split['event_id'], participants, event_title)
         except Exception as e:
             print(f'[site_splits] FALHA ao creditar split {self.split_id}: {e!r}')
-            await database.run_db(database.revert_pending_split, self.split_id)
-            await alertar_financeiro(
-                interaction.guild,
-                'Falha ao creditar split',
-                f'**{split.get("event_title", "Evento")}** — {len(participants)} participante(s).\n'
-                f'Aprovado por {interaction.user.display_name}, mas o crédito falhou.\n\n'
-                f'O split voltou para **pendente** — basta clicar em Aprovar de novo.\n'
-                f'Erro: `{str(e)[:300]}`')
+            # Só diz "voltou" se voltou: na mesma queda a devolução também pode
+            # falhar, e aí "clique em Aprovar de novo" era mentira.
+            try:
+                voltou = await database.run_db(database.revert_pending_split, self.split_id)
+            except Exception as e2:
+                print(f'[site_splits] devolver split {self.split_id} para pendente: {e2!r}')
+                voltou = False
+            situacao = ('O split voltou para **pendente** — basta clicar em Aprovar de novo.' if voltou else
+                        f'**O split #{self.split_id} ficou preso como aprovado sem pagamento** — '
+                        'precisa de correção manual no banco (status de volta para pending).')
+            try:
+                await alertar_financeiro(
+                    interaction.guild,
+                    'Falha ao creditar split',
+                    f'**{split.get("event_title", "Evento")}** — {len(participants)} participante(s).\n'
+                    f'Aprovado por {interaction.user.display_name}, mas o crédito falhou.\n\n'
+                    f'{situacao}\n'
+                    f'Erro: `{str(e)[:300]}`')
+            except Exception as e3:
+                print(f'[site_splits] alerta da falha do split {self.split_id}: {e3!r}')
             await interaction.followup.send(
-                '❌ Falha ao creditar — **nenhuma prata foi movimentada**. '
-                'O split voltou pra pendente, pode clicar em Aprovar de novo.',
+                f'❌ Falha ao creditar — **nenhuma prata foi movimentada**. {situacao}',
                 ephemeral=True)
             return
 

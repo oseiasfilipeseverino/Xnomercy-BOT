@@ -132,7 +132,7 @@ achou = market._get_prices('T4_ITEM_0')
 checar(len(achou) == 2, f'/preco acha o preco antigo conferido agora ({len(achou)} linha(s))')
 c.execute("UPDATE prices_scan SET scanned_at = NOW() - interval '3 hours'")
 conn.commit()
-checar(market._get_prices('T4_ITEM_0') == [], 'sem conferencia recente, o preco velho some como antes')
+checar(len(market._get_prices('T4_ITEM_0')) == 0, 'sem conferencia recente, o preco velho some como antes')
 
 print('\n-- a tabela real nao foi tocada')
 c.execute("SELECT to_regclass('public.idx_pc_upd') IS NOT NULL")

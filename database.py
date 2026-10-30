@@ -195,25 +195,6 @@ def init_db():
             discord_id TEXT NOT NULL, username TEXT NOT NULL,
             ticket_type TEXT NOT NULL, status TEXT DEFAULT 'open',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
-        # Índices das consultas quentes. As tabelas de preço e energia já tinham;
-        # as do fluxo de evento não. thread_id é consultada TODA vez que alguém
-        # escreve em qualquer tópico do servidor, e scheduled_event_id a cada
-        # inscrição — sem índice é varredura completa. Hoje são poucas centenas de
-        # linhas e não muda nada, mas transactions cresce ~29 mil linhas/ano, e
-        # quando pesar vai parecer "o bot está lento" sem causa aparente.
-        for idx, tbl, col in (
-            ('idx_sched_thread',  'scheduled_events',  'thread_id'),
-            ('idx_slot_event',    'slot_assignments',  'scheduled_event_id'),
-            ('idx_tx_discord',    'transactions',      'discord_id'),
-            ('idx_perm_name',     'permissions',       'permission'),
-        ):
-            try:
-                c.execute(f'CREATE INDEX IF NOT EXISTS {idx} ON {tbl} ({col})')
-            except Exception as e:
-                # Índice ausente degrada desempenho, não quebra nada — não pode
-                # impedir o bot de subir.
-                print(f'[DB] indice {idx} nao criado: {e!r}')
-
         # Um ticket aberto por pessoa+tipo. É o que faz a reserva em
         # reservar_ticket ser atômica: o 2º clique perde no banco em vez de
         # criar um canal órfão.
@@ -257,6 +238,28 @@ def init_db():
             username TEXT NOT NULL, assigned_at TEXT DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(scheduled_event_id, slot_number),
             UNIQUE(scheduled_event_id, discord_id))''')
+        # Depois de criar as tabelas: o índice em scheduled_events vinha antes dela,
+        # e num banco vazio o erro abortava a transação inteira. O bot não subia
+        # sem o site ter criado as tabelas antes (achado ao testar em banco novo).
+        # Índices das consultas quentes. As tabelas de preço e energia já tinham;
+        # as do fluxo de evento não. thread_id é consultada TODA vez que alguém
+        # escreve em qualquer tópico do servidor, e scheduled_event_id a cada
+        # inscrição — sem índice é varredura completa. Hoje são poucas centenas de
+        # linhas e não muda nada, mas transactions cresce ~29 mil linhas/ano, e
+        # quando pesar vai parecer "o bot está lento" sem causa aparente.
+        for idx, tbl, col in (
+            ('idx_sched_thread',  'scheduled_events',  'thread_id'),
+            ('idx_slot_event',    'slot_assignments',  'scheduled_event_id'),
+            ('idx_tx_discord',    'transactions',      'discord_id'),
+            ('idx_perm_name',     'permissions',       'permission'),
+        ):
+            try:
+                c.execute(f'CREATE INDEX IF NOT EXISTS {idx} ON {tbl} ({col})')
+            except Exception as e:
+                # Índice ausente degrada desempenho, não quebra nada — não pode
+                # impedir o bot de subir.
+                print(f'[DB] indice {idx} nao criado: {e!r}')
+
         # Rastreia o aviso de "membro saiu com saldo positivo" — cada linha vira
         # uma View com custom_id dinâmico (xnm:confiscar:<id>), igual ao padrão de
         # pending_splits. Sem isso, a View de confisco usava custom_id fixo e era
@@ -267,6 +270,13 @@ def init_db():
             balance REAL DEFAULT 0, status TEXT DEFAULT 'pending',
             channel_id TEXT DEFAULT '', message_id TEXT DEFAULT '',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+        # REAL guarda ~7 dígitos: um aviso de 123.456.785 virava 123.456.784 e o
+        # confisco deixava resto. Só altera se ainda for REAL (DDL tranca a tabela).
+        c.execute("""SELECT format_type(atttypid, atttypmod) FROM pg_attribute
+                     WHERE attrelid='member_departures'::regclass AND attname='balance'""")
+        tipo = c.fetchone()
+        if tipo and tipo[0] == 'real':
+            c.execute('ALTER TABLE member_departures ALTER COLUMN balance TYPE DOUBLE PRECISION')
         # Quantas verificações CONSECUTIVAS um membro apareceu como "fora da guild"
         # na API do Albion. O auto-purge só rebaixa depois de confirmar mais de uma
         # vez — a API devolve resposta incompleta de vez em quando, e agir na

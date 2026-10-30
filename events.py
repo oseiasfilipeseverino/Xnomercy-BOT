@@ -375,8 +375,13 @@ async def _update_event_embed(guild, event_id):
         if not ch: return
         participants = await database.run_db(database.get_event_participants, event_id)
         embed = _build_event_embed(event_id, event['title'], event['creator_name'], participants)
-        async for msg in ch.history(limit=5):
-            if msg.author == guild.me and msg.embeds:
+        # O painel pelo rodapé, e não "a última mensagem do bot com embed": essa
+        # podia ser o /simular_evento, que virava a lista de participantes. E só
+        # nas 5 últimas: com conversa no canal o painel ficava sem atualizar
+        # (revisão de 29/10, B-24).
+        rodape = embed.footer.text
+        async for msg in ch.history(limit=200):
+            if msg.author == guild.me and msg.embeds and msg.embeds[0].footer.text == rodape:
                 await msg.edit(embed=embed)
                 return
     except Exception as e:

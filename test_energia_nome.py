@@ -29,6 +29,8 @@ import energy_notifications as EN
 
 
 class Membro:
+    roles = []
+
     def __init__(self, display, nick=None, name=None):
         self.display_name = display
         self.nick = nick

@@ -36,7 +36,7 @@ class Cursor:
         self._r = []
 
     def execute(self, sql, params=None):
-        if 'site_config' in sql:
+        if 'site_config' in sql and 'energy_records' not in sql:
             if self.conn.lista == 'quebra':
                 self.conn.abortada = True
                 raise RuntimeError('simulada')

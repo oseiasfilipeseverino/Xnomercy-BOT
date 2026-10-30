@@ -116,6 +116,21 @@ def _destinatarios(membros, cargos):
 
 EXCLUDE = ['gayzaoviadao']
 
+# Quem tem este cargo não paga energia (decisão da liderança, 30/10/2026): não recebe
+# cobrança nem aparece como devedor. Os registros seguem no banco.
+CARGO_ISENTO_ENERGIA = 'staff'
+
+
+def isento_de_energia(membro):
+    return any(r.name.strip().lower() == CARGO_ISENTO_ENERGIA for r in membro.roles)
+
+
+def _players_de_energia():
+    with _db() as conn:
+        c = conn.cursor()
+        c.execute('SELECT DISTINCT player FROM energy_records')
+        return [r[0] for r in c.fetchall()]
+
 class EnergyNotifications(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -152,6 +167,17 @@ class EnergyNotifications(commands.Cog):
             novo = json.dumps(_lista_de_cargos(guild), ensure_ascii=False)
             if novo != await database.run_db(_ler_site_config, 'discord_cargos'):
                 await database.run_db(_gravar_site_config, 'discord_cargos', novo)
+            # Quem é isento, pelos nomes do registro de energia: é o site e o relatório
+            # que precisam, e eles não enxergam os cargos do Discord.
+            jogadores = await database.run_db(_players_de_energia)
+            isentos = []
+            for p in jogadores:
+                m = self._find_member(guild, p)
+                if m and isento_de_energia(m):
+                    isentos.append(p)
+            novo = json.dumps(sorted(isentos), ensure_ascii=False)
+            if novo != await database.run_db(_ler_site_config, 'energia_isentos'):
+                await database.run_db(_gravar_site_config, 'energia_isentos', novo)
         except Exception as e:
             print(f'[broadcast] nao publiquei os cargos: {e!r}')
 
@@ -288,7 +314,7 @@ class EnergyNotifications(commands.Cog):
             if not member:
                 print(f'[energy] Membro não encontrado: {d["player"]}')
                 continue
-            if member.bot:
+            if member.bot or isento_de_energia(member):
                 continue
 
             msg = message_template.replace('{player}', d['player']).replace('{divida}', str(d['debt']))

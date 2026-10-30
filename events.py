@@ -364,16 +364,23 @@ def _build_event_embed(event_id, title, creator, participants):
 
 
 async def _update_event_embed(guild, event_id):
-    event = await database.run_db(database.get_event, event_id)
-    if not event or not event['channel_id']: return
-    ch = guild.get_channel(int(event['channel_id']))
-    if not ch: return
-    participants = await database.run_db(database.get_event_participants, event_id)
-    embed = _build_event_embed(event_id, event['title'], event['creator_name'], participants)
-    async for msg in ch.history(limit=5):
-        if msg.author == guild.me and msg.embeds:
-            await msg.edit(embed=embed)
-            return
+    # Só redesenha a lista; quem chama já gravou o que importava. As leituras
+    # agora levantam em falha de banco (antes viravam lista vazia e o painel
+    # aparecia "Nenhum participante", B-16) — aqui isso só pula o redesenho, sem
+    # transformar uma entrada que deu certo em "Erro ao entrar".
+    try:
+        event = await database.run_db(database.get_event, event_id)
+        if not event or not event['channel_id']: return
+        ch = guild.get_channel(int(event['channel_id']))
+        if not ch: return
+        participants = await database.run_db(database.get_event_participants, event_id)
+        embed = _build_event_embed(event_id, event['title'], event['creator_name'], participants)
+        async for msg in ch.history(limit=5):
+            if msg.author == guild.me and msg.embeds:
+                await msg.edit(embed=embed)
+                return
+    except Exception as e:
+        print(f'[evento {event_id}] painel nao redesenhado: {e!r}')
 
 
 async def _refresh_participar(guild):
@@ -522,8 +529,8 @@ class ApproveDepositView(LoggedView):
             return
         if self.distribution is None:
             # Depois de um restart: remonta a mesma conta do /depositar_evento.
-            # get_event_participants devolve [] em erro de banco — sem a
-            # checagem o evento seria aprovado sem creditar ninguém.
+            # Erro de banco levanta (vai pro on_error da view); a checagem de
+            # lista vazia fica: aprovar sem ninguém não credita nada.
             self.participants = await database.run_db(database.get_event_participants, self.event_id)
             if not self.participants:
                 await interaction.followup.send(

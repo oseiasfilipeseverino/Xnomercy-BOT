@@ -47,12 +47,13 @@ database.run_db = run_db
 database.get_active_scheduled_events = lambda: eventos
 database.encerrar_evento_vencido = lambda eid: encerrados.append(eid) or True
 database.update_scheduled_event_notify = lambda *a, **kw: None
+database.reivindicar_aviso = lambda eid, minutos: True
 
 cog = se.ScheduledEventsCog.__new__(se.ScheduledEventsCog)
 
 
-async def notify(event, minutes):
-    avisados.append((event['id'], minutes))
+async def notify(event, aviso, faltam):
+    avisados.append((event['id'], aviso))
 cog._notify_dm = notify
 
 asyncio.run(se.ScheduledEventsCog.notification_task.coro(cog))

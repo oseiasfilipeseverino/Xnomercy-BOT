@@ -193,7 +193,15 @@ class ScheduledEventsCog(commands.Cog):
                 '❌ Este topico nao pertence a nenhum evento.', ephemeral=True)
             return
 
-        assignments = await database.run_db(database.get_slot_assignments, event['id'])
+        try:
+            assignments = await database.run_db(database.get_slot_assignments, event['id'])
+        except Exception as db_err:
+            # Antes o erro virava lista vazia e a conferência dizia "ninguém
+            # fechou" com o evento cheio (revisão de 29/10, B-16).
+            print("[conferencia] ERRO DB: " + repr(db_err))
+            await interaction.followup.send(
+                '⚠️ Falha ao consultar o banco. Tente de novo em instantes.', ephemeral=True)
+            return
         slots       = parse_slots(event['slots'])
         por_slot    = {a['slot_number']: a for a in assignments}
 
@@ -362,17 +370,31 @@ class ScheduledEventsCog(commands.Cog):
         # Conta pelo ANTES/DEPOIS em vez de somar os assign que deram certo:
         # quem entrou, saiu e voltou no histórico gera dois assign, mas ocupa um
         # slot só — somar daria "2 inscrições recuperadas" pra uma pessoa.
-        antes = len(await database.run_db(database.get_slot_assignments, event_id))
+        try:
+            antes = len(await database.run_db(database.get_slot_assignments, event_id))
+        except Exception as e:
+            # Sem conseguir ler quem está inscrito, a releitura não tem base.
+            # Volta pra fila: a próxima volta tenta de novo, em vez de o evento
+            # ficar preso em 'reopening' até o próximo restart.
+            print("[reopen] Evento " + str(event_id) + " sem ler as inscricoes: " + repr(e))
+            await database.run_db(database.set_event_status, event_id, "pending_reopen")
+            return
 
         try:
             # oldest_first pra reaplicar entrada/saída na ordem em que aconteceram.
             async for msg in thread.history(limit=1000, oldest_first=True):
                 if msg.author.bot:
                     continue
-                try:
-                    num = int(msg.content.strip())
-                except ValueError:
-                    continue
+                texto = msg.content.strip()
+                alvo_mencionado = None
+                m = _SLOT_COM_ALVO.fullmatch(texto)
+                if m:
+                    num, alvo_mencionado = int(m.group(1)), m.group(2)
+                else:
+                    try:
+                        num = int(texto)
+                    except ValueError:
+                        continue
 
                 relidas += 1
                 abs_num = abs(num)
@@ -383,12 +405,15 @@ class ScheduledEventsCog(commands.Cog):
                     await database.run_db(database.assign_slot, event_id, num,
                                           str(msg.author.id), msg.author.display_name)
                 else:
-                    await database.run_db(database.unassign_slot, event_id, abs_num,
-                                          str(msg.author.id))
+                    await self._reaplicar_saida(event, abs_num, msg.author, alvo_mencionado)
         except Exception as e:
             print("[reopen] Evento " + str(event_id) + " erro na releitura: " + repr(e))
 
-        depois = len(await database.run_db(database.get_slot_assignments, event_id))
+        try:
+            depois = len(await database.run_db(database.get_slot_assignments, event_id))
+        except Exception as e:
+            print("[reopen] Evento " + str(event_id) + " sem recontar: " + repr(e))
+            depois = antes
         novos  = max(0, depois - antes)
 
         await database.run_db(database.set_event_status, event_id, "waiting")
@@ -494,6 +519,33 @@ class ScheduledEventsCog(commands.Cog):
             await database.run_db(database.set_event_status, event["id"], "pending_post")
             print("[scheduled_events] Erro ao postar evento '" + str(event.get("title","?")) + "': " + str(e))
 
+    async def _reaplicar_saida(self, event, abs_num, autor, alvo_mencionado):
+        """Uma saída do histórico, com a mesma regra do _sair_do_slot, sem responder.
+
+        A releitura só tirava quem digitou: o "-13 @Fulano" da staff nem era lido,
+        e o "-13" de quem organiza (que tira quem estiver no slot) não tirava
+        ninguém. Reabrir devolvia ao slot quem a staff tinha tirado, pelo "13"
+        antigo dele (revisão de 29/10, B-20)."""
+        event_id = event["id"]
+        try:
+            organiza = (str(event.get("created_by", "")) == autor.display_name
+                        or (hasattr(autor, "roles") and can_manage_events(autor)))
+        except Exception as e:
+            print("[reopen] permissao de " + str(autor.id) + ": " + repr(e))
+            organiza = False
+        if alvo_mencionado and not organiza:
+            return    # na hora também foi recusado
+        removed = await database.run_db(database.unassign_slot, event_id, abs_num,
+                                        alvo_mencionado or str(autor.id))
+        if removed is False and not alvo_mencionado and organiza:
+            try:
+                dono = await database.run_db(database.get_slot_owner, event_id, abs_num)
+            except Exception as e:
+                print("[reopen] dono do slot " + str(abs_num) + ": " + repr(e))
+                return
+            if dono:
+                await database.run_db(database.unassign_slot, event_id, abs_num, dono)
+
     async def _confirmar(self, message, emoji, texto):
         """Reação de confirmação; se o Discord recusar, confirma por escrito.
 
@@ -523,11 +575,17 @@ class ScheduledEventsCog(commands.Cog):
         if result == "ok":
             await self._confirmar(message, "✅", f"✅ **{username}** entrou no slot **{abs_num}**.")
         elif result == "has_slot":
-            current = await database.run_db(database.get_player_slot, event["id"], discord_id)
-            reply = await message.reply(
-                "Voce ja esta no slot **" + str(current) + "**. Digite **-" + str(current) + "** para sair primeiro.",
-                mention_author=False
-            )
+            try:
+                current = await database.run_db(database.get_player_slot, event["id"], discord_id)
+            except Exception as e:
+                print(f"[slots] get_player_slot: {e!r}")
+                current = None
+            if current is None:
+                texto = "Voce ja esta em outro slot deste evento. Saia dele primeiro (numero negativo)."
+            else:
+                texto = ("Voce ja esta no slot **" + str(current) + "**. Digite **-"
+                         + str(current) + "** para sair primeiro.")
+            reply = await message.reply(texto, mention_author=False)
             await asyncio.sleep(8)
             try: await reply.delete()
             except Exception: pass
@@ -583,7 +641,15 @@ class ScheduledEventsCog(commands.Cog):
         if not removed and not alvo_mencionado and organiza:
             # Não era meu slot, e eu posso tirar: tira quem estiver nele.
             # Sem menção, sem copiar id, sem confirmar nada.
-            dono = await database.run_db(database.get_slot_owner, event["id"], abs_num)
+            try:
+                dono = await database.run_db(database.get_slot_owner, event["id"], abs_num)
+            except Exception as e:
+                # Antes o erro virava "ninguém no slot" e a staff lia "Você
+                # não está no slot" (revisão de 29/10, B-23).
+                print(f"[slots] get_slot_owner: {e!r}")
+                await self._responder_e_limpar(
+                    message, "Não consegui tirar agora (falha no banco). Tente de novo em instantes.")
+                return False
             if dono:
                 removed = await database.run_db(
                     database.unassign_slot, event["id"], abs_num, dono)
@@ -810,12 +876,16 @@ class ScheduledEventsCog(commands.Cog):
                               + str(HORAS_PARA_ENCERRAR) + "h depois do horario")
                     continue
 
-                if 29 <= diff <= 31 and not event["notify_30"]:
-                    await self._notify_dm(event, 30)
-                    await database.run_db(database.update_scheduled_event_notify, event["id"], notify_30=1)
-                elif 14 <= diff <= 16 and not event["notify_15"]:
-                    await self._notify_dm(event, 15)
-                    await database.run_db(database.update_scheduled_event_notify, event["id"], notify_15=1)
+                # Janela até o próximo aviso, e não 2 min fixos: com a volta
+                # atrasada (deploy, banco lento) o aviso caía fora dos 2 min e não
+                # saía. O aviso é marcado ANTES das DMs (reivindicar_aviso), então
+                # um restart no meio não manda de novo (revisão de 29/10, B-18).
+                if 15 < diff <= 31 and not event["notify_30"]:
+                    if await database.run_db(database.reivindicar_aviso, event["id"], 30):
+                        await self._notify_dm(event, 30, max(1, round(diff)))
+                elif 0 < diff <= 16 and not event["notify_15"]:
+                    if await database.run_db(database.reivindicar_aviso, event["id"], 15):
+                        await self._notify_dm(event, 15, max(1, round(diff)))
 
         except Exception as e:
             print("[scheduled_events] Erro notification_task: " + str(e))
@@ -824,10 +894,24 @@ class ScheduledEventsCog(commands.Cog):
     async def before_notif(self):
         await self.bot.wait_until_ready()
 
-    async def _notify_dm(self, event, minutes):
+    async def _notify_dm(self, event, aviso, minutes):
+        """aviso: 30 ou 15 (qual marca); minutes: quanto falta de verdade."""
         try:
-            emoji = "⏰" if minutes == 30 else "🚨"
-            color = cores.OURO if minutes == 30 else cores.VERMELHO
+            assignments = await database.run_db(database.get_slot_assignments, event["id"])
+        except Exception as e:
+            # Sem a lista não dá pra avisar ninguém: solta a marca pra a próxima
+            # volta tentar, em vez de o aviso sumir com "0 DMs".
+            print("[scheduled_events] aviso de " + str(aviso) + " min do evento "
+                  + str(event["id"]) + " adiado: " + repr(e))
+            try:
+                await database.run_db(database.update_scheduled_event_notify, event["id"],
+                                      **{"notify_" + str(aviso): 0})
+            except Exception as e2:
+                print("[scheduled_events] nem soltar a marca deu: " + repr(e2))
+            return
+        try:
+            emoji = "⏰" if aviso == 30 else "🚨"
+            color = cores.OURO if aviso == 30 else cores.VERMELHO
 
             thread_link = ""
             if event.get("thread_id") and event.get("channel_id"):
@@ -852,7 +936,6 @@ class ScheduledEventsCog(commands.Cog):
                 color=color
             )
 
-            assignments = await database.run_db(database.get_slot_assignments, event["id"])
             dm_count = 0
             for assignment in assignments:
                 try:

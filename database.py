@@ -673,9 +673,6 @@ def get_player_transactions(discord_id, limit=15):
                      ORDER BY created_at::timestamptz DESC LIMIT %s''', (discord_id, limit))
         return [{'amount': float(r[0]), 'type': r[1], 'description': r[2],
                   'created_by': r[3], 'created_at': r[4]} for r in c.fetchall()]
-    except Exception as e:
-        print(f'[get_player_transactions] {e}')
-        return []
     finally:
         release(conn)
 
@@ -870,9 +867,6 @@ def get_event(event_id):
         c = conn.cursor()
         c.execute('SELECT * FROM events WHERE id=%s', (event_id,))
         return _row_to_dict(c.fetchone(), EVENT_KEYS)
-    except Exception as e:
-        print(f'[get_event] {e!r}')
-        return None
     finally:
         release(conn)
 
@@ -882,9 +876,6 @@ def get_event_by_channel(channel_id):
         c = conn.cursor()
         c.execute('SELECT * FROM events WHERE channel_id=%s ORDER BY id DESC LIMIT 1', (channel_id,))
         return _row_to_dict(c.fetchone(), EVENT_KEYS)
-    except Exception as e:
-        print(f'[get_event_by_channel] {e!r}')
-        return None
     finally:
         release(conn)
 
@@ -894,9 +885,6 @@ def get_active_events(guild_id):
         c = conn.cursor()
         c.execute("SELECT * FROM events WHERE guild_id=%s AND status='active' ORDER BY id DESC", (guild_id,))
         return [_row_to_dict(r, EVENT_KEYS) for r in c.fetchall()]
-    except Exception as e:
-        print(f'[get_active_events] {e!r}')
-        return []
     finally:
         release(conn)
 
@@ -1037,9 +1025,6 @@ def get_event_participants(event_id):
         c = conn.cursor()
         c.execute('SELECT * FROM event_participants WHERE event_id=%s', (event_id,))
         return [_row_to_dict(r, PART_KEYS) for r in c.fetchall()]
-    except Exception as e:
-        print(f'[get_event_participants] {e!r}')
-        return []
     finally:
         release(conn)
 
@@ -1319,9 +1304,6 @@ def get_scheduled_event(event_id):
         c = conn.cursor()
         c.execute('SELECT * FROM scheduled_events WHERE id=%s', (event_id,))
         return _row_to_dict(c.fetchone(), SCHED_KEYS)
-    except Exception as e:
-        print(f'[get_scheduled_event] {e!r}')
-        return None
     finally:
         release(conn)
 
@@ -1331,9 +1313,6 @@ def get_active_scheduled_events():
         c = conn.cursor()
         c.execute("SELECT * FROM scheduled_events WHERE status NOT IN ('finished','cancelled','split_done','pending_delete','deleting') ORDER BY scheduled_time")
         return [_row_to_dict(r, SCHED_KEYS) for r in c.fetchall()]
-    except Exception as e:
-        print(f'[get_active_scheduled_events] {e!r}')
-        return []
     finally:
         release(conn)
 
@@ -1355,6 +1334,26 @@ def update_scheduled_event_notify(event_id, notify_30=None, notify_15=None):
         if notify_15 is not None:
             c.execute('UPDATE scheduled_events SET notify_15=%s WHERE id=%s', (notify_15, event_id))
         conn.commit()
+    finally:
+        release(conn)
+
+_AVISOS = {30: 'notify_30', 15: 'notify_15'}
+
+def reivindicar_aviso(event_id, minutos):
+    """Marca o aviso de 30/15 min como enviado ANTES de mandar as DMs. True só
+    pra quem marcou.
+
+    Marcava DEPOIS das DMs (uma por inscrito, ~250ms cada): um restart no meio
+    mandava tudo de novo, e dois processos no deploy mandavam em dobro (revisão
+    de 29/10, B-18)."""
+    coluna = _AVISOS[minutos]
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('UPDATE scheduled_events SET ' + coluna + '=1 '
+                  'WHERE id=%s AND COALESCE(' + coluna + ', 0)=0', (event_id,))
+        conn.commit()
+        return c.rowcount > 0
     finally:
         release(conn)
 
@@ -1460,9 +1459,6 @@ def get_extrato_do_dia(dias_atras=0):
         mov = [{'tipo': r[0], 'lancamentos': r[1], 'pessoas': r[2], 'total': r[3]}
                for r in c.fetchall()]
         return splits, mov
-    except Exception as e:
-        print(f'[get_extrato_do_dia] {e!r}')
-        return [], []
     finally:
         release(conn)
 
@@ -1479,9 +1475,6 @@ def get_pending_split(split_id):
         return {'id': r[0], 'event_id': r[1], 'total_loot': r[2], 'repair_cost': r[3],
                 'guild_tax_pct': r[4], 'vendor_tax_pct': r[5], 'per_player': r[6],
                 'num_players': r[7], 'participants_json': r[8], 'submitted_by': r[9], 'status': r[10]}
-    except Exception as e:
-        print(f'[get_pending_split] {e!r}')
-        return None
     finally:
         release(conn)
 
@@ -1729,9 +1722,6 @@ def get_member_departure(departure_id):
         r = c.fetchone()
         if not r: return None
         return {'id': r[0], 'discord_id': r[1], 'username': r[2], 'balance': r[3], 'status': r[4]}
-    except Exception as e:
-        print(f'[get_member_departure] {e!r}')
-        return None
     finally:
         release(conn)
 
@@ -1839,14 +1829,15 @@ def get_scheduled_event_by_thread_any_status(thread_id):
 SLOT_KEYS = ['id','scheduled_event_id','slot_number','discord_id','username','assigned_at']
 
 def get_slot_assignments(event_id):
+    """PROPAGA a exceção, como as outras leituras de evento (get_event,
+    get_active_events, get_event_participants, get_scheduled_event...). Antes
+    devolviam [] ou None em erro, e o painel era redesenhado com todos os slots
+    "Vazio" (revisão de 29/10, B-16). Quem chama trata."""
     conn = get_connection()
     try:
         c = conn.cursor()
         c.execute('SELECT * FROM slot_assignments WHERE scheduled_event_id=%s ORDER BY slot_number', (event_id,))
         return [_row_to_dict(r, SLOT_KEYS) for r in c.fetchall()]
-    except Exception as e:
-        print(f'[get_slot_assignments] {e!r}')
-        return []
     finally:
         release(conn)
 
@@ -1920,9 +1911,6 @@ def get_slot_owner(event_id, slot_number):
                   'WHERE scheduled_event_id=%s AND slot_number=%s', (event_id, slot_number))
         row = c.fetchone()
         return row[0] if row else None
-    except Exception as e:
-        print(f'[get_slot_owner] {e!r}')
-        return None
     finally:
         release(conn)
 
@@ -1933,9 +1921,6 @@ def get_player_slot(event_id, discord_id):
         c.execute('SELECT slot_number FROM slot_assignments WHERE scheduled_event_id=%s AND discord_id=%s', (event_id, discord_id))
         row = c.fetchone()
         return row[0] if row else None
-    except Exception as e:
-        print(f'[get_player_slot] {e!r}')
-        return None
     finally:
         release(conn)
 

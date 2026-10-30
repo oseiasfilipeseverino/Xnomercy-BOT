@@ -1749,6 +1749,42 @@ def get_pending_member_departures():
     finally:
         release(conn)
 
+def confiscar_saida(departure_id, por):
+    """Confisca o saldo de quem saiu, tudo numa transação. Devolve quanto saiu,
+    ou None se o aviso já tinha sido processado.
+
+    Eram dois passos com commit cada (marcar 'confiscated', depois zerar): se o
+    segundo falhasse, o aviso ficava "Já processado" e a prata não saía. E
+    zerava o saldo de AGORA: quem saiu, voltou e ganhou prata noutro evento
+    perdia tudo num clique no aviso antigo. Agora tira no máximo o saldo do
+    aviso (revisão de 29/10, B-09)."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE member_departures SET status='confiscated' WHERE id=%s AND status='pending' "
+                  "RETURNING discord_id, balance", (departure_id,))
+        row = c.fetchone()
+        if not row:
+            conn.rollback()
+            return None
+        discord_id, do_aviso = row[0], float(row[1] or 0)
+        c.execute('UPDATE players p SET balance = p.balance - LEAST(GREATEST(p.balance, 0), %s) '
+                  'FROM players old WHERE p.discord_id=%s AND old.discord_id=p.discord_id '
+                  'RETURNING old.balance - p.balance', (do_aviso, discord_id))
+        tirado = c.fetchone()
+        valor = float(tirado[0]) if tirado else 0.0
+        if valor > 0:
+            _inserir_extrato(c, discord_id, -valor,
+                             ('confiscation', 'Saldo confiscado — membro saiu do servidor', por))
+        conn.commit()
+        return valor
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        release(conn)
+
+
 def resolve_member_departure(departure_id, status):
     """UPDATE condicional (WHERE status='pending') — atômico, evita dois cliques
     quase simultâneos (dois admins) confiscando ou confiscar+cancelar em dobro."""

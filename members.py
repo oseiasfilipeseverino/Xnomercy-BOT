@@ -58,21 +58,30 @@ class ConfiscarView(LoggedView):
             await interaction.followup.send('❌ Já processado.', ephemeral=True)
             return
 
-        # Atômico primeiro — evita dois Líderes clicando quase juntos confiscarem em dobro.
-        if not await database.run_db(database.resolve_member_departure, self.departure_id, 'confiscated'):
-            await interaction.followup.send('❌ Já processado por outra pessoa.', ephemeral=True)
+        # Voltou pro servidor depois do aviso: confiscar agora levaria prata de
+        # um membro ativo. A liderança decide (Cancelar) em vez de um clique
+        # num aviso antigo resolver sozinho (B-09).
+        if interaction.guild and interaction.guild.get_member(int(dep['discord_id'])):
+            await interaction.followup.send(
+                f'⚠️ **{dep["username"]}** voltou ao servidor. Nada foi confiscado — '
+                'se for o caso, use **Cancelar** neste aviso.', ephemeral=True)
             return
 
-        # Zera e devolve o saldo antigo na mesma query (ver database.zero_player_balance):
-        # ler e só depois zerar podia registrar a transação com um valor diferente do
-        # que realmente saiu, se algo creditasse esse player nesse meio-tempo.
-        # extrato= na mesma transacao. Este era o pior dos casos: se o
-        # add_transaction falhasse depois do zero_player_balance, a prata sumia do
-        # saldo e o extrato nao dizia pra onde foi — confisco sem registro nenhum.
-        balance = await database.run_db(database.zero_player_balance,
-            dep['discord_id'], dep['username'],
-            ('confiscation', 'Saldo confiscado — membro saiu do servidor',
-             interaction.user.display_name))
+        # Uma transação só: marca o aviso, tira no máximo o saldo do aviso e
+        # grava o extrato (ver database.confiscar_saida). Antes eram dois passos
+        # com commit cada, e uma falha no segundo deixava "Já processado" sem a
+        # prata sair. Também evita dois Líderes confiscando em dobro.
+        try:
+            balance = await database.run_db(database.confiscar_saida, self.departure_id,
+                                            interaction.user.display_name)
+        except Exception as e:
+            print(f'[members] confisco {self.departure_id} falhou: {e!r}')
+            await interaction.followup.send(
+                '❌ Falha no banco: nada foi confiscado. Pode clicar de novo.', ephemeral=True)
+            return
+        if balance is None:
+            await interaction.followup.send('❌ Já processado por outra pessoa.', ephemeral=True)
+            return
 
         try:
             embed = interaction.message.embeds[0]

@@ -1,0 +1,3 @@
+-r requirements.txt
+pgserver==0.1.4
+tzdata==2026.6

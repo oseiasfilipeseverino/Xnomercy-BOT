@@ -122,7 +122,8 @@ else:
            f'restaurou todas as linhas ({sum(feitas.values())})')
     diferentes = {}
     for t, v in doc['tabelas'].items():
-        cols = ', '.join(v['colunas'])
+        # O status de evento que esperava o bot muda de propósito ao restaurar (_desarmar).
+        cols = ', '.join(col for col in v['colunas'] if (t, col) != ('scheduled_events', 'status'))
         c.execute(f'SELECT count(*) FROM (SELECT {cols} FROM pg_temp.{t} EXCEPT SELECT {cols} FROM public.{t}) x')
         n = c.fetchone()[0]
         if n:
@@ -133,6 +134,8 @@ else:
     c.execute('SELECT password_hash FROM pg_temp.app_users')
     hs = {r[0] for r in c.fetchall()}
     checar(hs <= {R.SENHA_BLOQUEADA}, 'login de usuario/senha volta BLOQUEADO')
+    # Sem commit: garante a recusa mesmo com o banco de teste sem jogadores, e o rollback tira.
+    c.execute("INSERT INTO pg_temp.players (discord_id, username, balance, total_earned) VALUES ('dup', 'x', 0, 0)")
     try:
         R.restaurar(conn, doc)
         checar(False, 'restaurar por cima de dados recusa')

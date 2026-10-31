@@ -61,6 +61,12 @@ config = {}
 
 
 async def run_db(fn, *a, **kw):
+    if fn.__name__ == '_tirar_broadcast':
+        if not config.get('broadcast_pending'):
+            return None
+        cargos = EN._cargos_do_broadcast(config.get('broadcast_cargos'))
+        config.pop('broadcast_cargos', None)
+        return config.pop('broadcast_pending'), cargos
     if fn.__name__ == '_ler_site_config':
         return config.get(a[0], '')
     if fn.__name__ == '_limpar_site_config':

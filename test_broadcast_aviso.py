@@ -48,6 +48,9 @@ pendente = {'broadcast_pending': 'Oi guild'}
 
 
 async def run_db(fn, *a, **kw):
+    if fn.__name__ == '_tirar_broadcast':
+        msg = pendente.pop('broadcast_pending', None)
+        return (msg, []) if msg else None
     if fn.__name__ == '_ler_site_config':
         return pendente.get(a[0], '')
     if fn.__name__ == '_limpar_site_config':

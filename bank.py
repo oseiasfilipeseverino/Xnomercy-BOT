@@ -828,6 +828,11 @@ class BankCog(commands.Cog):
             await interaction.response.send_message('⚠️ Informe ao menos uma taxa.', ephemeral=True)
             return
 
+        # Mesmo limite da tela /gestao/taxas: a taxa é uma só, gravada no mesmo lugar.
+        if any(t is not None and not 0 <= t <= 100 for t in (guild_tax, vendor_tax)):
+            await interaction.response.send_message('❌ A taxa precisa estar entre 0 e 100.', ephemeral=True)
+            return
+
         # defer PÚBLICO de propósito — a confirmação lá embaixo é pública, e o
         # defer tem que combinar com ela. Com defer(ephemeral=True) a resposta
         # sairia privada e a guild deixaria de ver a mudança de taxa.

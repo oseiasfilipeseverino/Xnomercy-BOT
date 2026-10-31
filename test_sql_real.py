@@ -113,6 +113,22 @@ checar(D.reivindicar_aviso(ev2, 30) is True, 'primeiro reivindica')
 checar(D.reivindicar_aviso(ev2, 30) is False, 'segundo não')
 checar(D.reivindicar_aviso(ev2, 15) is True, 'o de 15 min é outro aviso')
 
+print('\n-- fila do broadcast')
+import energy_notifications as EN
+sql("DELETE FROM site_config WHERE key IN ('broadcast_pending','broadcast_cargos')")
+checar(EN._tirar_broadcast() is None, 'fila vazia: nada')
+sql("INSERT INTO site_config VALUES ('broadcast_pending','Oi'),('broadcast_cargos','[\"Forasteiro\"]')")
+checar(EN._tirar_broadcast() == ('Oi', ['Forasteiro']), 'mensagem e cargos saem juntos')
+checar(EN._tirar_broadcast() is None, 'e a fila fica vazia: não envia duas vezes')
+sql("UPDATE site_config SET value='Oi' WHERE key='broadcast_pending'")
+sql("UPDATE site_config SET value='[quebrado' WHERE key='broadcast_cargos'")
+try:
+    EN._tirar_broadcast()
+    checar(False, 'cargos estragados levantam')
+except ValueError:
+    checar(sql("SELECT value FROM site_config WHERE key='broadcast_pending'")[0][0] == 'Oi', 'cargos estragados: a mensagem fica parada, não vai para todos')
+sql("UPDATE site_config SET value='' WHERE key IN ('broadcast_pending','broadcast_cargos')")
+
 print()
 if falhas:
     print(f'{len(falhas)} FALHA(S)')

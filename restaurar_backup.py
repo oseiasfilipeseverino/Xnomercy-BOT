@@ -8,14 +8,17 @@ Uso (com DATABASE_URL do banco de DESTINO no ambiente):
       banco tem agora. Bom pra saber o que se perderia/ganharia.
 
   python restaurar_backup.py ARQUIVO.json.gz --restaurar
-      GRAVA. Pra um banco NOVO: suba o bot (ou o site) uma vez apontando pra ele,
-      pra criar as tabelas, e rode isto. Recusa se players ou transactions já
-      tiverem linhas — restaurar por cima de dados vivos duplicaria tudo.
+      GRAVA. Pra um banco NOVO: suba o bot E o site uma vez apontando pra ele, cada
+      um cria as suas tabelas, PARE os dois e rode isto. Tudo numa transação: confere
+      antes e depois e, se algo não bater, nada fica gravado. As configurações iniciais
+      que o bot e o site criam são trocadas pelas da cópia. Recusa se houver dados de
+      verdade no destino: restaurar por cima duplicaria tudo.
 
 O que NÃO volta: senha dos logins de usuário/senha do site (o hash não vai pro
 Discord). Esses logins voltam bloqueados — crie a senha de novo em /gestao/usuarios.
 Preços, catálogo e receitas também não estão na cópia: o bot e o site baixam
-de novo sozinhos.
+de novo sozinhos. Mensagem em massa na fila e evento esperando ação do bot são
+desarmados: uma cópia antiga não pode reenviar DM nem pingar a guild ao religar o bot.
 """
 import gzip
 import json
@@ -23,6 +26,9 @@ import sys
 
 SENHA_BLOQUEADA = '!'   # não é hash válido de nenhuma senha: login fica travado
 LOTE = 200
+# O bot e o site preenchem estas ao subir: é esperado terem linhas num banco novo. A
+# cópia substitui. Sem isto a restauração batia na chave repetida e não gravava nada.
+SEMENTES = ('guild_config', 'permissions', 'ticket_messages', 'welcome_config', 'site_config', 'site_sections')
 
 
 def carregar(caminho):
@@ -55,26 +61,72 @@ def conferir(conn, doc):
     return linhas
 
 
+def _contar(c, tabela):
+    c.execute('SELECT count(*) FROM ' + tabela)
+    return c.fetchone()[0]
+
+
+def _conferir_gravado(c, doc):
+    """Linhas por tabela e soma dos saldos. Diferença desfaz tudo."""
+    for t, dados in doc['tabelas'].items():
+        n = _contar(c, t)
+        if n != len(dados['linhas']):
+            raise RuntimeError(t + ': ' + str(n) + ' linha(s) no banco, '
+                               + str(len(dados['linhas'])) + ' na cópia.')
+    jog = doc['tabelas'].get('players')
+    if jog:
+        i = jog['colunas'].index('balance')
+        na_copia = sum(float(l[i] or 0) for l in jog['linhas'])
+        c.execute('SELECT COALESCE(SUM(balance), 0) FROM players')
+        no_banco = float(c.fetchone()[0])
+        if abs(no_banco - na_copia) > 0.01:
+            raise RuntimeError('saldo total diferente: banco ' + str(no_banco) + ', cópia ' + str(na_copia))
+        print('  saldo total conferido: ' + format(no_banco, ',.0f') + ' prata')
+
+
+def _desarmar(c, doc):
+    """O que a cópia guardou "na fila" não pode disparar quando o bot voltar."""
+    if 'site_config' in doc['tabelas']:
+        c.execute("UPDATE site_config SET value='' WHERE key IN "
+                  "('broadcast_pending', 'broadcast_cargos', 'energy_pending_msg')")
+    if 'scheduled_events' in doc['tabelas']:
+        c.execute("UPDATE scheduled_events SET status='finished' "
+                  "WHERE status IN ('pending_post', 'posting', 'pending_reopen', 'reopening', "
+                  "'pending_delete', 'deleting') RETURNING id, title")
+        for ev, titulo in c.fetchall():
+            print('  evento ' + str(ev) + ' ("' + str(titulo) + '") esperava o bot: marcado como finalizado, confira')
+
+
 def restaurar(conn, doc, forcar=False):
     """Insere tudo numa transação só: ou volta inteiro, ou nada muda."""
     c = conn.cursor()
     try:
+        # Antes de gravar: tabela ou coluna faltando era pulada e o fim dizia "Pronto",
+        # sem players e sem saldos, se só um dos dois tivesse criado as tabelas.
+        faltam = []
+        for t, dados in doc['tabelas'].items():
+            tipos = _tipos(c, t)
+            if not tipos:
+                faltam.append(t)
+            else:
+                faltam += [t + '.' + col for col in dados['colunas'] if col not in tipos]
+        if faltam:
+            raise RuntimeError('faltam no destino: ' + ', '.join(faltam)
+                               + '. Suba o bot E o site uma vez neste banco antes. Nada foi gravado.')
         if not forcar:
-            for t in ('players', 'transactions'):
-                if _tipos(c, t):
-                    c.execute(f'SELECT count(*) FROM {t}')
-                    n = c.fetchone()[0]
+            for t in doc['tabelas']:
+                if t not in SEMENTES:
+                    n = _contar(c, t)
                     if n:
-                        raise RuntimeError(f'{t} já tem {n} linha(s): restaurar por cima '
+                        raise RuntimeError(t + ' já tem ' + str(n) + ' linha(s): restaurar por cima '
                                            'duplicaria. Use um banco novo.')
         feitas = {}
         for t, dados in doc['tabelas'].items():
             tipos = _tipos(c, t)
-            if not tipos:
-                print(f'  (pulei {t}: a tabela não existe no destino)')
-                continue
-            colunas = [col for col in dados['colunas'] if col in tipos]
-            idx = [dados['colunas'].index(col) for col in colunas]
+            if t in SEMENTES:
+                c.execute('DELETE FROM ' + t)
+            colunas = list(dados['colunas'])
+            idx = list(range(len(colunas)))
             extra = []
             if t == 'app_users' and 'password_hash' in tipos and 'password_hash' not in colunas:
                 extra = ['password_hash']
@@ -96,6 +148,8 @@ def restaurar(conn, doc, forcar=False):
                 if seq:
                     c.execute(f'SELECT setval(%s, (SELECT MAX(id) FROM {t}))', (seq,))
             feitas[t] = len(valores)
+        _conferir_gravado(c, doc)
+        _desarmar(c, doc)
         conn.commit()
         return feitas
     except Exception:

@@ -56,6 +56,31 @@ def _limpar_site_config(chave):
         conn.commit()
 
 
+def _tirar_broadcast():
+    """(mensagem, cargos) da fila, já limpos, numa transação só. None se não há mensagem.
+
+    Eram idas separadas ao banco: um envio que chegasse entre as duas limpezas perdia os
+    cargos e a mensagem saía para TODOS (revisão de 30/10, M-1). O FOR UPDATE faz o
+    add_broadcast do site esperar. Cargos ilegíveis levantam com a mensagem na fila."""
+    with _db() as conn:
+        c = conn.cursor()
+        try:
+            c.execute("SELECT key, value FROM site_config WHERE key IN "
+                      "('broadcast_pending', 'broadcast_cargos') FOR UPDATE")
+            lido = dict(c.fetchall())
+            msg = lido.get('broadcast_pending')
+            if not msg:
+                conn.rollback()
+                return None
+            cargos = _cargos_do_broadcast(lido.get('broadcast_cargos'))
+            c.execute("UPDATE site_config SET value='' WHERE key IN ('broadcast_pending', 'broadcast_cargos')")
+            conn.commit()
+            return msg, cargos
+        except Exception:
+            conn.rollback()
+            raise
+
+
 def _gravar_site_config(chave, valor):
     with _db() as conn:
         c = conn.cursor()
@@ -380,20 +405,16 @@ class EnergyNotifications(commands.Cog):
             return
         try:
             await self._publicar_cargos()
-            msg = await database.run_db(_ler_site_config, 'broadcast_pending')
+            # Sai da fila ANTES de enviar: broadcast é pra TODOS, e mandar
+            # duas vezes (se o ciclo seguinte pegasse a mesma) é pior que falhar.
+            pendente = await database.run_db(_tirar_broadcast)
             self._record_success('check_broadcast')
 
-            if not msg:
+            if not pendente:
                 return
 
+            msg, cargos = pendente
             print(f'[broadcast] Mensagem pendente encontrada: {msg[:50]}...')
-            # O site grava os cargos junto, na mesma transação (db.add_broadcast).
-            cargos = _cargos_do_broadcast(await database.run_db(_ler_site_config, 'broadcast_cargos'))
-
-            # Limpar pendente ANTES de enviar: broadcast é pra TODOS, e mandar
-            # duas vezes (se o ciclo seguinte pegasse a mesma) é pior que falhar.
-            await database.run_db(_limpar_site_config, 'broadcast_pending')
-            await database.run_db(_limpar_site_config, 'broadcast_cargos')
 
             guild = self._get_guild()
             if not guild:

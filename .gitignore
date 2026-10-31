@@ -30,3 +30,5 @@ diag_*.txt
 # quem rodou). Nao e' codigo e o `railway up` sobe o que nao esta ignorado.
 receipts/
 review-receipts/
+
+.venv-testes/

@@ -363,6 +363,17 @@ def _build_event_embed(event_id, title, creator, participants):
     return embed
 
 
+def calcular_liquido(valor_total, reparo, guild_tax, vendor_tax):
+    """(taxa da guild, taxa do vendedor, líquido). O reparo sai ANTES e as taxas incidem
+    sobre o que sobra, igual ao split do site (decisão da liderança em 31/10/2026). Antes
+    o bot cobrava sobre o loot bruto: 10 mi, reparo 2 mi, taxas 10% e 5% davam 6,5 mi aqui
+    e 6,8 mi no site."""
+    base = valor_total - reparo
+    guild_cut = base * (guild_tax / 100)
+    vendor_cut = base * (vendor_tax / 100)
+    return guild_cut, vendor_cut, base - guild_cut - vendor_cut
+
+
 async def _update_event_embed(guild, event_id):
     # Só redesenha a lista; quem chama já gravou o que importava. As leituras
     # agora levantam em falha de banco (antes viravam lista vazia e o painel
@@ -825,9 +836,7 @@ class EventsCog(commands.Cog):
             await interaction.followup.send(ERRO_TAXAS, ephemeral=True)
             return
         guild_tax, vendor_tax = taxas
-        guild_cut  = valor_total * (guild_tax / 100)
-        vendor_cut = valor_total * (vendor_tax / 100)
-        net        = valor_total - guild_cut - vendor_cut - reparo
+        guild_cut, vendor_cut, net = calcular_liquido(valor_total, reparo, guild_tax, vendor_tax)
 
         if net <= 0:
             await interaction.followup.send('❌ Valor líquido negativo!', ephemeral=True)
@@ -910,9 +919,7 @@ class EventsCog(commands.Cog):
             await interaction.followup.send(ERRO_TAXAS, ephemeral=True)
             return
         guild_tax, vendor_tax = taxas
-        guild_cut  = valor_total * (guild_tax / 100)
-        vendor_cut = valor_total * (vendor_tax / 100)
-        net        = valor_total - guild_cut - vendor_cut - reparo
+        guild_cut, vendor_cut, net = calcular_liquido(valor_total, reparo, guild_tax, vendor_tax)
 
         if net <= 0:
             await interaction.followup.send('❌ Valor líquido negativo!', ephemeral=True)

@@ -33,8 +33,6 @@ import energy_notifications as en
 
 
 class Membro:
-    roles = []
-
     def __init__(self, nome):
         self.nick = f'[NM] {nome}'
         self.display_name = self.nick

@@ -136,34 +136,6 @@ def _colunas_existentes(c) -> set:
     return {(t, col) for t, col in c.fetchall()}
 
 
-# Período em que cada player foi Staff. Saque feito nele não conta nunca, nem se perder
-# o cargo depois; depósito conta sempre. Vale a data do registro, e não a hora em que
-# a planilha entrou: reenviar planilha antiga não traz o saque de volta. Quem abre e
-# fecha os períodos é o bot, o único que enxerga os cargos (decisão de 30/10/2026).
-_SQL_ISENCAO = """CREATE TABLE IF NOT EXISTS energia_isencao (
-    id SERIAL PRIMARY KEY, player TEXT NOT NULL,
-    desde TIMESTAMP NOT NULL DEFAULT NOW(), ate TIMESTAMP)"""
-_SQL_ISENCAO_IDX = ("CREATE UNIQUE INDEX IF NOT EXISTS energia_isencao_aberta "
-                    "ON energia_isencao (LOWER(player)) WHERE ate IS NULL")
-_SQL_VIEW_ENERGIA = """CREATE VIEW energia_valida AS
-    SELECT e.* FROM energy_records e
-    WHERE NOT (e.amount < 0 AND EXISTS (
-        SELECT 1 FROM energia_isencao i
-        WHERE LOWER(i.player) = LOWER(e.player) AND e.recorded_at >= i.desde
-          AND (i.ate IS NULL OR e.recorded_at < i.ate)))"""
-
-
-def garantir_isencao_energia(c):
-    """Tabela e visão da isenção. A visão só nasce com energy_records existindo (tabela
-    do site, e o bot pode subir antes num banco novo) e só se ainda faltar: DDL tranca."""
-    c.execute(_SQL_ISENCAO)
-    c.execute(_SQL_ISENCAO_IDX)
-    c.execute("SELECT to_regclass('energy_records') IS NOT NULL, to_regclass('energia_valida') IS NOT NULL")
-    tem = c.fetchone()
-    if tem and tem[0] is True and tem[1] is False:
-        c.execute(_SQL_VIEW_ENERGIA)
-
-
 def init_db():
     conn = get_connection()
     try:
@@ -313,8 +285,6 @@ def init_db():
             discord_id TEXT PRIMARY KEY, albion_nick TEXT DEFAULT '',
             strikes INTEGER NOT NULL DEFAULT 0,
             updated_at TIMESTAMP NOT NULL DEFAULT NOW())''')
-
-        garantir_isencao_energia(c)
 
         for key, value in [
             ('guild_tax','10'),('vendor_tax','5'),('repair_tax','3'),('setup_done','0'),

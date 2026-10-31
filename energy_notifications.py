@@ -116,47 +116,6 @@ def _destinatarios(membros, cargos):
 
 EXCLUDE = ['gayzaoviadao']
 
-# Quem tem este cargo não paga energia (decisão da liderança, 30/10/2026): não recebe
-# cobrança, não aparece como devedor e o saque feito no período não conta nunca
-# (ver energia_valida em database.py). Depósito conta.
-CARGO_ISENTO_ENERGIA = 'staff'
-
-
-def isento_de_energia(membro):
-    return any(r.name.strip().lower() == CARGO_ISENTO_ENERGIA for r in membro.roles)
-
-
-def _sincronizar_isencoes(isentos):
-    """Abre o período de quem virou Staff e fecha o de quem deixou de ser.
-
-    Player que ainda não tinha registro antes da isenção começar vale desde o primeiro
-    registro: o saque dele só entra no banco depois do saque, e o período abriria tarde."""
-    alvo = {p.lower() for p in isentos}
-    with _db() as conn:
-        c = conn.cursor()
-        c.execute('SELECT player FROM energia_isencao WHERE ate IS NULL')
-        for (p,) in c.fetchall():
-            if p.lower() not in alvo:
-                c.execute('UPDATE energia_isencao SET ate=NOW() WHERE LOWER(player)=LOWER(%s) AND ate IS NULL', (p,))
-                print(f'[energia] {p} deixou de ser isento')
-        for p in isentos:
-            c.execute("""INSERT INTO energia_isencao (player, desde)
-                         SELECT %s, CASE
-                           WHEN NOT EXISTS (SELECT 1 FROM energia_isencao WHERE LOWER(player)=LOWER(%s))
-                            AND (SELECT MIN(recorded_at) FROM energy_records WHERE LOWER(player)=LOWER(%s))
-                                >= (SELECT MIN(desde) FROM energia_isencao)
-                           THEN (SELECT MIN(recorded_at) FROM energy_records WHERE LOWER(player)=LOWER(%s))
-                           ELSE NOW() END
-                         ON CONFLICT (LOWER(player)) WHERE ate IS NULL DO NOTHING""", (p, p, p, p))
-        conn.commit()
-
-
-def _players_de_energia():
-    with _db() as conn:
-        c = conn.cursor()
-        c.execute('SELECT DISTINCT player FROM energy_records')
-        return [r[0] for r in c.fetchall()]
-
 class EnergyNotifications(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -193,24 +152,6 @@ class EnergyNotifications(commands.Cog):
             novo = json.dumps(_lista_de_cargos(guild), ensure_ascii=False)
             if novo != await database.run_db(_ler_site_config, 'discord_cargos'):
                 await database.run_db(_gravar_site_config, 'discord_cargos', novo)
-            # Quem é isento, pelos nomes do registro de energia: é o site e o relatório
-            # que precisam, e eles não enxergam os cargos do Discord.
-            jogadores = await database.run_db(_players_de_energia)
-            isentos = []
-            for p in jogadores:
-                m = self._find_member(guild, p)
-                if m and isento_de_energia(m):
-                    isentos.append(p)
-            novo = json.dumps(sorted(isentos), ensure_ascii=False)
-            if novo != await database.run_db(_ler_site_config, 'energia_isentos'):
-                await database.run_db(_gravar_site_config, 'energia_isentos', novo)
-            # Sem ninguém com o cargo, ou com a lista de membros incompleta logo depois
-            # de conectar, é mais provável ser falha de leitura: fechar os períodos
-            # passaria a contar o saque de todo o Staff.
-            if getattr(guild, 'chunked', True) and any(isento_de_energia(m) for m in guild.members):
-                await database.run_db(_sincronizar_isencoes, isentos)
-            else:
-                print('[energia] cargos indisponíveis: períodos de isenção não mexidos')
         except Exception as e:
             print(f'[broadcast] nao publiquei os cargos: {e!r}')
 
@@ -305,7 +246,7 @@ class EnergyNotifications(commands.Cog):
                 placeholders = ','.join(['%s'] * len(exclude_lower))
                 c.execute(f'''
                     SELECT player, SUM(amount) as balance
-                    FROM energia_valida
+                    FROM energy_records
                     WHERE LOWER(player) NOT IN ({placeholders})
                     GROUP BY player
                     HAVING SUM(amount) < 0
@@ -314,7 +255,7 @@ class EnergyNotifications(commands.Cog):
             else:
                 c.execute('''
                     SELECT player, SUM(amount) as balance
-                    FROM energia_valida
+                    FROM energy_records
                     GROUP BY player
                     HAVING SUM(amount) < 0
                     ORDER BY SUM(amount) ASC
@@ -347,7 +288,7 @@ class EnergyNotifications(commands.Cog):
             if not member:
                 print(f'[energy] Membro não encontrado: {d["player"]}')
                 continue
-            if member.bot or isento_de_energia(member):
+            if member.bot:
                 continue
 
             msg = message_template.replace('{player}', d['player']).replace('{divida}', str(d['debt']))

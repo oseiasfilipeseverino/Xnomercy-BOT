@@ -27,7 +27,7 @@ AQUI = pathlib.Path(__file__).parent
 LOCAIS = {'127.0.0.1', 'localhost', '::1', 'postgres'}   # 'postgres': serviço do CI
 # Os feitos para banco real. Os outros usam contas e dados de mentira e estranham
 # um banco de verdade: eles rodam na rodar_testes.sh, sem banco.
-COM_BANCO = ['test_energia_isento_real.py', 'test_banco_novo.py', 'test_sql_real.py', 'test_prices_hot.py', 'test_backup.py', 'test_eventos_boot.py', 'test_extrato_fuso.py']
+COM_BANCO = ['test_banco_novo.py', 'test_sql_real.py', 'test_prices_hot.py', 'test_backup.py', 'test_eventos_boot.py', 'test_extrato_fuso.py']
 # Tabelas do bot, e as duas do site que o backup do bot também lê.
 INICIO = """
 import database, price_updater
@@ -36,9 +36,7 @@ price_updater._init_table()
 c = database.get_connection()
 k = c.cursor()
 k.execute("CREATE TABLE IF NOT EXISTS energy_records (id SERIAL PRIMARY KEY, recorded_at TIMESTAMP NOT NULL, player TEXT NOT NULL, reason TEXT DEFAULT '', amount INTEGER DEFAULT 0)")
-k.execute("CREATE TABLE IF NOT EXISTS site_config (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')")
 k.execute("CREATE TABLE IF NOT EXISTS app_users (id SERIAL PRIMARY KEY, username TEXT, password_hash TEXT, is_admin INTEGER DEFAULT 0, access_tracker INTEGER DEFAULT 1, access_craft INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT NOW())")
-database.garantir_isencao_energia(k)
 c.commit()
 """
 

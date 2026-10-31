@@ -38,7 +38,7 @@ TABELAS = [
     'players', 'transactions', 'member_departures',
     'scheduled_events', 'slot_assignments', 'pending_splits',
     'events', 'event_participants', 'event_templates',
-    'energy_records', 'tickets', 'ticket_messages',
+    'energy_records', 'energia_isencao', 'tickets', 'ticket_messages',
     'builds', 'price_alerts', 'purge_strikes', 'albion_guild_members',
     'guild_config', 'site_config', 'site_sections', 'welcome_config',
     'permissions', 'app_users',

@@ -38,6 +38,7 @@ k = c.cursor()
 k.execute("CREATE TABLE IF NOT EXISTS energy_records (id SERIAL PRIMARY KEY, recorded_at TIMESTAMP NOT NULL, player TEXT NOT NULL, reason TEXT DEFAULT '', amount INTEGER DEFAULT 0)")
 k.execute("CREATE TABLE IF NOT EXISTS site_config (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')")
 k.execute("CREATE TABLE IF NOT EXISTS app_users (id SERIAL PRIMARY KEY, username TEXT, password_hash TEXT, is_admin INTEGER DEFAULT 0, access_tracker INTEGER DEFAULT 1, access_craft INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT NOW())")
+database.garantir_isencao_energia(k)
 c.commit()
 """
 

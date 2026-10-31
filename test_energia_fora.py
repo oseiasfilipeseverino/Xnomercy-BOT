@@ -36,14 +36,14 @@ class Cursor:
         self._r = []
 
     def execute(self, sql, params=None):
-        if 'site_config' in sql and 'energy_records' not in sql:
+        if 'site_config' in sql and 'energia_valida' not in sql:
             if self.conn.lista == 'quebra':
                 self.conn.abortada = True
                 raise RuntimeError('simulada')
             self._r = [(self.conn.lista,)] if self.conn.lista else []
         elif self.conn.abortada:
             raise RuntimeError('current transaction is aborted')
-        elif 'energy_records' in sql:
+        elif 'energia_valida' in sql:
             excl = {p.lower() for p in (params or [])}
             self._r = [d for d in DEVEDORES if d[0].lower() not in excl and d[0].lower() != 'gayzaoviadao']
         else:

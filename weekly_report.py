@@ -61,7 +61,7 @@ class WeeklyReportCog(commands.Cog):
             ('top_participants', f'SELECT username, COUNT(DISTINCT scheduled_event_id) AS events '
                                  f'FROM slot_assignments WHERE {d("assigned_at")} > {semana} '
                                  f'GROUP BY username ORDER BY events DESC LIMIT 5'),
-            ('top_debtors', "SELECT player, SUM(amount) AS balance FROM energy_records "
+            ('top_debtors', "SELECT player, SUM(amount) AS balance FROM energia_valida "
                             "WHERE LOWER(player) != 'gayzaoviadao' "
                             "AND LOWER(player) NOT IN (SELECT LOWER(x) FROM site_config, jsonb_array_elements_text("
                             "CASE WHEN key='energia_isentos' AND value LIKE '[%%' THEN value::jsonb ELSE '[]'::jsonb END) x) "

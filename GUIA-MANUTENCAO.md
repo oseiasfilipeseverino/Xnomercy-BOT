@@ -51,7 +51,7 @@ Para rodar:
 .venv-testes/Scripts/python testes_banco.py
 ```
 
-A última linha deve dizer "N de N passaram". O `pgserver` só instala em Python até a 3.12.
+A última linha deve dizer "N de N passaram". Testado com Python 3.12.
 
 ## Restaurar o backup
 

@@ -704,7 +704,10 @@ class ScheduledEventsCog(commands.Cog):
             except ValueError:
                 return
 
-        print("[slots] Thread " + str(message.channel.id) + " num=" + str(num))
+        # Com o autor: em 02/11 o "-12" do evento 874 tirou o Criminouso e o log
+        # nao dizia quem tinha digitado (a mensagem e' apagada depois).
+        print("[slots] Thread " + str(message.channel.id) + " num=" + str(num)
+              + " por " + message.author.display_name + " (" + str(message.author.id) + ")")
 
         # run_db: as consultas ao Postgres são síncronas. Chamadas direto aqui, elas
         # travam o bot inteiro enquanto esperam a rede — e ESTE é o caminho mais

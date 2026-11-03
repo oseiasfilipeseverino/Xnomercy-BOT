@@ -285,6 +285,13 @@ def init_db():
             discord_id TEXT PRIMARY KEY, albion_nick TEXT DEFAULT '',
             strikes INTEGER NOT NULL DEFAULT 0,
             updated_at TIMESTAMP NOT NULL DEFAULT NOW())''')
+        # Registro que não pôde ser conferido porque a API do Albion estava fora.
+        # Uma linha por pessoa: pedir de novo só troca o nick. Fica no banco pra
+        # sobreviver a um reinício do bot até a API voltar.
+        c.execute('''CREATE TABLE IF NOT EXISTS registro_fila (
+            discord_id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, nick TEXT NOT NULL,
+            origem TEXT NOT NULL, pedido_por TEXT NOT NULL, channel_id TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW())''')
 
         for key, value in [
             ('guild_tax','10'),('vendor_tax','5'),('repair_tax','3'),('setup_done','0'),
@@ -1696,6 +1703,43 @@ def purge_strike_clear(discord_id):
         conn.commit()
     except Exception as e:
         print(f'[purge_strikes] erro ao limpar: {e}')
+    finally:
+        release(conn)
+
+
+# ── Fila de registro (API do Albion fora) ───────────────────────────────────────
+def registro_fila_add(discord_id, guild_id, nick, origem, pedido_por, channel_id):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('''INSERT INTO registro_fila
+                     (discord_id, guild_id, nick, origem, pedido_por, channel_id)
+                     VALUES (%s, %s, %s, %s, %s, %s)
+                     ON CONFLICT (discord_id) DO UPDATE SET
+                     guild_id=EXCLUDED.guild_id, nick=EXCLUDED.nick, origem=EXCLUDED.origem,
+                     pedido_por=EXCLUDED.pedido_por, channel_id=EXCLUDED.channel_id''',
+                  (discord_id, guild_id, nick, origem, pedido_por, channel_id))
+        conn.commit()
+    finally:
+        release(conn)
+
+def registro_fila_listar():
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('''SELECT discord_id, guild_id, nick, origem, pedido_por, channel_id
+                     FROM registro_fila ORDER BY created_at LIMIT 50''')
+        colunas = ('discord_id', 'guild_id', 'nick', 'origem', 'pedido_por', 'channel_id')
+        return [dict(zip(colunas, linha)) for linha in c.fetchall()]
+    finally:
+        release(conn)
+
+def registro_fila_tirar(discord_id):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('DELETE FROM registro_fila WHERE discord_id=%s', (discord_id,))
+        conn.commit()
     finally:
         release(conn)
 

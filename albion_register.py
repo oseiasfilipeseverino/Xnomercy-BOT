@@ -10,7 +10,7 @@ Nick salvo como: [NM] NickDoGame
 
 import cores
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 import requests
 import asyncio
@@ -295,6 +295,110 @@ class AlbionRegister(commands.Cog):
         self.bot = bot
         print('[albion_register] Cog carregado')
 
+    async def cog_load(self):
+        self.conferir_fila.start()
+
+    async def cog_unload(self):
+        self.conferir_fila.cancel()
+
+    # ── Fila: API do Albion fora ──────────────────────────────────────────────
+    async def _enfileirar(self, usuario, guild_id, nick, origem, pedido_por, channel_id):
+        """Guarda o pedido. Devolve False se nem isso deu (a pessoa precisa saber)."""
+        try:
+            await db.run_db(db.registro_fila_add, str(usuario.id), str(guild_id),
+                            nick, origem, str(pedido_por), str(channel_id))
+            return True
+        except Exception as e:
+            print(f'[albion_register] fila: nao gravei {nick}: {e!r}', flush=True)
+            return False
+
+    async def _avisar_fila(self, guild, item, texto):
+        canal = guild.get_channel(int(item['channel_id']))
+        if canal is None:
+            print(f'[albion_register] fila: canal sumiu, aviso perdido: {texto}', flush=True)
+            return
+        await canal.send(texto)
+
+    async def _resolver_item(self, guild, item, player):
+        """Conclui um pedido da fila com a resposta da API. Mesmas regras dos comandos."""
+        membro = guild.get_member(int(item['discord_id']))
+        if membro is None:
+            print(f'[albion_register] fila: {item["nick"]} saiu do servidor', flush=True)
+            return
+        autor = item['origem'] == 'auto'
+        marca = '<@' + item['discord_id'] + '>'
+
+        if not player:
+            await self._avisar_fila(guild, item, '❌ ' + marca + ': o registro na fila não foi '
+                                    'feito. **' + item['nick'] + '** não existe no servidor Americas.')
+            return
+
+        nome = player.get('Name', item['nick'])
+        ok_guild, gname = _in_guild(player)
+        if autor and not ok_guild:
+            await self._avisar_fila(guild, item, '❌ ' + marca + ': o registro na fila não foi feito. '
+                                    '**' + nome + '** não está na guild **XnoMercy** '
+                                    '(guild atual: **' + (gname or 'Nenhuma') + '**).')
+            return
+        if autor:
+            # Mesma trava do /albion_register (B-02): na fila ninguém olha na hora.
+            dono = _quem_ja_usa(guild, nome, membro)
+            if dono is not None:
+                await self._avisar_fila(guild, item, '⚠️ ' + marca + ': **' + nome + '** já está '
+                                        'registrado para outra conta. Chame alguém da staff.')
+                await _log(guild, discord.Embed(
+                    title='⚠️ /albion_register recusado (fila)',
+                    description=f'{membro.mention} tentou registrar **{nome}**, '
+                                f'que já é usado por {dono.mention}.',
+                    color=cores.AMBAR))
+                return
+
+        ok, err = await _apply_member(membro, guild, nome, 'Registro da fila: ' + nome)
+        if not ok:
+            await self._avisar_fila(guild, item, '❌ ' + marca + ': o registro na fila falhou: ' + err)
+            return
+
+        embed = discord.Embed(title='✅ Membro Registrado (fila)', color=cores.VERDE)
+        embed.add_field(name='Discord', value=membro.mention, inline=True)
+        embed.add_field(name='Nick Albion', value=nome, inline=True)
+        embed.add_field(name='Guild', value=gname or 'N/A', inline=True)
+        embed.add_field(name='Pedido por', value='<@' + item['pedido_por'] + '>', inline=False)
+        await _log(guild, embed)
+        aviso = '' if ok_guild else '\n> ⚠️ Guild: **' + (gname or 'Sem guild') + '** (não é XnoMercy)'
+        await self._avisar_fila(guild, item, '✅ ' + marca + ' registrado como **' + NICK_PREFIX
+                                + nome + '**! A API do Albion voltou e o pedido da fila foi feito.' + aviso)
+
+    async def _processar_fila(self):
+        itens = await db.run_db(db.registro_fila_listar)
+        for item in itens:
+            player = await asyncio.get_event_loop().run_in_executor(
+                None, _search_player, item['nick'])
+            if player is None:
+                return                     # API ainda fora: todos continuam na fila
+            guild = self.bot.get_guild(int(item['guild_id']))
+            if guild is None:
+                print(f'[albion_register] fila: servidor indisponivel ({item["nick"]})', flush=True)
+                continue
+            # Tira antes de aplicar: se o aviso falhar, um pedido repetido a cada
+            # ciclo seria pior que um aviso perdido, e o registro já foi resolvido.
+            await db.run_db(db.registro_fila_tirar, item['discord_id'])
+            try:
+                await self._resolver_item(guild, item, player)
+            except Exception as e:
+                print(f'[albion_register] fila: erro em {item["nick"]}: {e!r}', flush=True)
+
+    @tasks.loop(minutes=5)
+    async def conferir_fila(self):
+        # Exceção que escapa de um tasks.loop para o laço em silêncio.
+        try:
+            await self._processar_fila()
+        except Exception as e:
+            print(f'[albion_register] fila: ciclo falhou: {e!r}', flush=True)
+
+    @conferir_fila.before_loop
+    async def _esperar_bot(self):
+        await self.bot.wait_until_ready()
+
     # ── /albion_register ──────────────────────────────────────────────────────
     @app_commands.command(
         name='albion_register',
@@ -318,12 +422,18 @@ class AlbionRegister(commands.Cog):
         # None = a API não respondeu. Dizer "não encontrado" aqui seria afirmar
         # que o personagem não existe sem ninguém ter conseguido olhar.
         if player is None:
-            await interaction.followup.send(
-                '⚠️ A **API do Albion** não está respondendo agora, então não deu '
-                'pra confirmar seu personagem.\n'
-                '> Não é problema no seu nick. Tente de novo em alguns minutos.\n'
-                '> Se continuar por mais de meia hora, chame alguém da staff.',
-                ephemeral=True)
+            if await self._enfileirar(interaction.user, interaction.guild.id, nick, 'auto',
+                                      interaction.user.id, interaction.channel_id):
+                await interaction.followup.send(
+                    '⏳ A **API do Albion** não está respondendo agora. Seu pedido com o nick **'
+                    + nick + '** ficou na **fila**.\n'
+                    '> O bot tenta a cada 5 minutos e avisa neste canal quando concluir.',
+                    ephemeral=True)
+            else:
+                await interaction.followup.send(
+                    '⚠️ A **API do Albion** não está respondendo e não consegui guardar seu '
+                    'pedido na fila.\n> Tente de novo em alguns minutos.',
+                    ephemeral=True)
             return
 
         if not player:
@@ -422,11 +532,18 @@ class AlbionRegister(commands.Cog):
             None, _search_player, nick)
 
         if player is None:
-            await interaction.followup.send(
-                '⚠️ A **API do Albion** não está respondendo agora — não deu pra '
-                'confirmar **' + nick + '**.\n'
-                '> Não é o nick. Tente de novo em alguns minutos.',
-                ephemeral=True)
+            if await self._enfileirar(usuario, interaction.guild.id, nick, 'staff',
+                                      interaction.user.id, interaction.channel_id):
+                await interaction.followup.send(
+                    '⏳ A **API do Albion** não está respondendo agora. O registro de **'
+                    + usuario.display_name + '** como **' + nick + '** ficou na **fila**.\n'
+                    '> O bot tenta a cada 5 minutos e avisa neste canal quando concluir.',
+                    ephemeral=True)
+            else:
+                await interaction.followup.send(
+                    '⚠️ A **API do Albion** não está respondendo e não consegui guardar o '
+                    'pedido na fila.\n> Tente de novo em alguns minutos.',
+                    ephemeral=True)
             return
 
         if not player:

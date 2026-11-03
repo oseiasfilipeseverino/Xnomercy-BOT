@@ -420,6 +420,9 @@ class TicketPanel(LoggedView):
             self.add_item(TicketButton(t))
  
  
+PAINEIS_KEY = 'paineis_postados'   # "canal:mensagem canal:mensagem ..."
+
+
 class TicketsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -558,9 +561,47 @@ class TicketsCog(commands.Cog):
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
         embed.set_footer(text='XnoMercy Guild')
- 
-        await interaction.followup.send(embed=embed, view=view)
- 
+
+        msg = await interaction.followup.send(embed=embed, view=view, wait=True)
+        # Guarda onde o painel ficou: o link do icone na miniatura morre quando o
+        # icone do servidor muda (02/11: painel de junho "Falha ao carregar a
+        # imagem"). on_guild_update usa esta lista para trocar a miniatura.
+        try:
+            atuais = (await database.run_db(database.get_config, PAINEIS_KEY)).split()
+            atuais.append(f'{msg.channel.id}:{msg.id}')
+            await database.run_db(database.set_config, PAINEIS_KEY, ' '.join(atuais[-50:]))
+        except Exception as e:
+            print(f'[tickets] painel postado, mas nao guardei o id: {e!r}')
+
+    @commands.Cog.listener()
+    async def on_guild_update(self, antes, depois):
+        if antes.icon == depois.icon:
+            return
+        paineis = (await database.run_db(database.get_config, PAINEIS_KEY)).split()
+        vivos = []
+        for item in paineis:
+            canal_id, msg_id = (int(x) for x in item.split(':'))
+            canal = depois.get_channel(canal_id)
+            if canal is None:
+                continue
+            try:
+                msg = await canal.fetch_message(msg_id)
+                embed = msg.embeds[0]
+                if depois.icon:
+                    embed.set_thumbnail(url=depois.icon.url)
+                else:
+                    embed.set_thumbnail(url=None)
+                await msg.edit(embed=embed)
+                vivos.append(item)
+            except discord.NotFound:
+                pass                      # painel apagado: sai da lista
+            except Exception as e:
+                vivos.append(item)        # erro passageiro: tenta na proxima troca
+                print(f'[tickets] miniatura do painel {item}: {e!r}')
+        print(f'[tickets] icone mudou: {len(vivos)} de {len(paineis)} paineis atualizados ou mantidos')
+        if vivos != paineis:
+            await database.run_db(database.set_config, PAINEIS_KEY, ' '.join(vivos))
+
     @app_commands.command(name='configurar_ticket', description='[LÍDER] Edita a mensagem de um tipo de ticket.')
     @app_commands.describe(
         tipo='Tipo do ticket',

@@ -18,7 +18,10 @@ TICKET_TYPES = {
     'recrutamento': {'emoji': '⚔️', 'label': 'Recrutamento',   'color': cores.OURO,   'btn_style': discord.ButtonStyle.primary},
     'suporte':      {'emoji': '🆘', 'label': 'Suporte',         'color': cores.AMBAR, 'btn_style': discord.ButtonStyle.danger},
     'saque':        {'emoji': '💰', 'label': 'Solicitar Saque', 'color': cores.OURO,   'btn_style': discord.ButtonStyle.success},
+    # Regear tem painel próprio e não entra no painel "Todos" (ver regear.py).
+    'regear':       {'emoji': '🛡️', 'label': 'Pedir Regear',   'color': cores.OURO,   'btn_style': discord.ButtonStyle.primary},
 }
+TIPOS_PAINEL_TODOS = ('recrutamento', 'suporte', 'saque')
  
 # Salva qual categoria cada tipo de ticket deve usar
 # formato: 'ticket_category_recrutamento' -> category_id
@@ -160,6 +163,10 @@ class CloseTicketView(LoggedView):
                 ticket_type = 'suporte'
                 archive_key = 'category_tickets_suporte_finalizado'
                 archive_name = '🆘 Tickets Suporte Finalizado'
+            elif 'regear' in ch_name:
+                ticket_type = 'regear'
+                archive_key = 'category_tickets_regear_finalizado'
+                archive_name = '🛡️ Tickets Regear Finalizado'
             else:
                 ticket_type = 'saque'
                 archive_key = 'category_tickets_saque_finalizado'
@@ -167,7 +174,11 @@ class CloseTicketView(LoggedView):
  
             await interaction.followup.send('🔒 Ticket encerrado! Movendo para o arquivo...')
             await database.run_db(database.close_ticket_db, str(interaction.channel.id))
- 
+            if ticket_type == 'regear':
+                # Fechado antes de pagar: o pedido sai da lista de compras.
+                import regear
+                await regear.ao_fechar_ticket(interaction.channel, interaction.guild)
+
             # Busca ou cria categoria de arquivo
             guild = interaction.guild
             cat_id = await database.run_db(database.get_config, archive_key)
@@ -326,6 +337,7 @@ class TicketButton(discord.ui.Button):
                 'recrutamento': 'recruit_tickets',
                 'suporte':      'support_tickets',
                 'saque':        'saque_tickets',
+                'regear':       'regear',
             }
             cargos = await database.run_db(database.get_permission_roles, perm_map[self.ticket_type])
             if cargos is None:
@@ -381,6 +393,9 @@ class TicketButton(discord.ui.Button):
 
         try:
             await ch.send(content=user.mention, embed=embed, view=CloseTicketView())
+            if self.ticket_type == 'regear':
+                import regear
+                await regear.iniciar_pedido(ch, user)
             await interaction.followup.send(f'✅ Ticket criado! {ch.mention}', ephemeral=True)
         except Exception as e:
             # Canal ja existe e esta registrado no banco -- mesmo se o envio da
@@ -411,12 +426,17 @@ class SaquePanel(LoggedView):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(TicketButton('saque'))
- 
+
+class RegearPanel(LoggedView):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(TicketButton('regear'))
+
 # Painel completo com os 3 botões (opcional)
 class TicketPanel(LoggedView):
     def __init__(self):
         super().__init__(timeout=None)
-        for t in TICKET_TYPES:
+        for t in TIPOS_PAINEL_TODOS:
             self.add_item(TicketButton(t))
  
  
@@ -429,6 +449,7 @@ class TicketsCog(commands.Cog):
         bot.add_view(RecrutamentoPanel())
         bot.add_view(SuportePanel())
         bot.add_view(SaquePanel())
+        bot.add_view(RegearPanel())
         bot.add_view(TicketPanel())
         bot.add_view(CloseTicketView())
         # Sem registrar aqui, o botao Reabrir das mensagens antigas fica mudo
@@ -520,6 +541,7 @@ class TicketsCog(commands.Cog):
         app_commands.Choice(name='⚔️ Recrutamento',   value='recrutamento'),
         app_commands.Choice(name='🆘 Suporte',         value='suporte'),
         app_commands.Choice(name='💰 Solicitar Saque', value='saque'),
+        app_commands.Choice(name='🛡️ Regear',          value='regear'),
         app_commands.Choice(name='🎫 Todos (3 botões)', value='todos'),
     ])
     async def postar_painel(self, interaction: discord.Interaction, tipo: str):
@@ -549,7 +571,12 @@ class TicketsCog(commands.Cog):
             'saque':        ('💰 Solicitar Saque | XnoMercy',
                              'Clique abaixo para solicitar o saque do seu saldo acumulado.',
                              SaquePanel()),
-            'todos':        ('🎫 Central de Atendimento | XnoMercy',
+            'regear':       ('🛡️ Regear | XnoMercy',
+                             'Morreu com a build da guild ou trashou peças?\n'
+                             'Clique abaixo, monte o pedido e envie para a staff.\n\n'
+                             'Entram só **arma, off-hand, elmo, peito e bota**.',
+                             RegearPanel()),
+            'todos':       ('🎫 Central de Atendimento | XnoMercy',
                              '⚔️ **Recrutamento** — Quer entrar na guild?\n'
                              '🆘 **Suporte** — Dúvidas ou problemas?\n'
                              '💰 **Solicitar Saque** — Sacar sua prata acumulada',
@@ -612,6 +639,7 @@ class TicketsCog(commands.Cog):
         app_commands.Choice(name='Recrutamento', value='recrutamento'),
         app_commands.Choice(name='Suporte',      value='suporte'),
         app_commands.Choice(name='Saque',        value='saque'),
+        app_commands.Choice(name='Regear',       value='regear'),
     ])
     async def configurar_ticket(self, interaction: discord.Interaction, tipo: str, titulo: str, mensagem: str):
         # defer antes de tudo: as consultas abaixo passam pelo run_db (nao

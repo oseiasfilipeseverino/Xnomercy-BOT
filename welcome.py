@@ -402,6 +402,7 @@ class WelcomeCog(commands.Cog):
             app_commands.Choice(name='Tickets Recrutamento',            value='recruit_tickets'),
             app_commands.Choice(name='Tickets Suporte',                 value='support_tickets'),
             app_commands.Choice(name='Tickets Saque',                   value='saque_tickets'),
+            app_commands.Choice(name='Regear (aprovar/pagar)',          value='regear'),
             app_commands.Choice(name='Membros (eventos/saldo)',         value='members'),
             app_commands.Choice(name='Todos (acesso geral)',            value='all'),
         ]
@@ -447,6 +448,7 @@ class WelcomeCog(commands.Cog):
             'recruit_tickets':'🎯 Tickets Recrutamento',
             'support_tickets':'🆘 Tickets Suporte',
             'saque_tickets':  '💸 Tickets Saque',
+            'regear':         '🛡️ Regear',
             'members':        '👥 Membros',
             'all':            '🌐 Todos',
         }

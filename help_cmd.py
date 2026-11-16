@@ -42,6 +42,9 @@ COMMAND_GROUPS = [
         ('/depositar_evento', 'Envia o loot para aprovação'),
         ('/atualizar_participacao', 'Define a % de participação de um player'),
     ]),
+    ('Regear (Líder, Vice e cargo Regear)', 'regear', [
+        ('/regear_lista', 'Posta a lista de compras do regear (atualiza sozinha)'),
+    ]),
     ('Líder / Vice — Saldos & Taxas', 'financial', [
         ('/adicionar_saldo', 'Adiciona prata ao saldo de um player'),
         ('/pagar_saldo', 'Paga (remove do saldo) a prata devida a um player'),

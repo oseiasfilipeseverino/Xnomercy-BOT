@@ -29,7 +29,7 @@ _cache: dict[str, tuple[list, float]] = {}
 _TTL = 300
 
 PERMISSOES = ('financial', 'events', 'recruit_tickets', 'support_tickets',
-              'saque_tickets', 'members', 'all')
+              'saque_tickets', 'members', 'all', 'regear')
 
 
 def invalidar():

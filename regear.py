@@ -27,7 +27,7 @@ import re
 import discord
 import requests
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 import config
 import cores
@@ -418,6 +418,16 @@ def pagar(pid, quem):
               "WHERE id=%s AND status='aprovado'", (quem, pid), fetch='rowcount', commit=True) > 0
 
 
+def concluir_pagos_pelo_site():
+    """'pagando' (marcado no site) -> 'pago'. Devolve os pedidos que virou.
+
+    O UPDATE ... RETURNING é o que garante que cada um é avisado uma vez só,
+    mesmo que dois ciclos se encostem."""
+    rows = _q("UPDATE regear_pedidos SET status='pago', pago_em=NOW() WHERE status='pagando' "
+              "RETURNING " + ', '.join(_P_CAMPOS), fetch='all', commit=True)
+    return [dict(zip(_P_CAMPOS, r)) for r in rows or []]
+
+
 def aprovar(pid, aprovador, compras):
     """Grava a lista de compra de cada item e aprova, numa transação só."""
     conn = database.get_connection()
@@ -551,6 +561,7 @@ STATUS_TXT = {
     'enviado': '⏳ Enviado — aguardando a staff aprovar.',
     'recusado': '❌ Recusado — corrija e envie de novo.',
     'aprovado': '✅ Aprovado — na lista de compras.',
+    'pagando': '💰 Marcado como pago no site — avisando…',
     'pago': '💰 Pago — o regear está ' + LOCAL_BAU + '.',
     'cancelado': '🚫 Cancelado.',
 }
@@ -826,24 +837,29 @@ class RegearBotao(discord.ui.DynamicItem[discord.ui.Button],
         if not await database.run_db(pagar, self.pid, deferida.user.display_name):
             await deferida.followup.send('ℹ️ Esse pedido já foi marcado como pago.', ephemeral=True)
             return
-        await atualizar_carrinho(deferida.channel, self.pid)
-        await atualizar_lista(deferida.guild)
-        from tickets import CloseTicketView
-        await deferida.channel.send(
-            f'💰 <@{pedido["discord_id"]}>, seu regear está **{LOCAL_BAU}**! '
-            'Depois de pegar, feche o ticket no botão abaixo.',
-            view=CloseTicketView(),
-            allowed_mentions=discord.AllowedMentions(users=True, everyone=False, roles=False))
-        membro = deferida.guild.get_member(int(pedido['discord_id']))
-        if membro:
-            try:
-                await membro.send('💰 Seu regear foi pago e está ' + LOCAL_BAU + '. '
-                                  'Depois de pegar, feche o ticket: ' + deferida.channel.mention)
-            except Exception:
-                pass   # DM fechada: o aviso no ticket já basta
-        await log_channel(deferida.guild,
-                          f'💰 Regear #{self.pid} de **{pedido["username"]}** pago por '
-                          f'**{deferida.user.display_name}**.')
+        await avisar_pago(deferida.channel, deferida.guild, pedido, deferida.user.display_name)
+
+
+async def avisar_pago(channel, guild, pedido, quem):
+    """Tudo que acontece no Discord quando um regear é pago — pelo botão do
+    ticket ou pelo site (Gestão → Regear, que marca 'pagando' e o bot conclui)."""
+    pid = pedido['id']
+    await atualizar_carrinho(channel, pid)
+    await atualizar_lista(guild)
+    from tickets import CloseTicketView
+    await channel.send(
+        f'💰 <@{pedido["discord_id"]}>, seu regear está **{LOCAL_BAU}**! '
+        'Depois de pegar, feche o ticket no botão abaixo.',
+        view=CloseTicketView(),
+        allowed_mentions=discord.AllowedMentions(users=True, everyone=False, roles=False))
+    membro = guild.get_member(int(pedido['discord_id']))
+    if membro:
+        try:
+            await membro.send('💰 Seu regear foi pago e está ' + LOCAL_BAU + '. '
+                              'Depois de pegar, feche o ticket: ' + channel.mention)
+        except Exception:
+            pass   # DM fechada: o aviso no ticket já basta
+    await log_channel(guild, f'💰 Regear #{pid} de **{pedido["username"]}** pago por **{quem}**.')
 
 
 # ── Telas temporárias (só quem clicou vê) ─────────────────────────────────────
@@ -1148,6 +1164,32 @@ class RegearCog(commands.Cog):
 
     async def cog_load(self):
         await self._garantir_tabelas()
+        self.pagos_no_site.start()
+
+    async def cog_unload(self):
+        self.pagos_no_site.cancel()
+
+    @tasks.loop(seconds=20)
+    async def pagos_no_site(self):
+        """Conclui no Discord o que foi marcado como pago no site."""
+        try:
+            pedidos = await database.run_db(concluir_pagos_pelo_site)
+        except Exception as e:
+            print(f'[regear] pagos pelo site: {e!r}')
+            return
+        for pedido in pedidos:
+            canal = self.bot.get_channel(int(pedido['channel_id']))                 if str(pedido['channel_id']).isdigit() else None
+            if canal is None:
+                print(f'[regear] pedido #{pedido["id"]} pago no site, mas o ticket não existe mais')
+                continue
+            try:
+                await avisar_pago(canal, canal.guild, pedido, (pedido['pago_por'] or 'site') + ' (site)')
+            except Exception as e:
+                print(f'[regear] aviso do pedido #{pedido["id"]} pago no site: {e!r}')
+
+    @pagos_no_site.before_loop
+    async def _esperar_bot(self):
+        await self.bot.wait_until_ready()
 
     @commands.Cog.listener()
     async def on_ready(self):

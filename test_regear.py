@@ -379,6 +379,21 @@ async def rodar():
     checar(any('6.0, 7.0, 8.0 ou 8.1' in (x or '') for x in i.response.msgs),
            'build digitada recusa tier fora da lista (7.1)')
 
+    # Pago pelo site: o laço do bot conclui e avisa igual ao botão do ticket.
+    R.concluir_pagos_pelo_site = fake('concluir_pagos_pelo_site')
+    estado['concluir_pagos_pelo_site'] = [dict(pedido, status='pago', pago_por='Pagador')]
+    canal = Canal()
+    canal.guild = types.SimpleNamespace(get_member=lambda x: None, get_channel=lambda x: None)
+    cog = R.RegearCog.__new__(R.RegearCog)
+    cog.bot = types.SimpleNamespace(get_channel=lambda cid: canal if cid == 9 else None)
+    await R.RegearCog.pagos_no_site.coro(cog)
+    checar(any('<@111>' in (m or '') and 'baú da ilha da guild em Lymhurst' in (m or '') for m in canal.msgs),
+           'pago no site: o bot avisa o player no ticket')
+    estado['concluir_pagos_pelo_site'] = []
+    canal.msgs.clear()
+    await R.RegearCog.pagos_no_site.coro(cog)
+    checar(not canal.msgs, 'nada pago no site: o laço não manda nada')
+
     # Pedido vazio não envia.
     estado.update(get_itens=[])
     chamadas.clear()

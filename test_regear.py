@@ -98,8 +98,9 @@ desc = R.embed_lista(R.agregar([
 ])).description.splitlines()
 checar(desc[0] == '**1** Quebra-Reinos **7.0**' and desc[1] == '', 'itens do jogo primeiro')
 checar(desc[2:] == ['**📝 Digitados pelo player — conferir no ticket**',
-                    '**1× · 7.0** — [NM] Ciclano',
-                    '　• Quebra Reinos', '　• Elmo de Cavaleiro', '　• Casaco Inferial'],
+                    '• 1× Quebra Reinos **7.0** — [NM] Ciclano',
+                    '• 1× Elmo de Cavaleiro **7.0** — [NM] Ciclano',
+                    '• 1× Casaco Inferial **7.0** — [NM] Ciclano'],
        f'build digitada em bloco à parte, uma peça por linha e de quem é ({desc[2:]})')
 
 ag = R.agregar([
@@ -117,6 +118,28 @@ checar(desc == ['**3** Sapatos de Espreitador **7.0 = 6.1 = 5.2 = 4.3**',
 checar(R.sem_tier_no_nome('Par de Galatinas do Adepto') == 'Par de Galatinas'
        and R.sem_tier_no_nome('Bengala Maligna do Grão-mestre') == 'Bengala Maligna'
        and R.sem_tier_no_nome('Arco longo') == 'Arco longo', 'tira o tier do nome e não mexe no resto')
+
+# Peças digitadas viram itens do jogo quando o catálogo acha (lista de cima).
+catalogo = {'casaco inferial': 'T8_ARMOR_LEATHER_HELL', 'braçadeiras de batalha': 'T8_2H_KNUCKLES_SET1',
+            'capa de contrabandista': 'T8_CAPEITEM_SMUGGLER', 'cavalo blindado': 'T5_MOUNT_ARMORED_HORSE',
+            'bolsa': 'T8_BAG', 'arco longo': 'T8_2H_LONGBOW'}
+buscar = lambda texto: catalogo.get(texto.lower())
+r = R.resolver_entrada({'item_id': '', 'nome': 'Braçadeiras de batalha 4.3 / casaco inferial 5.2 / '
+                        'elmo de solsado 5.2 / capa de contrabandista 5.3 / cavalo blindado 5 / bolsa 4.2',
+                        'tier': '6.0', 'preco': 0, 'qtd': 1}, buscar)
+checar([x['item_id'] for x in r[:2]] == ['T4_2H_KNUCKLES_SET1@3', 'T5_ARMOR_LEATHER_HELL@2'],
+       'peça com tier escrito vira o item nesse tier (4.3, 5.2)')
+checar(r[2]['item_id'] == '' and r[2]['nome'] == 'elmo de solsado 5.2', 'erro de digitação continua digitado')
+checar(all('não entra no regear' in x['nome'] and not x['item_id'] for x in r[3:]),
+       'capa, cavalo e bolsa ficam marcados como "não entra no regear"')
+checar(all(x.get('tentado') for x in r if not x['item_id']), 'o que não virou item não é procurado de novo')
+r = R.resolver_entrada({'item_id': '', 'nome': 'Build de ARCO longo', 'tier': '7.0', 'preco': 0, 'qtd': 1}, buscar)
+checar(r[0]['item_id'] == 'T7_2H_LONGBOW', '"Build de ARCO longo" acha o Arco Longo no tier da build')
+ag = R.agregar([(json.dumps(R.resolver_entrada(
+    {'item_id': '', 'nome': 'casaco inferial 5.2', 'tier': '7.0', 'preco': 0, 'qtd': 1}, buscar)), 'A'),
+    (json.dumps([{'item_id': 'T7_ARMOR_LEATHER_HELL', 'nome': 'Casaco Inferial do Grão-mestre',
+                  'tier': '7.0', 'preco': 0, 'qtd': 1}]), 'B')])
+checar(len(ag) == 1 and ag[0]['qtd'] == 2, '5.2 digitado soma junto com o 7.0 do mesmo item')
 
 bs = [{'category': 'Clap Kite Comp + Golem'}, {'category': 'BRAWL Comp'}, {'category': 'Gank Solo'},
       {'category': 'Ava Raid'}]

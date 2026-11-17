@@ -140,6 +140,97 @@ def so_comps_liberadas(builds, salvo):
     return [b for b in builds if any(p in (b['category'] or '').lower() for p in COMPS_PADRAO)]
 
 
+# ── Peças digitadas → itens do jogo ───────────────────────────────────────────
+# O player digita a build ("casaco inferial 5.2 / elmo de soldado") quando ela
+# não está no site, e o trash que o bot não achou. A liderança quer isso na
+# lista de cima como item normal (16/11): cada peça é procurada no catálogo.
+_TIER_DA_PECA = re.compile(r'\s+[tT]?([4-8])(?:[.,]([0-4]))?\s*$')
+_PREFIXO_BUILD = re.compile(r'^\s*build\b(?:\s+d[eao]s?\b)?\s*', re.I)
+# Não entram no regear (só arma, off-hand, elmo, peito e bota).
+_FORA_DO_REGEAR = ('CAPE', 'MOUNT', '_BAG', 'MEAL', 'POTION', 'SKILLBOOK')
+
+
+def peca_e_tier(texto, tier, enc):
+    """'casaco inferial 5.2' -> ('casaco inferial', 5, 2); sem tier, usa o da build."""
+    texto = _PREFIXO_BUILD.sub('', texto or '').strip()
+    m = _TIER_DA_PECA.search(texto)
+    if m:
+        return texto[:m.start()].strip(), int(m.group(1)), int(m.group(2) or 0)
+    return texto, tier, enc
+
+
+def fora_do_regear(item_id):
+    return any(k in (item_id or '').upper() for k in _FORA_DO_REGEAR)
+
+
+def resolver_entrada(c, buscar):
+    """Uma entrada digitada da compra -> lista de entradas (uma por peça).
+
+    `buscar(texto)` devolve o unique_name do catálogo ou None. O que não acha
+    continua digitado (marcado `tentado`, pra não procurar de novo a cada
+    atualização da lista)."""
+    p0 = re.match(r'^(\d)\.(\d)$', c.get('tier') or '')
+    tier, enc = (int(p0.group(1)), int(p0.group(2))) if p0 else (7, 0)
+    saida = []
+    for bruto in pecas_digitadas(c['nome']):
+        texto, t, e = peca_e_tier(bruto, tier, enc)
+        uid = buscar(texto) if len(texto) >= 3 else None
+        if uid and fora_do_regear(uid):
+            saida.append({'item_id': '', 'nome': bruto + ' — não entra no regear',
+                          'tier': fmt_tier(t, e), 'preco': 0, 'qtd': c['qtd'], 'tentado': True})
+        elif uid:
+            saida.append({'item_id': no_tier(uid, t, e), 'nome': texto, 'tier': fmt_tier(t, e),
+                          'preco': 0, 'qtd': c['qtd'], 'digitado': True})
+        else:
+            saida.append({'item_id': '', 'nome': bruto, 'tier': fmt_tier(t, e),
+                          'preco': 0, 'qtd': c['qtd'], 'tentado': True})
+    return saida
+
+
+def _buscar_no_catalogo(texto):
+    from market import _search_items
+    for r in _search_items(texto, 10):
+        if partes(r[0]):
+            return r[0]
+    return None
+
+
+def resolver_digitados():
+    """Procura no catálogo as peças digitadas dos pedidos aprovados e grava.
+
+    Roda a cada atualização da lista; só mexe em entrada ainda não tentada."""
+    conn = database.get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT i.id, i.compra_json FROM regear_itens i JOIN regear_pedidos p "
+                  "ON p.id = i.pedido_id WHERE p.status = 'aprovado'")
+        mudou = 0
+        for iid, compra_json in c.fetchall():
+            compra = json.loads(compra_json or '[]')
+            if not any(not x.get('item_id') and not x.get('tentado') for x in compra):
+                continue
+            nova = []
+            for x in compra:
+                nova += resolver_entrada(x, _buscar_no_catalogo) \
+                    if not x.get('item_id') and not x.get('tentado') else [x]
+            ids = [x['item_id'] for x in nova if x.get('digitado')]
+            if ids:
+                nomes = nomes_pt(ids)
+                for x in nova:
+                    if x.get('digitado'):
+                        x['nome'] = nomes.get(x['item_id']) or x['nome']
+            c.execute("UPDATE regear_itens SET compra_json=%s WHERE id=%s",
+                      (json.dumps(nova, ensure_ascii=False), iid))
+            mudou += 1
+        conn.commit()
+        return mudou
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        database.release(conn)
+
+
 def mais_barato(item_id, tier, enc, precos):
     """(id, preço) do equivalente mais barato com preço conhecido, ou None."""
     melhor = None
@@ -561,9 +652,8 @@ def embed_lista(agregado):
             linhas.append('')
         linhas.append('**📝 Digitados pelo player — conferir no ticket**')
         for a in digitados:
-            linhas.append(f'**{a["qtd"]}× · {a["tier"]}** — {", ".join(a["quem"])}')
             for peca in pecas_digitadas(a['nome']):
-                linhas.append('　• ' + peca)
+                linhas.append(f'• {a["qtd"]}× {peca} **{a["tier"]}** — {", ".join(a["quem"])}')
     e.description = cortar('\n'.join(linhas), 4000)
     e.set_footer(text='Atualiza sozinha ao aprovar e ao pagar')
     return e
@@ -578,6 +668,10 @@ async def atualizar_lista(guild):
         canal = guild.get_channel(canal_id)
         if canal is None:
             return
+        try:
+            await database.run_db(resolver_digitados)
+        except Exception as e:
+            print(f'[regear] peças digitadas não resolvidas: {e!r}')   # lista sai mesmo assim
         agregado = agregar(await database.run_db(linhas_aprovadas))
         msg = await canal.fetch_message(msg_id)
         await msg.edit(embed=embed_lista(agregado))
@@ -1021,6 +1115,7 @@ class RecusarModal(discord.ui.Modal, title='Recusar regear'):
             await interaction.followup.send('ℹ️ Esse pedido já foi decidido por outra pessoa.', ephemeral=True)
             return
         self.pedido = pedido
+        await atualizar_lista(interaction.guild)
         await atualizar_carrinho(interaction.channel, self.pid)
         await interaction.followup.send('Recusado.', ephemeral=True)
         await interaction.channel.send(
@@ -1068,6 +1163,10 @@ class RegearCog(commands.Cog):
                 '❌ Só Líder, Vice Líder ou o cargo Regear.', ephemeral=True)
             return
         await interaction.response.defer()
+        try:
+            await database.run_db(resolver_digitados)
+        except Exception as e:
+            print(f'[regear] peças digitadas não resolvidas: {e!r}')
         agregado = agregar(await database.run_db(linhas_aprovadas))
         msg = await interaction.followup.send(embed=embed_lista(agregado), wait=True)
         await database.run_db(database.set_config, LISTA_KEY, f'{msg.channel.id}:{msg.id}')

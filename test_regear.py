@@ -258,6 +258,20 @@ async def rodar():
     checar(add and R.NAO_CONFERIDO in add[0][8], 'build do site também leva o aviso de não conferido')
     checar(any('Mande o print' in (r or '') for r in respostas), 'e pede o print da morte')
 
+    # Composição com 34 builds: todas alcançáveis, nenhuma página passa de 25 opções.
+    b34 = [{'id': n, 'name': f'Build {n}', 'category': 'Clap'} for n in range(1, 35)]
+    vistos, pag = [], R.EscolherBuild(5, 'Clap', b34)
+    for _ in range(5):
+        ops = [o.value for o in pag.children[0].options]
+        checar(len(ops) <= 25, f'página {pag.pagina + 1} cabe no limite do Discord ({len(ops)})')
+        vistos += [o for o in ops if o not in ('ant', 'prox')]
+        if 'prox' not in ops:
+            break
+        pag = R.EscolherBuild(5, 'Clap', b34, pag.pagina + 1)
+    checar(sorted(map(int, vistos)) == list(range(1, 35)), f'as 34 builds aparecem ({len(vistos)})')
+    checar('ant' in [o.value for o in pag.children[0].options] and '24–34 de 34' in pag.texto(),
+           'última página tem "Anteriores" e mostra 24–34 de 34')
+
     # Tier de build: só 6.0, 7.0, 8.0 e 8.1.
     v = R.EscolherTier(5, 1)
     checar([o.value for o in v.children[0].options] == ['6.0', '7.0', '8.0', '8.1'],

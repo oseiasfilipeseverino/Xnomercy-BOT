@@ -732,25 +732,48 @@ class EscolherComp(LoggedView):
             return
         comp = self.comps[int(interaction.data['values'][0])]
         daqui = [b for b in self.builds if b['category'] == comp]
-        aviso = f'\n_(mostrando 25 de {len(daqui)})_' if len(daqui) > 25 else ''
-        await interaction.response.edit_message(
-            content=f'Build de **{comp}**:{aviso}', view=EscolherBuild(self.pid, daqui[:25]))
+        v = EscolherBuild(self.pid, comp, daqui)
+        await interaction.response.edit_message(content=v.texto(), view=v)
+
+
+POR_PAGINA = 23   # o Discord aceita 25 opções; sobram 2 pra "Anteriores" e "Mais"
+
+
+def pagina_de_builds(builds, pagina):
+    """(builds desta página, tem anterior, tem próxima)."""
+    ini = pagina * POR_PAGINA
+    return builds[ini:ini + POR_PAGINA], pagina > 0, ini + POR_PAGINA < len(builds)
 
 
 class EscolherBuild(LoggedView):
-    def __init__(self, pid, builds):
+    def __init__(self, pid, comp, builds, pagina=0):
         super().__init__(timeout=600)
-        self.pid = pid
-        sel = discord.ui.Select(placeholder='Build',
-                                options=[discord.SelectOption(label=cortar(b['name'], 100), value=str(b['id']))
-                                         for b in builds])
+        self.pid, self.comp, self.builds, self.pagina = pid, comp, builds, pagina
+        daqui, ant, prox = pagina_de_builds(builds, pagina)
+        opts = [discord.SelectOption(label=cortar(b['name'], 100), value=str(b['id'])) for b in daqui]
+        if ant:
+            opts.insert(0, discord.SelectOption(label='⬅️ Builds anteriores', value='ant'))
+        if prox:
+            opts.append(discord.SelectOption(label='➡️ Mais builds', value='prox'))
+        sel = discord.ui.Select(placeholder='Build', options=opts)
         sel.callback = self._escolheu
         self.add_item(sel)
 
+    def texto(self):
+        total = len(self.builds)
+        if total <= POR_PAGINA:
+            return f'Build de **{self.comp}**:'
+        ini = self.pagina * POR_PAGINA
+        return f'Build de **{self.comp}** ({ini + 1}–{min(ini + POR_PAGINA, total)} de {total}):'
+
     async def _escolheu(self, interaction):
-        bid = int(interaction.data['values'][0])
+        valor = interaction.data['values'][0]
+        if valor in ('ant', 'prox'):
+            v = EscolherBuild(self.pid, self.comp, self.builds, self.pagina + (1 if valor == 'prox' else -1))
+            await interaction.response.edit_message(content=v.texto(), view=v)
+            return
         await interaction.response.edit_message(content='Tier da build:',
-                                                view=EscolherTier(self.pid, bid))
+                                                view=EscolherTier(self.pid, int(valor)))
 
 
 class EscolherTier(LoggedView):

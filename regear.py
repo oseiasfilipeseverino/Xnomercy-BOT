@@ -54,6 +54,12 @@ LISTA_KEY = 'regear_lista_msg'   # "canal:mensagem" da lista de compras
 
 EDITAVEL = ('montando', 'recusado')
 
+# Só composições de PvP têm regear. Quem escolhe é a liderança, no site
+# (Gestão → Regear), que grava a lista em guild_config. Antes de alguém salvar
+# lá, valem as composições cujo nome contém estas palavras — igual ao site.
+COMPS_KEY = 'regear_composicoes'
+COMPS_PADRAO = ('clap', 'brawl')
+
 
 # ── Regras puras (testadas em test_regear.py) ─────────────────────────────────
 
@@ -121,6 +127,20 @@ def itens_da_build(items_json, tier, enc):
         elif it.get('name'):
             saida.append({'slot': slot, 'rotulo': rotulo, 'item_id': '', 'nome': it['name']})
     return saida
+
+
+def so_comps_liberadas(builds, salvo):
+    """Só as builds das composições liberadas em Gestão → Regear no site.
+
+    `salvo` é a lista (JSON) de nomes exatos que o site grava. Vazio ou quebrado
+    = ninguém configurou ainda: vale o padrão por palavra (clap, brawl)."""
+    try:
+        lista = json.loads(salvo) if salvo else None
+    except ValueError:
+        lista = None
+    if isinstance(lista, list):
+        return [b for b in builds if b['category'] in lista]
+    return [b for b in builds if any(p in (b['category'] or '').lower() for p in COMPS_PADRAO)]
 
 
 def mais_barato(item_id, tier, enc, precos):
@@ -525,7 +545,7 @@ def montar_embed(pedido, itens):
         else:
             pecas = json.loads(it['itens_json'] or '[]')
             if it['tipo'] == 'build' and pecas:
-                linhas.append('　' + ' · '.join(p['rotulo'] for p in pecas))
+                linhas.append('　' + ' · '.join(p['rotulo'] if p.get('item_id') else p['nome'] for p in pecas))
         if it['morte_info']:
             linhas.append('　💀 ' + it['morte_info'])
         for a in (it['avisos'] or '').splitlines():
@@ -696,11 +716,9 @@ class RegearBotao(discord.ui.DynamicItem[discord.ui.Button],
     # Daqui até o fim da classe: chamadas por _executar, que JÁ deferiu.
     # player ─────────────────────────────────────────────────────────────────
     async def _build(self, deferida, pedido):
-        builds = await database.run_db(get_builds)
-        if not builds:
-            await deferida.followup.send('❌ Nenhuma build cadastrada no site.', ephemeral=True)
-            return
-        await deferida.followup.send('**1/4** Escolha a composição:',
+        salvo = await database.run_db(database.get_config, COMPS_KEY)
+        builds = so_comps_liberadas(await database.run_db(get_builds), salvo)
+        await deferida.followup.send('Escolha a composição (ou **Outra** pra digitar a build):',
                                         view=EscolherComp(self.pid, builds), ephemeral=True)
 
     async def _remover(self, deferida, pedido):
@@ -773,19 +791,23 @@ class EscolherComp(LoggedView):
     def __init__(self, pid, builds):
         super().__init__(timeout=600)
         self.pid, self.builds = pid, builds
-        self.comps = list(dict.fromkeys(b['category'] for b in builds))[:25]
-        sel = discord.ui.Select(placeholder='Composição',
-                                options=[discord.SelectOption(label=cortar(c, 100), value=str(i))
-                                         for i, c in enumerate(self.comps)])
+        self.comps = list(dict.fromkeys(b['category'] for b in builds))[:24]
+        opts = [discord.SelectOption(label=cortar(c, 100), value=str(i)) for i, c in enumerate(self.comps)]
+        opts.append(discord.SelectOption(label='Outra — digitar a build', value='outra',
+                                         description='Build fora das composições da lista'))
+        sel = discord.ui.Select(placeholder='Composição', options=opts)
         sel.callback = self._escolheu
         self.add_item(sel)
 
     async def _escolheu(self, interaction):
+        if interaction.data['values'][0] == 'outra':
+            await interaction.response.send_modal(BuildLivreModal(self.pid))
+            return
         comp = self.comps[int(interaction.data['values'][0])]
         daqui = [b for b in self.builds if b['category'] == comp]
         aviso = f'\n_(mostrando 25 de {len(daqui)})_' if len(daqui) > 25 else ''
         await interaction.response.edit_message(
-            content=f'**2/4** Build de **{comp}**:{aviso}', view=EscolherBuild(self.pid, daqui[:25]))
+            content=f'Build de **{comp}**:{aviso}', view=EscolherBuild(self.pid, daqui[:25]))
 
 
 class EscolherBuild(LoggedView):
@@ -800,7 +822,7 @@ class EscolherBuild(LoggedView):
 
     async def _escolheu(self, interaction):
         bid = int(interaction.data['values'][0])
-        await interaction.response.edit_message(content='**3/4** Tier da build:',
+        await interaction.response.edit_message(content='Tier da build:',
                                                 view=EscolherTier(self.pid, bid))
 
 
@@ -818,27 +840,55 @@ class EscolherTier(LoggedView):
         tier, enc = (int(x) for x in interaction.data['values'][0].split('.'))
         await interaction.response.defer()
         await interaction.edit_original_response(content='🔎 Buscando suas mortes na API do Albion…', view=None)
-        from albion_register import _nome_albion_do_apelido
-        apelido = getattr(interaction.user, 'nick', None) or interaction.user.display_name
-        mortes, erro = await asyncio.to_thread(buscar_mortes, _nome_albion_do_apelido(apelido))
-        limite = datetime.now(timezone.utc) - timedelta(days=MORTES_DIAS)
-        recentes = [m for m in mortes if m.get('EventId') and (quando_da_morte(m) or limite) > limite]
-        usadas = await database.run_db(mortes_usadas, [m['EventId'] for m in recentes])
-        livres = [m for m in recentes if int(m['EventId']) not in usadas][:24]
-        texto = '**4/4** Em qual morte você perdeu essa build?'
-        if erro:
-            texto += '\n⚠️ Não consegui ver suas mortes: ' + erro + '.'
-        elif not livres:
-            texto += (f'\nℹ️ Nenhuma morte livre nos últimos {MORTES_DIAS} dias. A API às vezes demora '
-                      'pra mostrar mortes recentes.')
-        await interaction.edit_original_response(
-            content=texto, view=EscolherMorte(self.pid, self.build_id, tier, enc, livres))
+        texto, view = await tela_de_mortes(interaction.user, self.pid, tier, enc, build_id=self.build_id)
+        await interaction.edit_original_response(content=texto, view=view)
+
+
+async def tela_de_mortes(user, pid, tier, enc, build_id=None, livre=None):
+    """Texto + seletor das mortes livres do player nos últimos dias."""
+    from albion_register import _nome_albion_do_apelido
+    apelido = getattr(user, 'nick', None) or user.display_name
+    mortes, erro = await asyncio.to_thread(buscar_mortes, _nome_albion_do_apelido(apelido))
+    limite = datetime.now(timezone.utc) - timedelta(days=MORTES_DIAS)
+    recentes = [m for m in mortes if m.get('EventId') and (quando_da_morte(m) or limite) > limite]
+    usadas = await database.run_db(mortes_usadas, [m['EventId'] for m in recentes])
+    livres = [m for m in recentes if int(m['EventId']) not in usadas][:24]
+    texto = '**Último passo:** em qual morte você perdeu essa build?'
+    if erro:
+        texto += '\n⚠️ Não consegui ver suas mortes: ' + erro + '.'
+    elif not livres:
+        texto += (f'\nℹ️ Nenhuma morte livre nos últimos {MORTES_DIAS} dias. A API às vezes demora '
+                  'pra mostrar mortes recentes.')
+    return texto, EscolherMorte(pid, build_id, tier, enc, livres, livre=livre)
+
+
+class BuildLivreModal(discord.ui.Modal, title='Build digitada'):
+    build = discord.ui.TextInput(
+        label='Build (arma, off-hand, elmo, peito, bota)', style=discord.TextStyle.paragraph,
+        placeholder='Ex.: Martelo Pesado / Escudo / Elmo de Guardião / Armadura de Guardião / Botas de Soldado',
+        max_length=400)
+    tier = discord.ui.TextInput(label='Tier', placeholder='Ex.: 7.0', max_length=5)
+
+    def __init__(self, pid):
+        super().__init__()
+        self.pid = pid
+
+    async def on_submit(self, interaction):
+        tt = parse_tier(self.tier.value)
+        if not tt:
+            await interaction.response.send_message('❌ Tier inválido. Use algo como 7.0 ou 6.1.', ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        texto, view = await tela_de_mortes(interaction.user, self.pid, tt[0], tt[1],
+                                           livre=self.build.value.strip())
+        await interaction.followup.send(texto, view=view, ephemeral=True)
 
 
 class EscolherMorte(LoggedView):
-    def __init__(self, pid, build_id, tier, enc, mortes):
+    def __init__(self, pid, build_id, tier, enc, mortes, livre=None):
         super().__init__(timeout=600)
         self.pid, self.build_id, self.tier, self.enc = pid, build_id, tier, enc
+        self.livre = livre
         self.mortes = {str(m['EventId']): m for m in mortes}
         opts = []
         for m in mortes:
@@ -858,19 +908,25 @@ class EscolherMorte(LoggedView):
         valor = interaction.data['values'][0]
         await interaction.response.defer()
         await interaction.edit_original_response(content='⏳ Adicionando…', view=None)
-        build = await database.run_db(get_build, self.build_id)
-        if not build:
-            await interaction.edit_original_response(content='❌ Essa build não existe mais no site.')
-            return
-        itens = itens_da_build(build['items_json'], self.tier, self.enc)
-        if not itens:
-            await interaction.edit_original_response(
-                content='❌ Essa build não tem arma, off-hand, elmo, peito nem bota cadastrados no site.')
-            return
-        nomes = await database.run_db(nomes_pt, [i['item_id'] for i in itens])
-        for i in itens:
-            i['nome'] = nomes.get(i['item_id']) or i['nome']
         avisos, morte_id, info = [], None, ''
+        if self.livre:
+            # Build fora das composições: vai como texto, a staff compra lendo.
+            build = {'name': 'digitada'}
+            itens = [{'slot': 'livre', 'rotulo': 'Build', 'item_id': '', 'nome': self.livre}]
+            avisos.append('build digitada pelo player — conferir os itens')
+        else:
+            build = await database.run_db(get_build, self.build_id)
+            if not build:
+                await interaction.edit_original_response(content='❌ Essa build não existe mais no site.')
+                return
+            itens = itens_da_build(build['items_json'], self.tier, self.enc)
+            if not itens:
+                await interaction.edit_original_response(
+                    content='❌ Essa build não tem arma, off-hand, elmo, peito nem bota cadastrados no site.')
+                return
+            nomes = await database.run_db(nomes_pt, [i['item_id'] for i in itens])
+            for i in itens:
+                i['nome'] = nomes.get(i['item_id']) or i['nome']
         morte = self.mortes.get(valor)
         if morte:
             morte_id = int(morte['EventId'])

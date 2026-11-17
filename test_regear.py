@@ -92,6 +92,15 @@ checar(any('Arma: morreu com 6.0' in a for a in av), 'avisa quando morreu com ti
 checar(any('Elmo: morreu com outro item' in a for a in av), 'avisa quando o item era outro')
 checar(not any('Peito' in a for a in av), 'slot de nome livre não gera aviso')
 
+bs = [{'category': 'Clap Kite Comp + Golem'}, {'category': 'BRAWL Comp'}, {'category': 'Gank Solo'},
+      {'category': 'Ava Raid'}]
+checar([b['category'] for b in R.so_comps_liberadas(bs, '')] == ['Clap Kite Comp + Golem', 'BRAWL Comp'],
+       'sem config do site: só composições com clap/brawl no nome')
+checar([b['category'] for b in R.so_comps_liberadas(bs, '["Gank Solo"]')] == ['Gank Solo'],
+       'com config do site: vale exatamente a lista marcada lá')
+checar(R.so_comps_liberadas(bs, '[]') == [], 'site com nada marcado: nenhuma composição (só "Outra")')
+checar(len(R.so_comps_liberadas(bs, 'lixo{')) == 2, 'config quebrada volta pro padrão em vez de travar')
+
 checar(R.botoes_do_status('montando') == R.DO_PLAYER and R.botoes_do_status('enviado') == ('aprovar', 'recusar')
        and R.botoes_do_status('aprovado') == ('pago',) and R.botoes_do_status('pago') == (),
        'cada estado mostra só os botões dele')
@@ -228,6 +237,23 @@ async def rodar():
     await R.RegearBotao('recusar', 5).callback(i)
     checar(isinstance(i.response.modal, R.RecusarModal) and not chamadas,
            'Recusar abre o formulário antes de qualquer consulta')
+
+    # Build digitada ("Outra"): entra como texto, com aviso pra staff conferir.
+    chamadas.clear()
+    estado['add_item'] = 10
+    i = inter(uid=111, staff=False)
+    i.data = {'values': ['nenhuma']}
+    i.edit_original_response = lambda **kw: asyncio.sleep(0)
+    v = R.EscolherMorte(5, None, 7, 0, [], livre='Martelo / Escudo / Elmo')
+    await v._escolheu(i)
+    add = [a for n, a in chamadas if n == 'add_item']
+    checar(add and add[0][9][0]['nome'] == 'Martelo / Escudo / Elmo' and add[0][9][0]['item_id'] == '',
+           'build digitada entra como texto')
+    checar(add and any('build digitada' in a for a in add[0][8]), 'e com aviso pra staff conferir')
+    compra = R.calcular_compra({'tier': 7, 'enc': 0, 'qtd': 1, 'itens_json': json.dumps(add[0][9])}, {}, {}) \
+        if add else []
+    checar(compra and compra[0]['nome'] == 'Martelo / Escudo / Elmo' and compra[0]['tier'] == '7.0',
+           'na lista de compras aparece o texto digitado no tier pedido')
 
     # Pedido vazio não envia.
     estado.update(get_itens=[])

@@ -159,6 +159,27 @@ def corrigir_slot(slot, item_id):
     return item_id
 
 
+def _ajuste_drumn():
+    """TEMPORÁRIO: a build "CAÇA ESPIRITO" do site tem Armadura Demônia no peito,
+    mas o DrumnKiller morreu de Casaco Inferial (print do ticket). Só mexe se o
+    item ainda estiver como foi aprovado."""
+    r = _q("SELECT i.itens_json, i.compra_json FROM regear_itens i JOIN regear_pedidos p "
+           "ON p.id = i.pedido_id WHERE i.id = 6 AND p.id = 17 AND p.status = 'aprovado'", fetch='one')
+    if not r or 'T6_ARMOR_PLATE_HELL@1' not in (r[1] or ''):
+        return 'nada a fazer'
+    itens, compra = json.loads(r[0]), json.loads(r[1])
+    for x in itens:
+        if x.get('slot') == 'armor' and x.get('item_id') == 'T7_ARMOR_PLATE_HELL':
+            x.update(item_id='T7_ARMOR_LEATHER_HELL', nome='Casaco Inferial do Grão-mestre')
+    for y in compra:
+        if y.get('item_id') == 'T6_ARMOR_PLATE_HELL@1':
+            y.update(item_id='T7_ARMOR_LEATHER_HELL', nome='Casaco Inferial do Grão-mestre', tier='7.0', preco=0)
+    n = _q("UPDATE regear_itens SET itens_json=%s, compra_json=%s WHERE id = 6",
+           (json.dumps(itens, ensure_ascii=False), json.dumps(compra, ensure_ascii=False)),
+           fetch='rowcount', commit=True)
+    return f'{n} item trocado (Armadura Demônia -> Casaco Inferial)'
+
+
 def corrigir_slots_salvos():
     """Conserta peças no slot errado já gravadas: nas builds do site e nos
     pedidos de regear em aberto. Devolve o que mudou (vai pro log)."""
@@ -1415,15 +1436,10 @@ class RegearCog(commands.Cog):
 
     async def cog_load(self):
         await self._garantir_tabelas()
-        try:   # TEMPORÁRIO (17/11): pedido do DrumnKiller
-            for r in await database.run_db(lambda: _q(
-                    "SELECT p.id, p.status, p.username, p.channel_id, p.created_at, p.aprovado_por, "
-                    "i.id, i.tipo, i.titulo, i.tier, i.enc, i.itens_json, i.compra_json "
-                    "FROM regear_pedidos p LEFT JOIN regear_itens i ON i.pedido_id = p.id "
-                    "WHERE p.username ILIKE %s ORDER BY p.id, i.id", ('%drumn%',), fetch='all')):
-                print('[regear] diag: ' + ' | '.join(str(x) for x in r))
+        try:   # TEMPORÁRIO (17/11): pedido #17 (DrumnKiller) morreu de Casaco Inferial
+            print('[regear] ajuste #17: ' + str(await database.run_db(_ajuste_drumn)))
         except Exception as e:
-            print(f'[regear] diag falhou: {e!r}')
+            print(f'[regear] ajuste #17 falhou: {e!r}')
         try:
             for aviso in await database.run_db(corrigir_slots_salvos):
                 print('[regear] slot: ' + aviso)

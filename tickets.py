@@ -396,7 +396,14 @@ class TicketButton(discord.ui.Button):
             if self.ticket_type == 'regear':
                 import regear
                 await regear.iniciar_pedido(ch, user)
-            await interaction.followup.send(f'✅ Ticket criado! {ch.mention}', ephemeral=True)
+            # Some sozinha: sem isso a confirmação ficava empilhada no canal do
+            # painel (e virava "#desconhecido" depois que o ticket era apagado).
+            aviso = await interaction.followup.send(f'✅ Ticket criado! {ch.mention}',
+                                                    ephemeral=True, wait=True)
+            try:
+                await aviso.delete(delay=10)
+            except Exception:
+                pass
         except Exception as e:
             # Canal ja existe e esta registrado no banco -- mesmo se o envio da
             # mensagem falhar (rate limit, permissao), avisa quem abriu em vez de

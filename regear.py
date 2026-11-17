@@ -118,12 +118,131 @@ def itens_da_build(items_json, tier, enc):
         if not isinstance(it, dict):
             continue
         iid = it.get('item_id') or ''
-        if iid and partes(iid):
+        certo = corrigir_slot(slot, iid) if iid and partes(iid) else None
+        if certo:
             saida.append({'slot': slot, 'rotulo': rotulo,
-                          'item_id': no_tier(iid, tier, enc), 'nome': it.get('name') or iid})
-        elif it.get('name'):
-            saida.append({'slot': slot, 'rotulo': rotulo, 'item_id': '', 'nome': it['name']})
+                          'item_id': no_tier(certo, tier, enc), 'nome': it.get('name') or certo})
+        elif it.get('name') or iid:
+            # Item de outro tipo no slot (ex.: arma no peito): vai como texto,
+            # pra staff conferir, em vez de comprar a peça errada.
+            saida.append({'slot': slot, 'rotulo': rotulo, 'item_id': '', 'nome': it.get('name') or iid})
     return saida
+
+
+_PECA_DO_SLOT = {'head': 'HEAD', 'armor': 'ARMOR', 'shoes': 'SHOES'}
+
+
+def corrigir_slot(slot, item_id):
+    """O item certo pra este slot, ou None se não der pra saber.
+
+    O importador de planilha do site procurava o nome sem olhar a coluna:
+    "INFERNAL" no peito virava o Capuz Infernal (nome mais curto do set), e o
+    Casaco Infernal sumia da lista de compras (17/11). Peça de armadura no slot
+    errado troca pela do mesmo set; arma/off-hand no slot errado não tem
+    conserto (None)."""
+    p = partes(item_id)
+    if not p:
+        return None
+    tier, base, enc = p
+    tipo = base.split('_', 1)[0]
+    if slot in _PECA_DO_SLOT:
+        quer = _PECA_DO_SLOT[slot]
+        if tipo == quer:
+            return item_id
+        if tipo in _PECA_DO_SLOT.values() and '_' in base:
+            return 'T' + str(tier) + '_' + quer + base[len(tipo):] + ('@' + str(enc) if enc else '')
+        return None
+    if slot == 'main_hand':
+        return item_id if tipo in ('MAIN', '2H') else None
+    if slot == 'off_hand':
+        return item_id if tipo == 'OFF' else None
+    return item_id
+
+
+def corrigir_slots_salvos():
+    """Conserta peças no slot errado já gravadas: nas builds do site e nos
+    pedidos de regear em aberto. Devolve o que mudou (vai pro log)."""
+    rotulos = dict(SLOTS)
+    conn = database.get_connection()
+    try:
+        c = conn.cursor()
+        avisos = []
+        c.execute('SELECT id, name, category, items_json FROM builds')
+        for bid, nome, cat, ij in c.fetchall():
+            try:
+                itens = json.loads(ij or '{}')
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(itens, dict):
+                continue
+            mudou = False
+            for slot, rotulo in SLOTS:
+                it = itens.get(slot)
+                iid = it.get('item_id') if isinstance(it, dict) else None
+                if not iid or not partes(iid):
+                    continue
+                certo = corrigir_slot(slot, iid)
+                if certo == iid:
+                    continue
+                if certo:
+                    it['item_id'] = certo
+                    mudou = True
+                    avisos.append(f"build '{nome}' ({cat}): {rotulo} {iid} -> {certo}")
+                else:
+                    avisos.append(f"build '{nome}' ({cat}): {rotulo} = {iid} não é {rotulo.lower()}, "
+                                  "conferir no site")
+            if mudou:
+                c.execute('UPDATE builds SET items_json=%s WHERE id=%s',
+                          (json.dumps(itens, ensure_ascii=False), bid))
+
+        c.execute("SELECT i.id, p.id, p.username, i.itens_json, i.compra_json FROM regear_itens i "
+                  "JOIN regear_pedidos p ON p.id = i.pedido_id "
+                  "WHERE p.status IN ('montando', 'recusado', 'enviado', 'aprovado', 'pagando')")
+        for item_id, pid, quem, ij, cj in c.fetchall():
+            try:
+                itens = json.loads(ij or '[]')
+                compra = json.loads(cj or '[]')
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(itens, list) or not isinstance(compra, list):
+                continue
+            # calcular_compra gera uma linha por peça com item_id, na mesma
+            # ordem; as peças digitadas resolvidas depois vêm marcadas.
+            com_id = [x for x in itens if isinstance(x, dict) and x.get('item_id')]
+            compra_id = [y for y in compra if isinstance(y, dict) and y.get('item_id')
+                         and not y.get('digitado')]
+            alinhado = len(com_id) == len(compra_id)
+            trocas, mexidas = [], []
+            for n, x in enumerate(com_id):
+                if x.get('slot') not in rotulos or not partes(x['item_id']):
+                    continue
+                certo = corrigir_slot(x['slot'], x['item_id'])
+                if not certo or certo == x['item_id']:
+                    continue
+                trocas.append(f"{rotulos[x['slot']]} {x['item_id']} -> {certo}")
+                x['item_id'] = certo
+                if alinhado:
+                    y = compra_id[n]
+                    py, pc = partes(y['item_id']), partes(certo)
+                    if py and pc:
+                        y['item_id'] = 'T' + str(py[0]) + '_' + pc[1] + ('@' + str(py[2]) if py[2] else '')
+                        mexidas.append(y)
+            if not trocas:
+                continue
+            nomes = nomes_pt([y['item_id'] for y in mexidas])
+            for y in mexidas:
+                y['nome'] = nomes.get(y['item_id']) or y['nome']
+            c.execute('UPDATE regear_itens SET itens_json=%s, compra_json=%s WHERE id=%s',
+                      (json.dumps(itens, ensure_ascii=False), json.dumps(compra, ensure_ascii=False), item_id))
+            avisos.append(f'pedido #{pid} ({quem}): ' + '; '.join(trocas)
+                          + ('' if alinhado else ' (lista de compra não conferida: reabrir o item)'))
+        conn.commit()
+        return avisos
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        database.release(conn)
 
 
 def so_comps_liberadas(builds, salvo):
@@ -761,7 +880,7 @@ def embed_lista(agregado):
     return e
 
 
-async def atualizar_lista(guild):
+async def atualizar_lista(guild, logar=False):
     try:
         ref = await database.run_db(database.get_config, LISTA_KEY)
         if not ref or ':' not in ref:
@@ -775,6 +894,9 @@ async def atualizar_lista(guild):
         except Exception as e:
             print(f'[regear] peças digitadas não resolvidas: {e!r}')   # lista sai mesmo assim
         agregado = agregar(await database.run_db(linhas_aprovadas))
+        if logar:
+            # Cópia da lista no log ao ligar: dá pra conferir sem abrir o Discord.
+            print('[regear] lista de compras:\n' + (embed_lista(agregado).description or ''))
         try:
             msg = await canal.fetch_message(msg_id)
             await msg.edit(embed=embed_lista(agregado))
@@ -1291,6 +1413,11 @@ class RegearCog(commands.Cog):
 
     async def cog_load(self):
         await self._garantir_tabelas()
+        try:
+            for aviso in await database.run_db(corrigir_slots_salvos):
+                print('[regear] slot: ' + aviso)
+        except Exception as e:
+            print(f'[regear] conferência de slots falhou: {e!r}')
         self.pagos_no_site.start()
 
     async def cog_unload(self):
@@ -1341,7 +1468,7 @@ class RegearCog(commands.Cog):
             print(f'[regear] {mudou} item(ns) com peça digitada resolvida(s)')
         if mudou or forcar:
             for g in self.bot.guilds:
-                await atualizar_lista(g)
+                await atualizar_lista(g, logar=forcar)
 
     async def _tickets_parados(self):
         """Pedido aberto e nunca enviado: lembra em 24h, fecha em 48h."""

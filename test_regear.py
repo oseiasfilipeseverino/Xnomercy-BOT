@@ -63,6 +63,83 @@ checar(itens[2]['item_id'] == '' and itens[2]['nome'] == 'Peito qualquer de plac
 checar(R.itens_da_build('lixo', 7, 0) == [] and R.itens_da_build('[1]', 7, 0) == [],
        'items_json quebrado não derruba')
 
+print('\n-- peça no slot errado (importador do site, 17/11)')
+checar(R.corrigir_slot('armor', 'T8_HEAD_LEATHER_HELL@1') == 'T8_ARMOR_LEATHER_HELL@1',
+       'capuz infernal no peito vira casaco infernal')
+checar(R.corrigir_slot('head', 'T8_SHOES_PLATE_KEEPER') == 'T8_HEAD_PLATE_KEEPER', 'bota no elmo vira elmo do set')
+checar(R.corrigir_slot('armor', 'T8_ARMOR_LEATHER_HELL') == 'T8_ARMOR_LEATHER_HELL', 'peça certa fica')
+checar(R.corrigir_slot('armor', 'T8_2H_CLAYMORE') is None, 'arma no peito não tem conserto')
+checar(R.corrigir_slot('main_hand', 'T8_HEAD_PLATE_SET1') is None and
+       R.corrigir_slot('main_hand', 'T8_MAIN_SWORD') == 'T8_MAIN_SWORD' and
+       R.corrigir_slot('off_hand', 'T8_OFF_SHIELD') == 'T8_OFF_SHIELD', 'arma e off-hand conferidas')
+errada = R.itens_da_build(json.dumps({
+    'main_hand': {'item_id': 'T8_ARMOR_PLATE_KEEPER', 'name': 'ARMADURA JUDICANTE'},
+    'head': {'item_id': 'T8_HEAD_LEATHER_HELL', 'name': 'INFERNAL'},
+    'armor': {'item_id': 'T8_HEAD_LEATHER_HELL', 'name': 'INFERNAL'}}), 8, 0)
+checar([i['item_id'] for i in errada] == ['', 'T8_HEAD_LEATHER_HELL', 'T8_ARMOR_LEATHER_HELL'],
+       f'build com capuz no peito pede o casaco; peito na arma vira texto ({errada})')
+
+class _CurFalso:
+    def __init__(self, dados, updates):
+        self.dados, self.updates, self.r = dados, updates, []
+    def execute(self, sql, params=()):
+        if sql.startswith('UPDATE'):
+            self.updates.append((sql.split()[1], params))
+        else:
+            self.r = self.dados['builds' if 'FROM builds' in sql else 'itens']
+    def fetchall(self):
+        return self.r
+
+
+class _ConnFalsa:
+    def __init__(self, dados):
+        self.updates = []
+        self.cur = _CurFalso(dados, self.updates)
+        self.commitou = False
+    def cursor(self):
+        return self.cur
+    def commit(self):
+        self.commitou = True
+    def rollback(self):
+        pass
+
+
+_itens_ped = [{'slot': 'main_hand', 'item_id': 'T8_MAIN_SWORD'},
+              {'slot': 'head', 'item_id': 'T8_HEAD_LEATHER_HELL'},
+              {'slot': 'armor', 'item_id': 'T8_HEAD_LEATHER_HELL'},
+              {'slot': 'shoes', 'item_id': '', 'nome': 'bota digitada'}]
+_compra_ped = [{'item_id': 'T7_MAIN_SWORD@1', 'nome': 'Espada', 'qtd': 1},
+               {'item_id': 'T6_HEAD_LEATHER_HELL@2', 'nome': 'Capuz Infernal', 'qtd': 1},
+               {'item_id': 'T6_HEAD_LEATHER_HELL@2', 'nome': 'Capuz Infernal', 'qtd': 1},
+               {'item_id': 'T8_SHOES_CLOTH_SET1', 'nome': 'Sandálias', 'qtd': 1, 'digitado': True}]
+_conn = _ConnFalsa({
+    'builds': [(1, 'Infernal', 'Clap', json.dumps({'armor': {'item_id': 'T8_HEAD_LEATHER_HELL', 'name': 'INFERNAL'},
+                                                   'head': {'item_id': 'T8_HEAD_LEATHER_HELL'}})),
+               (2, 'Certa', 'Clap', json.dumps({'armor': {'item_id': 'T8_ARMOR_LEATHER_HELL'}})),
+               (3, 'Arma no peito', 'Brawl', json.dumps({'armor': {'item_id': 'T8_2H_CLAYMORE'}}))],
+    'itens': [(10, 5, 'Fulano', json.dumps(_itens_ped), json.dumps(_compra_ped))]})
+_orig = (R.database.get_connection, R.database.release, R.nomes_pt)
+R.database.get_connection = lambda: _conn
+R.database.release = lambda c: None
+R.nomes_pt = lambda ids: {'T6_ARMOR_LEATHER_HELL@2': 'Casaco Infernal do Perito'}
+try:
+    _avisos = R.corrigir_slots_salvos()
+finally:
+    R.database.get_connection, R.database.release, R.nomes_pt = _orig
+_upd_builds = [u for u in _conn.updates if u[0] == 'builds']
+checar(len(_upd_builds) == 1 and json.loads(_upd_builds[0][1][0])['armor']['item_id'] == 'T8_ARMOR_LEATHER_HELL'
+       and json.loads(_upd_builds[0][1][0])['head']['item_id'] == 'T8_HEAD_LEATHER_HELL',
+       f'build salva: só o peito errado é trocado ({_upd_builds})')
+checar(any('Arma no peito' in a and 'conferir no site' in a for a in _avisos),
+       'arma no peito só avisa (não inventa peça)')
+_upd_ped = [u for u in _conn.updates if u[0] == 'regear_itens']
+_compra_nova = json.loads(_upd_ped[0][1][1]) if _upd_ped else []
+checar([c['item_id'] for c in _compra_nova] ==
+       ['T7_MAIN_SWORD@1', 'T6_HEAD_LEATHER_HELL@2', 'T6_ARMOR_LEATHER_HELL@2', 'T8_SHOES_CLOTH_SET1'],
+       f'pedido aberto: só a linha do peito vira casaco, mantendo o tier escolhido ({_compra_nova})')
+checar(_compra_nova and _compra_nova[2]['nome'] == 'Casaco Infernal do Perito', 'nome do casaco atualizado')
+checar(_conn.commitou and any('pedido #5' in a for a in _avisos), 'grava e registra no log')
+
 precos = {'T7_2H_CLAYMORE': 120000, 'T6_2H_CLAYMORE@1': 95000, 'T5_2H_CLAYMORE@2': 140000}
 checar(R.mais_barato('T7_2H_CLAYMORE', 7, 0, precos) == ('T6_2H_CLAYMORE@1', 95000),
        'escolhe o equivalente mais barato')

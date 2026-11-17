@@ -2,8 +2,8 @@
 regear.py — pedido de regear dentro de um ticket.
 
 O ticket funciona como um carrinho. O player adiciona:
-  • builds do site (tabela `builds`) no tier que escolher, cada uma ligada a
-    uma morte dele na API do Albion;
+  • builds do site (tabela `builds`, só as composições liberadas em Gestão →
+    Regear) nos tiers 6.0, 7.0, 8.0 ou 8.1, ou uma build digitada;
   • itens que trasharam, descritos à mão (com print no ticket).
 Depois envia. A staff (permissão `regear`: Líder, Vice Líder e o cargo Regear)
 aprova ou recusa com botão. Aprovado, os itens entram na lista de compras com o
@@ -14,13 +14,15 @@ ticket.
 Só entram arma, off-hand, elmo, peito e bota — capa, bolsa, comida, poção e
 montaria ficam de fora mesmo que a build do site tenha.
 
+Não consulta a API do Albion: o item entra com o aviso "não conferido pela
+API" e a staff confere pelo print que o player manda no ticket.
+
 Regras decididas com a liderança em 16/11/2026.
 """
 
 import asyncio
 import json
 import re
-from datetime import datetime, timedelta, timezone
 
 import discord
 import requests
@@ -34,22 +36,12 @@ from discord_utils import SEM_MENCOES, cortar, log_channel
 from permissions import has_permission
 from view_utils import LoggedView
 
-GAMEINFO = 'https://gameinfo.albiononline.com/api/gameinfo'
 AODP = 'https://west.albion-online-data.com/api/v2/stats/prices/'
 CIDADE = 'Lymhurst'
 LOCAL_BAU = 'no baú da ilha da guild em Lymhurst'
-BRT = timezone(timedelta(hours=-3))
 
 SLOTS = (('main_hand', 'Arma'), ('off_hand', 'Off-hand'), ('head', 'Elmo'),
          ('armor', 'Peito'), ('shoes', 'Bota'))
-EQUIP_DA_MORTE = {'main_hand': 'MainHand', 'off_hand': 'OffHand', 'head': 'Head',
-                  'armor': 'Armor', 'shoes': 'Shoes'}
-
-# Morte conta como "de evento" se aconteceu entre 30 min antes e 6 h depois do
-# horário de um evento em que o player estava inscrito.
-EVENTO_ANTES = timedelta(minutes=30)
-EVENTO_DEPOIS = timedelta(hours=6)
-MORTES_DIAS = 3          # só oferece mortes dos últimos 3 dias
 LISTA_KEY = 'regear_lista_msg'   # "canal:mensagem" da lista de compras
 
 EDITAVEL = ('montando', 'recusado')
@@ -58,6 +50,10 @@ EDITAVEL = ('montando', 'recusado')
 # (Gestão → Regear), que grava a lista em guild_config. Antes de alguém salvar
 # lá, valem as composições cujo nome contém estas palavras — igual ao site.
 COMPS_KEY = 'regear_composicoes'
+
+# Tiers de build com regear (liderança, 16/11/2026). Trash continua livre.
+TIERS_BUILD = ((6, 0), (7, 0), (8, 0), (8, 1))
+TIERS_BUILD_TXT = '6.0, 7.0, 8.0 ou 8.1'
 COMPS_PADRAO = ('clap', 'brawl')
 
 
@@ -182,37 +178,6 @@ def agregar(linhas):
             if quem not in a['quem']:
                 a['quem'].append(quem)
     return sorted(soma.values(), key=lambda a: (-(a['preco'] or 0) * a['qtd'], a['nome']))
-
-
-def morte_em_evento(quando, horarios):
-    """A morte caiu na janela de algum evento em que o player estava?"""
-    return any(h - EVENTO_ANTES <= quando <= h + EVENTO_DEPOIS for h in horarios)
-
-
-def quando_da_morte(morte):
-    ts = (morte.get('TimeStamp') or '')[:19]
-    try:
-        return datetime.fromisoformat(ts).replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
-
-
-def comparar_com_morte(itens, equipamento, tier, enc):
-    """Avisos para a staff quando o que ele usava não bate com o pedido."""
-    avisos = []
-    for it in itens:
-        if not it['item_id']:
-            continue
-        usado = ((equipamento or {}).get(EQUIP_DA_MORTE[it['slot']]) or {}).get('Type') or ''
-        pu, pp = partes(usado), partes(it['item_id'])
-        if not pu:
-            avisos.append(it['rotulo'] + ': não estava equipado na morte')
-        elif pu[1] != pp[1]:
-            avisos.append(it['rotulo'] + ': morreu com outro item (' + usado + ')')
-        elif pu[0] + pu[2] < tier + enc:
-            avisos.append(it['rotulo'] + ': morreu com ' + fmt_tier(pu[0], pu[2])
-                          + ', pediu ' + fmt_tier(tier, enc))
-    return avisos
 
 
 def botoes_do_status(status):
@@ -440,28 +405,6 @@ def nomes_pt(ids):
     return {u: n for u, n in rows if n}
 
 
-def mortes_usadas(ids):
-    ids = sorted({int(i) for i in ids if i})
-    if not ids:
-        return set()
-    return {r[0] for r in _q('SELECT morte_id FROM regear_itens WHERE morte_id IN ('
-                             + _lista_ph(len(ids)) + ')', tuple(ids), fetch='all')}
-
-
-def horarios_de_evento(discord_id):
-    rows = _q('SELECT se.scheduled_time FROM scheduled_events se '
-              'JOIN slot_assignments sa ON sa.scheduled_event_id = se.id '
-              'WHERE sa.discord_id=%s ORDER BY se.id DESC LIMIT 60', (str(discord_id),), fetch='all')
-    saida = []
-    for (t,) in rows:
-        try:
-            dt = datetime.fromisoformat(str(t))
-        except ValueError:
-            continue
-        saida.append(dt if dt.tzinfo else dt.replace(tzinfo=BRT))
-    return saida
-
-
 # ── Rede (Albion) ─────────────────────────────────────────────────────────────
 
 def _get_json(url, params=None):
@@ -474,22 +417,6 @@ def _get_json(url, params=None):
         except (requests.RequestException, ValueError) as e:
             print('[regear] ' + url[:80] + ': ' + repr(e))
     return None
-
-
-def buscar_mortes(nick):
-    """(mortes, erro). erro é texto quando não deu pra consultar."""
-    from albion_register import _search_player
-    if not nick:
-        return [], 'não achei seu nick do Albion no apelido do Discord'
-    jogador = _search_player(nick)
-    if jogador is None:
-        return [], 'a API do Albion não respondeu'
-    if jogador is False:
-        return [], 'não achei o personagem **' + nick + '** na API do Albion'
-    mortes = _get_json(GAMEINFO + '/players/' + jogador['Id'] + '/deaths')
-    if mortes is None:
-        return [], 'a API do Albion não respondeu'
-    return mortes, None
 
 
 def precos_lymhurst(ids):
@@ -830,36 +757,50 @@ class EscolherTier(LoggedView):
     def __init__(self, pid, build_id):
         super().__init__(timeout=600)
         self.pid, self.build_id = pid, build_id
-        opts = [discord.SelectOption(label=fmt_tier(t, e), value=fmt_tier(t, e))
-                for t in range(4, 9) for e in range(0, 5)]
-        sel = discord.ui.Select(placeholder='Tier (ex.: 7.0)', options=opts)
+        opts = [discord.SelectOption(label=fmt_tier(t, e), value=fmt_tier(t, e)) for t, e in TIERS_BUILD]
+        sel = discord.ui.Select(placeholder='Tier da build', options=opts)
         sel.callback = self._escolheu
         self.add_item(sel)
 
     async def _escolheu(self, interaction):
         tier, enc = (int(x) for x in interaction.data['values'][0].split('.'))
         await interaction.response.defer()
-        await interaction.edit_original_response(content='🔎 Buscando suas mortes na API do Albion…', view=None)
-        texto, view = await tela_de_mortes(interaction.user, self.pid, tier, enc, build_id=self.build_id)
-        await interaction.edit_original_response(content=texto, view=view)
+        await interaction.edit_original_response(content='⏳ Adicionando…', view=None)
+        texto = await adicionar_build(interaction, self.pid, tier, enc, build_id=self.build_id)
+        await interaction.edit_original_response(content=texto)
 
 
-async def tela_de_mortes(user, pid, tier, enc, build_id=None, livre=None):
-    """Texto + seletor das mortes livres do player nos últimos dias."""
-    from albion_register import _nome_albion_do_apelido
-    apelido = getattr(user, 'nick', None) or user.display_name
-    mortes, erro = await asyncio.to_thread(buscar_mortes, _nome_albion_do_apelido(apelido))
-    limite = datetime.now(timezone.utc) - timedelta(days=MORTES_DIAS)
-    recentes = [m for m in mortes if m.get('EventId') and (quando_da_morte(m) or limite) > limite]
-    usadas = await database.run_db(mortes_usadas, [m['EventId'] for m in recentes])
-    livres = [m for m in recentes if int(m['EventId']) not in usadas][:24]
-    texto = '**Último passo:** em qual morte você perdeu essa build?'
-    if erro:
-        texto += '\n⚠️ Não consegui ver suas mortes: ' + erro + '.'
-    elif not livres:
-        texto += (f'\nℹ️ Nenhuma morte livre nos últimos {MORTES_DIAS} dias. A API às vezes demora '
-                  'pra mostrar mortes recentes.')
-    return texto, EscolherMorte(pid, build_id, tier, enc, livres, livre=livre)
+# Não consulta a API do Albion: ela fica lenta por minutos e o player ficava
+# preso em "Buscando suas mortes…" (16/11/2026). O item entra direto e a staff
+# vê o aviso abaixo — confere pelo print antes de aprovar.
+NAO_CONFERIDO = 'Não conferido pela API — conferir pelo print'
+
+
+async def adicionar_build(deferida, pid, tier, enc, build_id=None, livre=None):
+    """Põe a build no pedido (quem chama já deferiu). Devolve o texto pra mostrar a quem pediu."""
+    avisos = [NAO_CONFERIDO]
+    if livre:
+        # Build fora das composições: vai como texto, a staff compra lendo.
+        nome = 'digitada'
+        itens = [{'slot': 'livre', 'rotulo': 'Build', 'item_id': '', 'nome': livre}]
+        avisos.append('build digitada pelo player — conferir os itens')
+    else:
+        build = await database.run_db(get_build, build_id)
+        if not build:
+            return '❌ Essa build não existe mais no site.'
+        nome = build['name']
+        itens = itens_da_build(build['items_json'], tier, enc)
+        if not itens:
+            return '❌ Essa build não tem arma, off-hand, elmo, peito nem bota cadastrados no site.'
+        nomes = await database.run_db(nomes_pt, [i['item_id'] for i in itens])
+        for i in itens:
+            i['nome'] = nomes.get(i['item_id']) or i['nome']
+    r = await database.run_db(add_item, pid, 'build', 'Build ' + nome, tier, enc, 1, None, '', avisos, itens)
+    if r == 'travado':
+        return '❌ O pedido já foi enviado; não dá pra mudar agora.'
+    await atualizar_carrinho(deferida.channel, pid)
+    return (f'✅ **{nome} {fmt_tier(tier, enc)}** adicionada. '
+            '**Mande o print da morte aqui no ticket** pra staff conferir.')
 
 
 class BuildLivreModal(discord.ui.Modal, title='Build digitada'):
@@ -867,7 +808,7 @@ class BuildLivreModal(discord.ui.Modal, title='Build digitada'):
         label='Build (arma, off-hand, elmo, peito, bota)', style=discord.TextStyle.paragraph,
         placeholder='Ex.: Martelo Pesado / Escudo / Elmo de Guardião / Armadura de Guardião / Botas de Soldado',
         max_length=400)
-    tier = discord.ui.TextInput(label='Tier', placeholder='Ex.: 7.0', max_length=5)
+    tier = discord.ui.TextInput(label='Tier (6.0, 7.0, 8.0 ou 8.1)', placeholder='Ex.: 7.0', max_length=5)
 
     def __init__(self, pid):
         super().__init__()
@@ -875,84 +816,17 @@ class BuildLivreModal(discord.ui.Modal, title='Build digitada'):
 
     async def on_submit(self, interaction):
         tt = parse_tier(self.tier.value)
-        if not tt:
-            await interaction.response.send_message('❌ Tier inválido. Use algo como 7.0 ou 6.1.', ephemeral=True)
+        if tt not in TIERS_BUILD:
+            await interaction.response.send_message(
+                '❌ Tier de build tem que ser ' + TIERS_BUILD_TXT + '.', ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
-        texto, view = await tela_de_mortes(interaction.user, self.pid, tt[0], tt[1],
-                                           livre=self.build.value.strip())
-        await interaction.followup.send(texto, view=view, ephemeral=True)
-
-
-class EscolherMorte(LoggedView):
-    def __init__(self, pid, build_id, tier, enc, mortes, livre=None):
-        super().__init__(timeout=600)
-        self.pid, self.build_id, self.tier, self.enc = pid, build_id, tier, enc
-        self.livre = livre
-        self.mortes = {str(m['EventId']): m for m in mortes}
-        opts = []
-        for m in mortes:
-            q = quando_da_morte(m)
-            quando = q.astimezone(BRT).strftime('%d/%m %H:%M') if q else '?'
-            arma = (((m.get('Victim') or {}).get('Equipment') or {}).get('MainHand') or {}).get('Type') or '—'
-            killer = (m.get('Killer') or {}).get('Name') or '?'
-            opts.append(discord.SelectOption(label=cortar(quando + ' — morto por ' + killer, 100),
-                                             description=cortar(arma, 100), value=str(m['EventId'])))
-        opts.append(discord.SelectOption(label='A morte não aparece aqui', value='nenhuma',
-                                         description='A staff confere pelo print/killboard'))
-        sel = discord.ui.Select(placeholder='Morte', options=opts)
-        sel.callback = self._escolheu
-        self.add_item(sel)
-
-    async def _escolheu(self, interaction):
-        valor = interaction.data['values'][0]
-        await interaction.response.defer()
-        await interaction.edit_original_response(content='⏳ Adicionando…', view=None)
-        avisos, morte_id, info = [], None, ''
-        if self.livre:
-            # Build fora das composições: vai como texto, a staff compra lendo.
-            build = {'name': 'digitada'}
-            itens = [{'slot': 'livre', 'rotulo': 'Build', 'item_id': '', 'nome': self.livre}]
-            avisos.append('build digitada pelo player — conferir os itens')
-        else:
-            build = await database.run_db(get_build, self.build_id)
-            if not build:
-                await interaction.edit_original_response(content='❌ Essa build não existe mais no site.')
-                return
-            itens = itens_da_build(build['items_json'], self.tier, self.enc)
-            if not itens:
-                await interaction.edit_original_response(
-                    content='❌ Essa build não tem arma, off-hand, elmo, peito nem bota cadastrados no site.')
-                return
-            nomes = await database.run_db(nomes_pt, [i['item_id'] for i in itens])
-            for i in itens:
-                i['nome'] = nomes.get(i['item_id']) or i['nome']
-        morte = self.mortes.get(valor)
-        if morte:
-            morte_id = int(morte['EventId'])
-            q = quando_da_morte(morte)
-            killer = (morte.get('Killer') or {}).get('Name') or '?'
-            quando = q.astimezone(BRT).strftime('%d/%m %H:%M') if q else '?'
-            info = (f'morte {quando} · morto por {killer} · '
-                    f'[killboard](https://albiononline.com/killboard/kill/{morte_id}?server=live_us)')
-            avisos += comparar_com_morte(itens, (morte.get('Victim') or {}).get('Equipment'),
-                                         self.tier, self.enc)
-            horarios = await database.run_db(horarios_de_evento, interaction.user.id)
-            if q and not morte_em_evento(q, horarios):
-                avisos.append('morte fora de evento da guild')
-        else:
-            avisos.append('sem morte vinculada — conferir no print/killboard')
-        r = await database.run_db(add_item, self.pid, 'build', 'Build ' + build['name'],
-                                  self.tier, self.enc, 1, morte_id, info, avisos, itens)
-        if r is None:
-            await interaction.edit_original_response(content='❌ Essa morte já foi usada em outro pedido de regear.')
+        erro = checar_acesso('build', await database.run_db(get_pedido, self.pid), interaction.user)
+        if erro:
+            await interaction.followup.send(erro, ephemeral=True)
             return
-        if r == 'travado':
-            await interaction.edit_original_response(content='❌ O pedido já foi enviado; não dá pra mudar agora.')
-            return
-        await interaction.edit_original_response(
-            content=f'✅ **{build["name"]} {fmt_tier(self.tier, self.enc)}** adicionada.')
-        await atualizar_carrinho(interaction.channel, self.pid)
+        texto = await adicionar_build(interaction, self.pid, tt[0], tt[1], livre=self.build.value.strip())
+        await interaction.followup.send(texto, ephemeral=True)
 
 
 class TrashModal(discord.ui.Modal, title='Item trashado'):

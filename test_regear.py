@@ -13,7 +13,6 @@ import json
 import pathlib
 import sys
 import types
-from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 falhas = []
@@ -80,17 +79,6 @@ ag = R.agregar([(json.dumps([{'item_id': 'A', 'nome': 'a', 'tier': '6.1', 'preco
                              {'item_id': 'B', 'nome': 'b', 'tier': '7.0', 'preco': 99, 'qtd': 1}]), 'Ciclano')])
 checar(ag[0]['item_id'] == 'B' and ag[1]['qtd'] == 3 and ag[1]['quem'] == ['Fulano', 'Ciclano'],
        'lista de compras soma itens iguais e guarda quem pediu')
-
-h = datetime(2026, 11, 15, 21, 0, tzinfo=R.BRT)
-checar(R.morte_em_evento(h + timedelta(hours=1), [h]), 'morte durante o evento conta')
-checar(not R.morte_em_evento(h + timedelta(hours=7), [h]), 'morte 7h depois é fora de evento')
-checar(not R.morte_em_evento(h, []), 'sem evento inscrito é fora de evento')
-
-eq = {'MainHand': {'Type': 'T6_2H_CLAYMORE'}, 'Head': {'Type': 'T7_HEAD_LEATHER_SET1'}}
-av = R.comparar_com_morte(itens, eq, 7, 0)
-checar(any('Arma: morreu com 6.0' in a for a in av), 'avisa quando morreu com tier menor')
-checar(any('Elmo: morreu com outro item' in a for a in av), 'avisa quando o item era outro')
-checar(not any('Peito' in a for a in av), 'slot de nome livre não gera aviso')
 
 bs = [{'category': 'Clap Kite Comp + Golem'}, {'category': 'BRAWL Comp'}, {'category': 'Gank Solo'},
       {'category': 'Ava Raid'}]
@@ -238,22 +226,48 @@ async def rodar():
     checar(isinstance(i.response.modal, R.RecusarModal) and not chamadas,
            'Recusar abre o formulário antes de qualquer consulta')
 
-    # Build digitada ("Outra"): entra como texto, com aviso pra staff conferir.
+    # Build digitada ("Outra"): entra direto, sem API, com os avisos pra staff.
+    estado.update(get_pedido=dict(pedido, status='montando'), add_item=10)
     chamadas.clear()
-    estado['add_item'] = 10
     i = inter(uid=111, staff=False)
-    i.data = {'values': ['nenhuma']}
-    i.edit_original_response = lambda **kw: asyncio.sleep(0)
-    v = R.EscolherMorte(5, None, 7, 0, [], livre='Martelo / Escudo / Elmo')
-    await v._escolheu(i)
+    m = R.BuildLivreModal(5)
+    m.build._value, m.tier._value = 'Martelo / Escudo / Elmo', '7.0'
+    await m.on_submit(i)
     add = [a for n, a in chamadas if n == 'add_item']
     checar(add and add[0][9][0]['nome'] == 'Martelo / Escudo / Elmo' and add[0][9][0]['item_id'] == '',
            'build digitada entra como texto')
-    checar(add and any('build digitada' in a for a in add[0][8]), 'e com aviso pra staff conferir')
-    compra = R.calcular_compra({'tier': 7, 'enc': 0, 'qtd': 1, 'itens_json': json.dumps(add[0][9])}, {}, {}) \
-        if add else []
+    checar(add and 'build digitada pelo player — conferir os itens' in add[0][8],
+           'com aviso de build digitada')
+    checar(add and R.NAO_CONFERIDO in add[0][8], 'e com aviso de não conferido pela API')
+    checar(add and add[0][6] is None, 'sem morte vinculada (não consulta a API)')
+    compra = R.calcular_compra({'tier': 7, 'enc': 0, 'qtd': 1, 'itens_json': json.dumps(add[0][9])}, {}, {})         if add else []
     checar(compra and compra[0]['nome'] == 'Martelo / Escudo / Elmo' and compra[0]['tier'] == '7.0',
            'na lista de compras aparece o texto digitado no tier pedido')
+
+    # Build do site: escolher o tier já adiciona, sem passar pela API.
+    R.get_build = lambda bid: {'id': bid, 'name': 'Clap Martelo', 'items_json': build}
+    chamadas.clear()
+    i = inter(uid=111)
+    i.data = {'values': ['8.1']}
+    respostas = []
+    i.edit_original_response = lambda **kw: asyncio.sleep(0, respostas.append(kw.get('content')))
+    await R.EscolherTier(5, 1)._escolheu(i)
+    add = [a for n, a in chamadas if n == 'add_item']
+    checar(add and add[0][3:5] == (8, 1) and add[0][9][0]['item_id'] == 'T8_2H_CLAYMORE@1',
+           'tier 8.1 adiciona a build convertida pro 8.1')
+    checar(add and R.NAO_CONFERIDO in add[0][8], 'build do site também leva o aviso de não conferido')
+    checar(any('Mande o print' in (r or '') for r in respostas), 'e pede o print da morte')
+
+    # Tier de build: só 6.0, 7.0, 8.0 e 8.1.
+    v = R.EscolherTier(5, 1)
+    checar([o.value for o in v.children[0].options] == ['6.0', '7.0', '8.0', '8.1'],
+           'build só oferece os tiers 6.0, 7.0, 8.0 e 8.1')
+    i = inter(uid=111)
+    m = R.BuildLivreModal(5)
+    m.build._value, m.tier._value = 'Martelo', '7.1'
+    await m.on_submit(i)
+    checar(any('6.0, 7.0, 8.0 ou 8.1' in (x or '') for x in i.response.msgs),
+           'build digitada recusa tier fora da lista (7.1)')
 
     # Pedido vazio não envia.
     estado.update(get_itens=[])

@@ -1415,6 +1415,15 @@ class RegearCog(commands.Cog):
 
     async def cog_load(self):
         await self._garantir_tabelas()
+        try:   # TEMPORÁRIO (17/11): pedido do DrumnKiller
+            for r in await database.run_db(lambda: _q(
+                    "SELECT p.id, p.status, p.username, p.channel_id, p.created_at, p.aprovado_por, "
+                    "i.id, i.tipo, i.titulo, i.tier, i.enc, i.itens_json, i.compra_json "
+                    "FROM regear_pedidos p LEFT JOIN regear_itens i ON i.pedido_id = p.id "
+                    "WHERE p.username ILIKE %s ORDER BY p.id, i.id", ('%drumn%',), fetch='all')):
+                print('[regear] diag: ' + ' | '.join(str(x) for x in r))
+        except Exception as e:
+            print(f'[regear] diag falhou: {e!r}')
         try:
             for aviso in await database.run_db(corrigir_slots_salvos):
                 print('[regear] slot: ' + aviso)

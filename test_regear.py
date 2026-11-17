@@ -140,6 +140,9 @@ checar([c['item_id'] for c in _compra_nova] ==
 checar(_compra_nova and _compra_nova[2]['nome'] == 'Casaco Infernal do Perito', 'nome do casaco atualizado')
 checar(_conn.commitou and any('pedido #5' in a for a in _avisos), 'grava e registra no log')
 
+checar('capuz de assassino' in R.variacoes_de_busca('capuz de assasino') and
+       'elmo de soldado' in R.variacoes_de_busca('elmo de solsado'), 'erros de digitação dos tickets (assasino, solsado)')
+
 precos = {'T7_2H_CLAYMORE': 120000, 'T6_2H_CLAYMORE@1': 95000, 'T5_2H_CLAYMORE@2': 140000}
 checar(R.mais_barato('T7_2H_CLAYMORE', 7, 0, precos) == ('T6_2H_CLAYMORE@1', 95000),
        'escolhe o equivalente mais barato')

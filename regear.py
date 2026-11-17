@@ -159,21 +159,6 @@ def corrigir_slot(slot, item_id):
     return item_id
 
 
-def _diag_casaco():
-    """TEMPORÁRIO: pedidos dos últimos 7 dias que citam o Casaco Inferial."""
-    rows = _q("SELECT p.id, p.status, p.username, p.channel_id, p.created_at, i.id, i.tipo, i.titulo, "
-              "i.tier, i.enc, i.itens_json, i.compra_json FROM regear_pedidos p "
-              "LEFT JOIN regear_itens i ON i.pedido_id = p.id "
-              "WHERE p.created_at > NOW() - INTERVAL '7 days' ORDER BY p.id, i.id", fetch='all')
-    saida = []
-    for r in rows:
-        txt = ((r[7] or '') + ' ' + (r[10] or '') + ' ' + (r[11] or '')).lower()
-        if 'inferial' in txt or 'infernal' in txt or 'leather_hell' in txt or 'casaco' in txt:
-            saida.append(f'pedido #{r[0]} status={r[1]} quem={r[2]} canal={r[3]} criado={r[4]} | '
-                         f'item #{r[5]} {r[6]} "{r[7]}" {r[8]}.{r[9]} | itens={r[10]} | compra={r[11]}')
-    return saida
-
-
 def corrigir_slots_salvos():
     """Conserta peças no slot errado já gravadas: nas builds do site e nos
     pedidos de regear em aberto. Devolve o que mudou (vai pro log)."""
@@ -326,7 +311,9 @@ def resolver_entrada(c, buscar):
 
 # Apelidos da guild -> nome do jogo, e palavras que o player escreve mas não
 # são parte do nome do item ("BUILD ARVORE: ARMA").
-APELIDOS = {'arvore': 'guarda-bosques', 'árvore': 'guarda-bosques'}
+APELIDOS = {'arvore': 'guarda-bosques', 'árvore': 'guarda-bosques',
+            # Erros de digitação vistos nos tickets (17/11).
+            'assasino': 'assassino', 'solsado': 'soldado'}
 PALAVRAS_SOLTAS = {'build', 'arma', 'armas', 'com', 'healer', 'tank', 'dps', 'suporte'}
 
 
@@ -1428,11 +1415,6 @@ class RegearCog(commands.Cog):
 
     async def cog_load(self):
         await self._garantir_tabelas()
-        try:   # TEMPORÁRIO (17/11): achar o 4º Casaco Inferial que não está na lista
-            for linha in await database.run_db(_diag_casaco):
-                print('[regear] diag: ' + linha)
-        except Exception as e:
-            print(f'[regear] diag falhou: {e!r}')
         try:
             for aviso in await database.run_db(corrigir_slots_salvos):
                 print('[regear] slot: ' + aviso)

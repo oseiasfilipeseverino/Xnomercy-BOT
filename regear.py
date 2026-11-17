@@ -190,11 +190,35 @@ def resolver_entrada(c, buscar):
     return saida
 
 
+# Apelidos da guild -> nome do jogo, e palavras que o player escreve mas não
+# são parte do nome do item ("BUILD ARVORE: ARMA").
+APELIDOS = {'arvore': 'guarda-bosques', 'árvore': 'guarda-bosques'}
+PALAVRAS_SOLTAS = {'build', 'arma', 'armas', 'com', 'healer', 'tank', 'dps', 'suporte'}
+
+
+def variacoes_de_busca(texto):
+    """Formas de procurar a peça, da mais fiel pra mais solta.
+
+    O jogo usa o singular onde o player escreve plural: "Quebra-reino",
+    "Olho dos Segredos" (17/11: "Quebra Reinos" e "olhos dos segredos" não
+    achavam nada)."""
+    palavras = [APELIDOS.get(w.lower(), w) for w in re.split(r'[\s:;]+', texto or '')
+                if w and w.lower() not in PALAVRAS_SOLTAS]
+    base = ' '.join(palavras)
+    singular = ' '.join(w[:-1] if len(w) > 3 and w.lower().endswith('s') else w for w in palavras)
+    saida = []
+    for v in (texto, base, singular):
+        if v and v.strip() and v not in saida:
+            saida.append(v)
+    return saida
+
+
 def _buscar_no_catalogo(texto):
     from market import _search_items
-    for r in _search_items(texto, 10):
-        if partes(r[0]):
-            return r[0]
+    for tentativa in variacoes_de_busca(texto):
+        for r in _search_items(tentativa, 10):
+            if partes(r[0]):
+                return r[0]
     return None
 
 
@@ -711,8 +735,15 @@ async def atualizar_lista(guild):
         except Exception as e:
             print(f'[regear] peças digitadas não resolvidas: {e!r}')   # lista sai mesmo assim
         agregado = agregar(await database.run_db(linhas_aprovadas))
-        msg = await canal.fetch_message(msg_id)
-        await msg.edit(embed=embed_lista(agregado))
+        try:
+            msg = await canal.fetch_message(msg_id)
+            await msg.edit(embed=embed_lista(agregado))
+        except discord.NotFound:
+            # Apagaram a mensagem da lista: posta outra no mesmo canal em vez
+            # de parar de atualizar em silêncio (17/11).
+            nova = await canal.send(embed=embed_lista(agregado))
+            await database.run_db(database.set_config, LISTA_KEY, f'{canal.id}:{nova.id}')
+            print(f'[regear] lista de compras tinha sido apagada; postei outra em #{canal.name}')
     except Exception as e:
         print(f'[regear] lista de compras não atualizada: {e!r}')
 
@@ -1203,7 +1234,9 @@ class RegearCog(commands.Cog):
         lista os pedidos cujo ticket foi fechado ou apagado."""
         await self._limpar_orfaos()
         if self.pagos_no_site.current_loop % 15 == 0:     # a cada ~5 min
-            await self._resolver_digitados()
+            # Na 1ª volta (boot) refaz a lista mesmo sem mudança: ela pode ter
+            # ficado velha enquanto o bot estava fora.
+            await self._resolver_digitados(forcar=self.pagos_no_site.current_loop == 0)
         try:
             pedidos = await database.run_db(concluir_pagos_pelo_site)
         except Exception as e:
@@ -1219,7 +1252,7 @@ class RegearCog(commands.Cog):
             except Exception as e:
                 print(f'[regear] aviso do pedido #{pedido["id"]} pago no site: {e!r}')
 
-    async def _resolver_digitados(self):
+    async def _resolver_digitados(self, forcar=False):
         """Peças digitadas de pedidos aprovados -> itens do catálogo.
 
         Rodava só quando a lista era atualizada (aprovar/pagar): pedido aprovado
@@ -1236,6 +1269,7 @@ class RegearCog(commands.Cog):
             print('[regear] não achei no catálogo: ' + ' | '.join(novos[:30]))
         if mudou:
             print(f'[regear] {mudou} item(ns) com peça digitada resolvida(s)')
+        if mudou or forcar:
             for g in self.bot.guilds:
                 await atualizar_lista(g)
 

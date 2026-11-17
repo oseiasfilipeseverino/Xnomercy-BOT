@@ -148,6 +148,12 @@ ped = [(1, '100', True), (2, '200', False), (3, '300', True)]
 checar(R.orfaos(ped, lambda c: c != '300') == ['200', '300'],
        'pedido de ticket fechado ou de canal apagado sai da lista; ticket aberto fica')
 
+checar(R.variacoes_de_busca('Quebra Reinos') == ['Quebra Reinos', 'Quebra Reino'],
+       'tenta no singular: "Quebra Reinos" -> "Quebra Reino" (jogo: Quebra-reino)')
+checar(R.variacoes_de_busca('olhos dos segredos')[-1] == 'olho dos segredo',
+       'singular nas palavras longas (acha "Olho dos Segredos")')
+checar(R.variacoes_de_busca('BUILD ARVORE: ARMA')[1] == 'guarda-bosques', 'apelido árvore e sem "build"/"arma"')
+
 bs = [{'category': 'Clap Kite Comp + Golem'}, {'category': 'BRAWL Comp'}, {'category': 'Gank Solo'},
       {'category': 'Ava Raid'}]
 checar([b['category'] for b in R.so_comps_liberadas(bs, '')] == ['Clap Kite Comp + Golem', 'BRAWL Comp'],

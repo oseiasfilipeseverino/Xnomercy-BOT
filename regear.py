@@ -500,6 +500,22 @@ def cancelar_por_canal(channel_id):
         database.release(conn)
 
 
+def pedidos_em_aberto():
+    """[(id, channel_id, ticket_aberto)] dos pedidos que ainda não foram pagos."""
+    return _q("SELECT p.id, p.channel_id, EXISTS (SELECT 1 FROM tickets t WHERE t.channel_id = p.channel_id "
+              "AND t.status = 'open') FROM regear_pedidos p "
+              "WHERE p.status IN ('montando','enviado','recusado','aprovado')", fetch='all') or []
+
+
+def orfaos(pedidos, canal_existe):
+    """Canais de pedido cujo ticket já foi fechado ou apagado.
+
+    Fechar pelo botão já cancelava; isto pega o resto — canal apagado na mão
+    ou pelo /arquivar, e ticket fechado antes do cancelamento existir — que
+    ficava 'aprovado' na lista de compras pra sempre (17/11)."""
+    return sorted({canal for _, canal, aberto in pedidos if not aberto or not canal_existe(canal)})
+
+
 def linhas_aprovadas():
     return _q("SELECT i.compra_json, p.username FROM regear_itens i "
               "JOIN regear_pedidos p ON p.id=i.pedido_id WHERE p.status='aprovado' "
@@ -846,20 +862,20 @@ async def avisar_pago(channel, guild, pedido, quem):
     pid = pedido['id']
     await atualizar_carrinho(channel, pid)
     await atualizar_lista(guild)
-    from tickets import CloseTicketView
     await channel.send(
         f'💰 <@{pedido["discord_id"]}>, seu regear está **{LOCAL_BAU}**! '
-        'Depois de pegar, feche o ticket no botão abaixo.',
-        view=CloseTicketView(),
+        'O ticket foi fechado — o histórico continua aqui.',
         allowed_mentions=discord.AllowedMentions(users=True, everyone=False, roles=False))
     membro = guild.get_member(int(pedido['discord_id']))
     if membro:
         try:
-            await membro.send('💰 Seu regear foi pago e está ' + LOCAL_BAU + '. '
-                              'Depois de pegar, feche o ticket: ' + channel.mention)
+            await membro.send('💰 Seu regear foi pago e está ' + LOCAL_BAU + '.')
         except Exception:
             pass   # DM fechada: o aviso no ticket já basta
     await log_channel(guild, f'💰 Regear #{pid} de **{pedido["username"]}** pago por **{quem}**.')
+    # Pago fecha o ticket sozinho (liderança, 17/11): sem esperar o player.
+    from tickets import arquivar_ticket
+    await arquivar_ticket(channel, guild)
 
 
 # ── Telas temporárias (só quem clicou vê) ─────────────────────────────────────
@@ -1171,7 +1187,9 @@ class RegearCog(commands.Cog):
 
     @tasks.loop(seconds=20)
     async def pagos_no_site(self):
-        """Conclui no Discord o que foi marcado como pago no site."""
+        """Conclui no Discord o que foi marcado como pago no site, e tira da
+        lista os pedidos cujo ticket foi fechado ou apagado."""
+        await self._limpar_orfaos()
         try:
             pedidos = await database.run_db(concluir_pagos_pelo_site)
         except Exception as e:
@@ -1186,6 +1204,31 @@ class RegearCog(commands.Cog):
                 await avisar_pago(canal, canal.guild, pedido, (pedido['pago_por'] or 'site') + ' (site)')
             except Exception as e:
                 print(f'[regear] aviso do pedido #{pedido["id"]} pago no site: {e!r}')
+
+    async def _limpar_orfaos(self):
+        try:
+            pedidos = await database.run_db(pedidos_em_aberto)
+            sumidos = set()
+            for _, canal, aberto in pedidos:
+                if not aberto or not str(canal).isdigit() or self.bot.get_channel(int(canal)):
+                    continue
+                # Fora do cache não é prova de que sumiu (reconexão): confirma.
+                try:
+                    await self.bot.fetch_channel(int(canal))
+                except discord.NotFound:
+                    sumidos.add(canal)
+                except Exception:
+                    pass   # na dúvida, não cancela
+            mudou = False
+            for canal in orfaos(pedidos, lambda c: c not in sumidos):
+                if await database.run_db(cancelar_por_canal, canal):
+                    mudou = True
+                    print(f'[regear] pedido do canal {canal} cancelado: ticket fechado ou apagado')
+            if mudou:
+                for g in self.bot.guilds:
+                    await atualizar_lista(g)
+        except Exception as e:
+            print(f'[regear] limpeza de pedidos sem ticket: {e!r}')
 
     @pagos_no_site.before_loop
     async def _esperar_bot(self):

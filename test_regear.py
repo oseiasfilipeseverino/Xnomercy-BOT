@@ -141,6 +141,10 @@ ag = R.agregar([(json.dumps(R.resolver_entrada(
                   'tier': '7.0', 'preco': 0, 'qtd': 1}]), 'B')])
 checar(len(ag) == 1 and ag[0]['qtd'] == 2, '5.2 digitado soma junto com o 7.0 do mesmo item')
 
+ped = [(1, '100', True), (2, '200', False), (3, '300', True)]
+checar(R.orfaos(ped, lambda c: c != '300') == ['200', '300'],
+       'pedido de ticket fechado ou de canal apagado sai da lista; ticket aberto fica')
+
 bs = [{'category': 'Clap Kite Comp + Golem'}, {'category': 'BRAWL Comp'}, {'category': 'Gank Solo'},
       {'category': 'Ava Raid'}]
 checar([b['category'] for b in R.so_comps_liberadas(bs, '')] == ['Clap Kite Comp + Golem', 'BRAWL Comp'],
@@ -222,6 +226,14 @@ item_db = {'id': 1, 'pedido_id': 5, 'tipo': 'build', 'titulo': 'Build X', 'tier'
            'compra_json': '[]'}
 
 
+import tickets as _tickets
+arquivados = []
+async def _arquivar(channel, guild, mensagem_botao=None):
+    arquivados.append(channel)
+    return True
+_tickets.arquivar_ticket = _arquivar
+
+
 async def rodar():
     # Player tentando aprovar o próprio pedido.
     estado.update(get_pedido=dict(pedido), get_itens=[item_db], aprovar=True, nomes_pt={}, get_config='')
@@ -263,6 +275,7 @@ async def rodar():
     checar(any(n == 'pagar' for n, _ in chamadas), 'staff marca como pago')
     checar(any('<@111>' in (m or '') and 'baú da ilha da guild em Lymhurst' in (m or '')
                for m in i.channel.msgs), 'menciona o player e diz onde está o regear')
+    checar(arquivados and arquivados[-1] is i.channel, 'Pago fecha o ticket sozinho')
 
     # Outro membro mexendo no carrinho de alguém.
     estado.update(get_pedido=dict(pedido, status='montando'))
@@ -384,11 +397,14 @@ async def rodar():
     estado['concluir_pagos_pelo_site'] = [dict(pedido, status='pago', pago_por='Pagador')]
     canal = Canal()
     canal.guild = types.SimpleNamespace(get_member=lambda x: None, get_channel=lambda x: None)
+    R.pedidos_em_aberto = fake('pedidos_em_aberto')
+    estado['pedidos_em_aberto'] = []
     cog = R.RegearCog.__new__(R.RegearCog)
     cog.bot = types.SimpleNamespace(get_channel=lambda cid: canal if cid == 9 else None)
     await R.RegearCog.pagos_no_site.coro(cog)
     checar(any('<@111>' in (m or '') and 'baú da ilha da guild em Lymhurst' in (m or '') for m in canal.msgs),
            'pago no site: o bot avisa o player no ticket')
+    checar(arquivados and arquivados[-1] is canal, 'pago no site também fecha o ticket')
     estado['concluir_pagos_pelo_site'] = []
     canal.msgs.clear()
     await R.RegearCog.pagos_no_site.coro(cog)

@@ -151,6 +151,124 @@ class ReopenTicketView(LoggedView):
         await interaction.followup.send('✅ Ticket reaberto.', ephemeral=True)
 
 
+async def arquivar_ticket(channel, guild, mensagem_botao=None):
+    """Fecha o ticket e move pro arquivo, sem nunca apagar. True se moveu.
+
+    Usado pelo botão Fechar e pelo regear, que fecha sozinho ao ser pago.
+    `mensagem_botao` é a mensagem do Fechar, que vira Reabrir; sem ela, o
+    Reabrir vai numa mensagem nova."""
+    try:
+        # Tipo real vem do banco (registrado na criação do ticket) — só cai pro
+        # nome do canal se por algum motivo não achar o registro (canal antigo,
+        # criado antes dessa coluna existir). Antes dependia só do nome, que
+        # quebrava se alguém renomeasse o canal manualmente.
+        ch_name = (await database.run_db(database.get_ticket_type_by_channel, str(channel.id))
+                   or channel.name).lower()
+        if 'recrutamento' in ch_name:
+            ticket_type = 'recrutamento'
+            archive_key = 'category_tickets_recrutamento_finalizado'
+            archive_name = '🎯 Tickets Recrutamento Finalizado'
+        elif 'suporte' in ch_name:
+            ticket_type = 'suporte'
+            archive_key = 'category_tickets_suporte_finalizado'
+            archive_name = '🆘 Tickets Suporte Finalizado'
+        elif 'regear' in ch_name:
+            ticket_type = 'regear'
+            archive_key = 'category_tickets_regear_finalizado'
+            archive_name = '🛡️ Tickets Regear Finalizado'
+        else:
+            ticket_type = 'saque'
+            archive_key = 'category_tickets_saque_finalizado'
+            archive_name = '💰 Tickets Saldo Finalizado'
+ 
+        await database.run_db(database.close_ticket_db, str(channel.id))
+        if ticket_type == 'regear':
+            # Fechado antes de pagar: o pedido sai da lista de compras.
+            import regear
+            await regear.ao_fechar_ticket(channel, guild)
+
+        # Busca ou cria categoria de arquivo
+        cat_id = await database.run_db(database.get_config, archive_key)
+        category = guild.get_channel(int(cat_id)) if cat_id else None
+ 
+        if not category:
+            category = discord.utils.get(guild.categories, name=archive_name)
+        if not category:
+            category = await guild.create_category(archive_name)
+            await database.run_db(database.set_config, archive_key, str(category.id))
+            # Dois tickets fechados quase juntos passavam os dois pelas
+            # checagens acima e criavam duas categorias com o mesmo nome.
+            # Reconsulta depois de gravar: quem perdeu a corrida adota a
+            # categoria do outro e apaga a sua, que está vazia.
+            vencedora = await database.run_db(database.get_config, archive_key)
+            if vencedora and vencedora != str(category.id):
+                perdedora, category = category, guild.get_channel(int(vencedora)) or category
+                try:
+                    await perdedora.delete(reason='Categoria de arquivo duplicada')
+                except Exception:
+                    pass
+ 
+        # Troca o Fechar pelo Reabrir. Antes o botao so ficava desabilitado e
+        # o canal ficava trancado pra sempre — fechar por engano exigia um
+        # Lider ajustando permissao na mao.
+        if mensagem_botao is not None:
+            await mensagem_botao.edit(view=ReopenTicketView())
+        else:
+            # Fechado pelo bot (regear pago): o botão Reabrir vai numa
+            # mensagem nova, pra staff ainda poder voltar atrás.
+            await channel.send('🔒 Ticket arquivado.', view=ReopenTicketView())
+ 
+        # Move para arquivo
+        overwrites = dict(channel.overwrites)
+        overwrites[guild.default_role] = discord.PermissionOverwrite(read_messages=False)
+        # Apenas quem já tinha acesso mantém, mas sem poder escrever
+        for target, ow in overwrites.items():
+            if target != guild.me:
+                overwrites[target] = discord.PermissionOverwrite(
+                    read_messages=ow.read_messages,
+                    send_messages=False
+                )
+ 
+        # Se a categoria de arquivo estiver nos 50, usa a continuação.
+        # O `or category` no fim importa: sem espaço em nenhuma das 11
+        # continuações a função devolve None, e `edit(category=None)` tira o
+        # canal de QUALQUER categoria — o ticket arquivado reaparece solto no
+        # topo da lista de canais, que é o oposto de arquivar. O caminho de
+        # reabrir já tratava isso; este ficou de fora.
+        category = await categoria_com_espaco(guild, category, archive_name) or category
+
+        # Só prefixa o ✅ uma vez: arquivar → reabrir → arquivar empilhava
+        # "✅│✅│…" e o nome de canal tem teto de 100 caracteres no Discord.
+        nome_atual = channel.name
+        novo_nome = nome_atual if nome_atual.startswith('✅') else f'✅│{nome_atual}'
+
+        await channel.edit(
+            category=category,
+            overwrites=overwrites,
+            name=novo_nome[:100]
+        )
+        return True
+    except Exception as e:
+        # NUNCA apagar. Antes este except fazia `channel.delete()`,
+        # e foi o que aconteceu 6 vezes em 13-14/08: a categoria de arquivo
+        # bateu os 50 canais do Discord, o edit() estourou com 400, e o
+        # histórico do ticket foi DESTRUÍDO. A pessoa via "Movendo para o
+        # arquivo..." e o canal sumia; o único rastro era esta linha de log.
+        #
+        # Canal aberto no lugar errado é um incômodo. Canal apagado é perda
+        # de dado que ninguém pede de volta porque ninguém sabe que existiu.
+        print(f'[tickets] falha ao arquivar canal {channel.id}: {e!r}',
+              flush=True)
+        try:
+            await channel.send(
+                '⚠️ O ticket foi marcado como **fechado**, mas não consegui movê-lo '
+                'para o arquivo — o canal continua aqui, com o histórico intacto.\n'
+                'Avise a liderança: pode ser que as categorias de arquivo estejam '
+                'lotadas (o Discord permite 50 canais por categoria).')
+        except Exception:
+            pass
+
+
 class CloseTicketView(LoggedView):
     def __init__(self):
         super().__init__(timeout=None)
@@ -161,112 +279,8 @@ class CloseTicketView(LoggedView):
         # no canal ve que o ticket foi encerrado). Fechar mexe em categoria,
         # permissoes e nome do canal — passa fácil dos 3s do Discord.
         await interaction.response.defer()
-        try:
-            # Tipo real vem do banco (registrado na criação do ticket) — só cai pro
-            # nome do canal se por algum motivo não achar o registro (canal antigo,
-            # criado antes dessa coluna existir). Antes dependia só do nome, que
-            # quebrava se alguém renomeasse o canal manualmente.
-            ch_name = (await database.run_db(database.get_ticket_type_by_channel, str(interaction.channel.id))
-                       or interaction.channel.name).lower()
-            if 'recrutamento' in ch_name:
-                ticket_type = 'recrutamento'
-                archive_key = 'category_tickets_recrutamento_finalizado'
-                archive_name = '🎯 Tickets Recrutamento Finalizado'
-            elif 'suporte' in ch_name:
-                ticket_type = 'suporte'
-                archive_key = 'category_tickets_suporte_finalizado'
-                archive_name = '🆘 Tickets Suporte Finalizado'
-            elif 'regear' in ch_name:
-                ticket_type = 'regear'
-                archive_key = 'category_tickets_regear_finalizado'
-                archive_name = '🛡️ Tickets Regear Finalizado'
-            else:
-                ticket_type = 'saque'
-                archive_key = 'category_tickets_saque_finalizado'
-                archive_name = '💰 Tickets Saldo Finalizado'
- 
-            await interaction.followup.send('🔒 Ticket encerrado! Movendo para o arquivo...')
-            await database.run_db(database.close_ticket_db, str(interaction.channel.id))
-            if ticket_type == 'regear':
-                # Fechado antes de pagar: o pedido sai da lista de compras.
-                import regear
-                await regear.ao_fechar_ticket(interaction.channel, interaction.guild)
-
-            # Busca ou cria categoria de arquivo
-            guild = interaction.guild
-            cat_id = await database.run_db(database.get_config, archive_key)
-            category = guild.get_channel(int(cat_id)) if cat_id else None
- 
-            if not category:
-                category = discord.utils.get(guild.categories, name=archive_name)
-            if not category:
-                category = await guild.create_category(archive_name)
-                await database.run_db(database.set_config, archive_key, str(category.id))
-                # Dois tickets fechados quase juntos passavam os dois pelas
-                # checagens acima e criavam duas categorias com o mesmo nome.
-                # Reconsulta depois de gravar: quem perdeu a corrida adota a
-                # categoria do outro e apaga a sua, que está vazia.
-                vencedora = await database.run_db(database.get_config, archive_key)
-                if vencedora and vencedora != str(category.id):
-                    perdedora, category = category, guild.get_channel(int(vencedora)) or category
-                    try:
-                        await perdedora.delete(reason='Categoria de arquivo duplicada')
-                    except Exception:
-                        pass
- 
-            # Troca o Fechar pelo Reabrir. Antes o botao so ficava desabilitado e
-            # o canal ficava trancado pra sempre — fechar por engano exigia um
-            # Lider ajustando permissao na mao.
-            await interaction.message.edit(view=ReopenTicketView())
- 
-            # Move para arquivo
-            overwrites = dict(interaction.channel.overwrites)
-            overwrites[guild.default_role] = discord.PermissionOverwrite(read_messages=False)
-            # Apenas quem já tinha acesso mantém, mas sem poder escrever
-            for target, ow in overwrites.items():
-                if target != guild.me:
-                    overwrites[target] = discord.PermissionOverwrite(
-                        read_messages=ow.read_messages,
-                        send_messages=False
-                    )
- 
-            # Se a categoria de arquivo estiver nos 50, usa a continuação.
-            # O `or category` no fim importa: sem espaço em nenhuma das 11
-            # continuações a função devolve None, e `edit(category=None)` tira o
-            # canal de QUALQUER categoria — o ticket arquivado reaparece solto no
-            # topo da lista de canais, que é o oposto de arquivar. O caminho de
-            # reabrir já tratava isso; este ficou de fora.
-            category = await categoria_com_espaco(guild, category, archive_name) or category
-
-            # Só prefixa o ✅ uma vez: arquivar → reabrir → arquivar empilhava
-            # "✅│✅│…" e o nome de canal tem teto de 100 caracteres no Discord.
-            nome_atual = interaction.channel.name
-            novo_nome = nome_atual if nome_atual.startswith('✅') else f'✅│{nome_atual}'
-
-            await interaction.channel.edit(
-                category=category,
-                overwrites=overwrites,
-                name=novo_nome[:100]
-            )
-        except Exception as e:
-            # NUNCA apagar. Antes este except fazia `interaction.channel.delete()`,
-            # e foi o que aconteceu 6 vezes em 13-14/08: a categoria de arquivo
-            # bateu os 50 canais do Discord, o edit() estourou com 400, e o
-            # histórico do ticket foi DESTRUÍDO. A pessoa via "Movendo para o
-            # arquivo..." e o canal sumia; o único rastro era esta linha de log.
-            #
-            # Canal aberto no lugar errado é um incômodo. Canal apagado é perda
-            # de dado que ninguém pede de volta porque ninguém sabe que existiu.
-            print(f'[tickets] falha ao arquivar canal {interaction.channel.id}: {e!r}',
-                  flush=True)
-            try:
-                await interaction.followup.send(
-                    '⚠️ O ticket foi marcado como **fechado**, mas não consegui movê-lo '
-                    'para o arquivo — o canal continua aqui, com o histórico intacto.\n'
-                    'Avise a liderança: pode ser que as categorias de arquivo estejam '
-                    'lotadas (o Discord permite 50 canais por categoria).')
-            except Exception:
-                pass
+        await interaction.followup.send('🔒 Ticket encerrado! Movendo para o arquivo...')
+        await arquivar_ticket(interaction.channel, interaction.guild, interaction.message)
  
  
 class TicketButton(discord.ui.Button):

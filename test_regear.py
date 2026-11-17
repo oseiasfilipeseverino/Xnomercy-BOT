@@ -132,7 +132,10 @@ checar([x['item_id'] for x in r[:2]] == ['T4_2H_KNUCKLES_SET1@3', 'T5_ARMOR_LEAT
 checar(r[2]['item_id'] == '' and r[2]['nome'] == 'elmo de solsado 5.2', 'erro de digitação continua digitado')
 checar(all('não entra no regear' in x['nome'] and not x['item_id'] for x in r[3:]),
        'capa, cavalo e bolsa ficam marcados como "não entra no regear"')
-checar(all(x.get('tentado') for x in r if not x['item_id']), 'o que não virou item não é procurado de novo')
+checar(R.precisa_resolver(r[2]) and not any(R.precisa_resolver(x) for x in r[3:]),
+       'peça não achada é procurada de novo; capa/cavalo/bolsa não')
+checar(R.precisa_resolver({'item_id': '', 'nome': 'Quebra Reinos', 'tentado': True}),
+       'peça marcada pela versão antiga volta a ser procurada')
 r = R.resolver_entrada({'item_id': '', 'nome': 'Build de ARCO longo', 'tier': '7.0', 'preco': 0, 'qtd': 1}, buscar)
 checar(r[0]['item_id'] == 'T7_2H_LONGBOW', '"Build de ARCO longo" acha o Arco Longo no tier da build')
 ag = R.agregar([(json.dumps(R.resolver_entrada(

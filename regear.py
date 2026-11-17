@@ -168,7 +168,8 @@ def resolver_entrada(c, buscar):
 
     `buscar(texto)` devolve o unique_name do catálogo ou None. O que não acha
     continua digitado (marcado `tentado`, pra não procurar de novo a cada
-    atualização da lista)."""
+    atualização da lista). Capa, montaria etc. são marcadas `tentado`: não mudam.
+    O que não achou fica sem marca e é procurado de novo na próxima vez."""
     p0 = re.match(r'^(\d)\.(\d)$', c.get('tier') or '')
     tier, enc = (int(p0.group(1)), int(p0.group(2))) if p0 else (7, 0)
     saida = []
@@ -182,8 +183,10 @@ def resolver_entrada(c, buscar):
             saida.append({'item_id': no_tier(uid, t, e), 'nome': texto, 'tier': fmt_tier(t, e),
                           'preco': 0, 'qtd': c['qtd'], 'digitado': True})
         else:
+            # Sem 'tentado': uma falha do catálogo (busca que dá erro devolve
+            # vazio) não pode prender a peça como digitada pra sempre.
             saida.append({'item_id': '', 'nome': bruto, 'tier': fmt_tier(t, e),
-                          'preco': 0, 'qtd': c['qtd'], 'tentado': True})
+                          'preco': 0, 'qtd': c['qtd']})
     return saida
 
 
@@ -195,35 +198,43 @@ def _buscar_no_catalogo(texto):
     return None
 
 
+def precisa_resolver(x):
+    """Entrada digitada que ainda vale procurar. Só 'não entra no regear' é
+    definitivo — o 'tentado' antigo (de antes de 17/11) prendia peça boa."""
+    return not x.get('item_id') and not (x.get('tentado') and 'não entra no regear' in (x.get('nome') or ''))
+
+
 def resolver_digitados():
     """Procura no catálogo as peças digitadas dos pedidos aprovados e grava.
 
-    Roda a cada atualização da lista; só mexe em entrada ainda não tentada."""
+    Roda ao atualizar a lista e a cada ~5 min. Devolve (itens mudados, peças
+    que o catálogo não achou)."""
     conn = database.get_connection()
     try:
         c = conn.cursor()
         c.execute("SELECT i.id, i.compra_json FROM regear_itens i JOIN regear_pedidos p "
                   "ON p.id = i.pedido_id WHERE p.status = 'aprovado'")
-        mudou = 0
+        mudou, nao_achados = 0, []
         for iid, compra_json in c.fetchall():
             compra = json.loads(compra_json or '[]')
-            if not any(not x.get('item_id') and not x.get('tentado') for x in compra):
+            if not any(precisa_resolver(x) for x in compra):
                 continue
             nova = []
             for x in compra:
-                nova += resolver_entrada(x, _buscar_no_catalogo) \
-                    if not x.get('item_id') and not x.get('tentado') else [x]
+                nova += resolver_entrada(x, _buscar_no_catalogo) if precisa_resolver(x) else [x]
             ids = [x['item_id'] for x in nova if x.get('digitado')]
             if ids:
                 nomes = nomes_pt(ids)
                 for x in nova:
                     if x.get('digitado'):
                         x['nome'] = nomes.get(x['item_id']) or x['nome']
-            c.execute("UPDATE regear_itens SET compra_json=%s WHERE id=%s",
-                      (json.dumps(nova, ensure_ascii=False), iid))
-            mudou += 1
+            nao_achados += [x['nome'] for x in nova if precisa_resolver(x)]
+            if nova != compra:
+                c.execute("UPDATE regear_itens SET compra_json=%s WHERE id=%s",
+                          (json.dumps(nova, ensure_ascii=False), iid))
+                mudou += 1
         conn.commit()
-        return mudou
+        return mudou, nao_achados
     except Exception:
         conn.rollback()
         raise
@@ -1168,6 +1179,7 @@ class RegearCog(commands.Cog):
         bot.add_dynamic_items(RegearBotao)
 
         self._tabelas_ok = False
+        self._ja_logados = set()
 
     async def _garantir_tabelas(self):
         if self._tabelas_ok:
@@ -1190,6 +1202,8 @@ class RegearCog(commands.Cog):
         """Conclui no Discord o que foi marcado como pago no site, e tira da
         lista os pedidos cujo ticket foi fechado ou apagado."""
         await self._limpar_orfaos()
+        if self.pagos_no_site.current_loop % 15 == 0:     # a cada ~5 min
+            await self._resolver_digitados()
         try:
             pedidos = await database.run_db(concluir_pagos_pelo_site)
         except Exception as e:
@@ -1204,6 +1218,26 @@ class RegearCog(commands.Cog):
                 await avisar_pago(canal, canal.guild, pedido, (pedido['pago_por'] or 'site') + ' (site)')
             except Exception as e:
                 print(f'[regear] aviso do pedido #{pedido["id"]} pago no site: {e!r}')
+
+    async def _resolver_digitados(self):
+        """Peças digitadas de pedidos aprovados -> itens do catálogo.
+
+        Rodava só quando a lista era atualizada (aprovar/pagar): pedido aprovado
+        antes dessa versão, ou numa hora em que o catálogo falhou, ficava como
+        digitado até a próxima aprovação (K4RD14K0, 17/11)."""
+        try:
+            mudou, nao_achados = await database.run_db(resolver_digitados)
+        except Exception as e:
+            print(f'[regear] peças digitadas: {e!r}')
+            return
+        novos = [n for n in nao_achados if n not in self._ja_logados]
+        if novos:
+            self._ja_logados.update(novos)
+            print('[regear] não achei no catálogo: ' + ' | '.join(novos[:30]))
+        if mudou:
+            print(f'[regear] {mudou} item(ns) com peça digitada resolvida(s)')
+            for g in self.bot.guilds:
+                await atualizar_lista(g)
 
     async def _limpar_orfaos(self):
         try:

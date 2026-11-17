@@ -212,10 +212,18 @@ class Resp:
 
 
 class Canal:
-    def __init__(self): self.msgs, self.mention = [], '#ticket'
+    def __init__(self): self.msgs, self.mention, self.historico = [], '#ticket', []
     async def send(self, m=None, **kw): self.msgs.append(m)
+    async def history(self, limit=100):
+        for m in self.historico[:limit]:
+            yield m
     async def fetch_message(self, i):
         return types.SimpleNamespace(edit=lambda **kw: asyncio.sleep(0))
+
+
+def mensagem(bot=False, anexo=None):
+    a = [types.SimpleNamespace(content_type=anexo[0], filename=anexo[1])] if anexo else []
+    return types.SimpleNamespace(author=types.SimpleNamespace(bot=bot), attachments=a)
 
 
 def inter(uid=111, staff=False):
@@ -261,7 +269,8 @@ async def rodar():
     compra_gravada = ap[0][2][1] if ap else []
     checar(compra_gravada and compra_gravada[0]['item_id'] == 'T6_2H_CLAYMORE@1',
            'aprovação grava o 6.1 (mais barato) na lista')
-    checar(any('aprovado' in (m or '') for m in i.channel.msgs), 'avisa no ticket que aprovou')
+    checar(any('<@111>' in (m or '') and 'aprovado' in (m or '') for m in i.channel.msgs),
+           'aprovação menciona o player no ticket')
 
     # Outra pessoa já decidiu (aprovar devolve False): não anuncia aprovação.
     chamadas.clear()
@@ -293,11 +302,22 @@ async def rodar():
     await R.RegearBotao('enviar', 5).callback(i)
     checar(not any(n == 'enviar' for n, _ in chamadas), 'outro membro não mexe no pedido alheio')
 
-    # Dono envia.
+    # Sem print no ticket não envia (só texto, ou só imagem do próprio bot).
     chamadas.clear()
     i = inter(uid=111, staff=False)
+    i.channel.historico = [mensagem(), mensagem(bot=True, anexo=('image/png', 'x.png'))]
     await R.RegearBotao('enviar', 5).callback(i)
-    checar(any(n == 'enviar' for n, _ in chamadas), 'dono envia o pedido')
+    checar(not any(n == 'enviar' for n, _ in chamadas), 'sem print o pedido não é enviado')
+    checar(any('print da morte' in (m or '') for m in i.response.msgs), 'e o player é avisado pra mandar')
+
+    # Dono envia, com print.
+    chamadas.clear()
+    i = inter(uid=111, staff=False)
+    i.channel.historico = [mensagem(anexo=('image/jpeg', 'morte.jpg'))]
+    await R.RegearBotao('enviar', 5).callback(i)
+    checar(any(n == 'enviar' for n, _ in chamadas), 'dono envia o pedido com o print')
+    i.channel.historico = [mensagem(anexo=(None, 'Screenshot_1.PNG'))]
+    checar(await R.tem_print(i.channel), 'imagem sem content_type vale pela extensão')
 
     # Formulário de trash enviado por outro membro: não entra no pedido.
     R.add_item = fake('add_item')
@@ -418,6 +438,23 @@ async def rodar():
     canal.msgs.clear()
     await R.RegearCog.pagos_no_site.coro(cog)
     checar(not canal.msgs, 'nada pago no site: o laço não manda nada')
+
+    # Ticket parado: lembra em 24h, fecha em 48h.
+    R.pedidos_parados = fake('pedidos_parados')
+    R.marcar_lembrete = fake('marcar_lembrete')
+    estado.update(pedidos_parados=[(5, '9', '111', False)], marcar_lembrete=True)
+    canal.msgs.clear(); arquivados.clear()
+    await cog._tickets_parados()
+    checar(any('<@111>' in (m or '') and 'não foi enviado' in (m or '') for m in canal.msgs) and not arquivados,
+           'pedido parado 24h: lembra o player e não fecha')
+    estado['marcar_lembrete'] = False
+    canal.msgs.clear()
+    await cog._tickets_parados()
+    checar(not canal.msgs, 'já lembrado: não lembra de novo')
+    estado['pedidos_parados'] = [(5, '9', '111', True)]
+    await cog._tickets_parados()
+    checar(arquivados and arquivados[-1] is canal and any('fechado' in (m or '') for m in canal.msgs),
+           'pedido parado 48h: avisa e fecha o ticket')
 
     # Pedido vazio não envia.
     estado.update(get_itens=[])

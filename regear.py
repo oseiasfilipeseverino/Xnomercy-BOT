@@ -365,6 +365,21 @@ def _lista_ph(n):
     return ','.join(['%s'] * n)
 
 
+MSG_TICKET = ('Monte seu pedido na mensagem abaixo:\n\n'
+              '**➕ Build** — morreu com a build da guild: escolha a composição, a classe, a build '
+              'e o tier (6.0, 7.0, 8.0 ou 8.1). Build fora da lista: **Outra — digitar a build**.\n'
+              '**➕ Item trashado** — só algumas peças: escreva o item, o tier e a quantidade.\n'
+              '📸 **Mande o print da morte aqui no ticket** — sem print o pedido não é enviado.\n'
+              '**📨 Enviar pedido** — quando terminar.\n\n'
+              'Entram só arma, off-hand, elmo, peito e bota. Quando o regear for pago, você é '
+              'avisado e o ticket fecha sozinho.')
+MSG_TICKET_16_11 = ('Monte seu pedido na mensagem abaixo:\n\n'
+                    '**➕ Build** — morreu com a build da guild: escolha a build, o tier e a morte.\n'
+                    '**➕ Item trashado** — só algumas peças: descreva o item e **mande o print aqui**.\n'
+                    '**📨 Enviar pedido** — quando terminar.\n\n'
+                    'Entram só arma, off-hand, elmo, peito e bota.')
+
+
 def init_tabelas():
     conn = database.get_connection()
     try:
@@ -388,17 +403,21 @@ def init_tabelas():
         c.execute('CREATE UNIQUE INDEX IF NOT EXISTS regear_morte_unica '
                   'ON regear_itens (morte_id) WHERE morte_id IS NOT NULL')
         c.execute('CREATE INDEX IF NOT EXISTS idx_regear_itens_pedido ON regear_itens (pedido_id)')
+        # Quando o player foi lembrado de enviar (ticket parado — ver pedidos_parados).
+        c.execute("SELECT 1 FROM information_schema.columns WHERE table_name='regear_pedidos' "
+                  "AND column_name='lembrete_em'")
+        if not c.fetchone():
+            c.execute('ALTER TABLE regear_pedidos ADD COLUMN IF NOT EXISTS lembrete_em TIMESTAMP')
         for cargo in ('Líder', 'Vice Líder', 'Regear'):
             c.execute('INSERT INTO permissions (permission, role_name) VALUES (%s, %s) '
                       'ON CONFLICT DO NOTHING', ('regear', cargo))
         c.execute('INSERT INTO ticket_messages (ticket_type, title, message) VALUES (%s, %s, %s) '
                   'ON CONFLICT (ticket_type) DO NOTHING',
-                  ('regear', '🛡️ Regear XnoMercy',
-                   'Monte seu pedido na mensagem abaixo:\n\n'
-                   '**➕ Build** — morreu com a build da guild: escolha a build, o tier e a morte.\n'
-                   '**➕ Item trashado** — só algumas peças: descreva o item e **mande o print aqui**.\n'
-                   '**📨 Enviar pedido** — quando terminar.\n\n'
-                   'Entram só arma, off-hand, elmo, peito e bota.'))
+                  ('regear', '🛡️ Regear XnoMercy', MSG_TICKET))
+        # O texto de 16/11 ainda pedia "a morte" (etapa que saiu). Troca só se
+        # ninguém editou — texto mudado no site/comando fica como está.
+        c.execute('UPDATE ticket_messages SET message=%s WHERE ticket_type=%s AND message=%s',
+                  (MSG_TICKET, 'regear', MSG_TICKET_16_11))
         conn.commit()
     finally:
         database.release(conn)
@@ -549,6 +568,27 @@ def orfaos(pedidos, canal_existe):
     ou pelo /arquivar, e ticket fechado antes do cancelamento existir — que
     ficava 'aprovado' na lista de compras pra sempre (17/11)."""
     return sorted({canal for _, canal, aberto in pedidos if not aberto or not canal_existe(canal)})
+
+
+LEMBRAR_HORAS = 24    # pedido nunca enviado: lembra o player
+FECHAR_HORAS = 48     # e fecha o ticket (17/11: ticket esquecido prendia o player)
+
+
+def pedidos_parados():
+    """[(id, channel_id, discord_id, fechar)] dos pedidos montados e nunca enviados
+    há mais de LEMBRAR_HORAS, que ainda não foram lembrados ou já passaram do
+    prazo de fechar."""
+    rows = _q("SELECT id, channel_id, discord_id, "
+              "created_at < NOW() - make_interval(hours => %s) FROM regear_pedidos "
+              "WHERE status='montando' AND created_at < NOW() - make_interval(hours => %s) "
+              "AND (lembrete_em IS NULL OR created_at < NOW() - make_interval(hours => %s))",
+              (FECHAR_HORAS, LEMBRAR_HORAS, FECHAR_HORAS), fetch='all') or []
+    return [(r[0], r[1], r[2], bool(r[3])) for r in rows]
+
+
+def marcar_lembrete(pid):
+    return _q('UPDATE regear_pedidos SET lembrete_em=NOW() WHERE id=%s AND lembrete_em IS NULL',
+              (pid,), fetch='rowcount', commit=True) > 0
 
 
 def linhas_aprovadas():
@@ -779,6 +819,19 @@ async def ao_fechar_ticket(channel, guild):
 
 # ── Botões persistentes do pedido ─────────────────────────────────────────────
 
+async def tem_print(channel, limite=200):
+    """Alguém (fora o bot) já mandou imagem no ticket?"""
+    async for m in channel.history(limit=limite):
+        if getattr(m.author, 'bot', False):
+            continue
+        for a in m.attachments:
+            tipo = (a.content_type or '').lower()
+            nome = (a.filename or '').lower()
+            if tipo.startswith('image/') or nome.endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif')):
+                return True
+    return False
+
+
 def e_staff(member):
     return has_permission(member, 'regear')
 
@@ -870,6 +923,12 @@ class RegearBotao(discord.ui.DynamicItem[discord.ui.Button],
         if not itens:
             await deferida.followup.send('❌ Adicione pelo menos um item antes de enviar.', ephemeral=True)
             return
+        # Sem a API, o print é a única prova da morte: sem ele não envia.
+        if not await tem_print(deferida.channel):
+            await deferida.followup.send(
+                '📸 Antes de enviar, **mande o print da morte aqui no ticket** (a imagem que mostra '
+                'o que você estava usando). Depois clique em Enviar de novo.', ephemeral=True)
+            return
         if await database.run_db(enviar, self.pid):
             await deferida.channel.send('📨 Pedido enviado. A staff de regear vai analisar.',
                                            allowed_mentions=SEM_MENCOES)
@@ -884,9 +943,18 @@ class RegearBotao(discord.ui.DynamicItem[discord.ui.Button],
             return
         await atualizar_carrinho(deferida.channel, self.pid)
         await atualizar_lista(deferida.guild)
+        # Avisa o player (antes só recusa e pagamento chamavam ele).
         await deferida.channel.send(
-            '✅ Pedido aprovado por **' + deferida.user.display_name + '** — foi pra lista de compras.',
-            allowed_mentions=SEM_MENCOES)
+            f'✅ <@{pedido["discord_id"]}>, seu regear foi **aprovado** por '
+            f'**{deferida.user.display_name}**! Assim que o pagador colocar no baú, você é avisado.',
+            allowed_mentions=discord.AllowedMentions(users=True, everyone=False, roles=False))
+        membro = deferida.guild.get_member(int(pedido['discord_id']))
+        if membro:
+            try:
+                await membro.send('✅ Seu regear foi aprovado! Assim que estiver no baú da ilha, '
+                                  'você recebe outro aviso.')
+            except Exception:
+                pass   # DM fechada: o aviso no ticket basta
         await log_channel(deferida.guild,
                           f'🛡️ Regear #{self.pid} de **{pedido["username"]}** aprovado por '
                           f'**{deferida.user.display_name}**.')
@@ -1233,6 +1301,8 @@ class RegearCog(commands.Cog):
         """Conclui no Discord o que foi marcado como pago no site, e tira da
         lista os pedidos cujo ticket foi fechado ou apagado."""
         await self._limpar_orfaos()
+        if self.pagos_no_site.current_loop % 30 == 0:     # a cada ~10 min
+            await self._tickets_parados()
         if self.pagos_no_site.current_loop % 15 == 0:     # a cada ~5 min
             # Na 1ª volta (boot) refaz a lista mesmo sem mudança: ela pode ter
             # ficado velha enquanto o bot estava fora.
@@ -1272,6 +1342,35 @@ class RegearCog(commands.Cog):
         if mudou or forcar:
             for g in self.bot.guilds:
                 await atualizar_lista(g)
+
+    async def _tickets_parados(self):
+        """Pedido aberto e nunca enviado: lembra em 24h, fecha em 48h."""
+        try:
+            parados = await database.run_db(pedidos_parados)
+        except Exception as e:
+            print(f'[regear] tickets parados: {e!r}')
+            return
+        from tickets import arquivar_ticket
+        for pid, canal_id, discord_id, fechar in parados:
+            canal = self.bot.get_channel(int(canal_id)) if str(canal_id).isdigit() else None
+            if canal is None:
+                continue   # canal sumiu: a limpeza de órfãos cuida
+            try:
+                if fechar:
+                    await canal.send(f'⏰ <@{discord_id}>, o pedido ficou {FECHAR_HORAS}h sem ser enviado e '
+                                     'o ticket foi fechado. Se ainda precisar do regear, abra outro.',
+                                     allowed_mentions=discord.AllowedMentions(users=True, everyone=False,
+                                                                              roles=False))
+                    await arquivar_ticket(canal, canal.guild)
+                    print(f'[regear] pedido #{pid} fechado por {FECHAR_HORAS}h sem envio')
+                elif await database.run_db(marcar_lembrete, pid):
+                    await canal.send(f'⏰ <@{discord_id}>, seu pedido de regear ainda **não foi enviado**. '
+                                     'Mande o print e clique em **📨 Enviar pedido**. Sem envio, o ticket '
+                                     f'fecha sozinho em {FECHAR_HORAS - LEMBRAR_HORAS}h.',
+                                     allowed_mentions=discord.AllowedMentions(users=True, everyone=False,
+                                                                              roles=False))
+            except Exception as e:
+                print(f'[regear] ticket parado #{pid}: {e!r}')
 
     async def _limpar_orfaos(self):
         try:

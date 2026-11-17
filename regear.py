@@ -43,6 +43,7 @@ LOCAL_BAU = 'no baú da ilha da guild em Lymhurst'
 SLOTS = (('main_hand', 'Arma'), ('off_hand', 'Off-hand'), ('head', 'Elmo'),
          ('armor', 'Peito'), ('shoes', 'Bota'))
 LISTA_KEY = 'regear_lista_msg'   # "canal:mensagem" da lista de compras
+EDITADO_KEY = 'regear_lista_editada'   # hora da última edição de pedido no site
 
 EDITAVEL = ('montando', 'recusado')
 
@@ -710,6 +711,11 @@ def pedidos_parados():
 def marcar_lembrete(pid):
     return _q('UPDATE regear_pedidos SET lembrete_em=NOW() WHERE id=%s AND lembrete_em IS NULL',
               (pid,), fetch='rowcount', commit=True) > 0
+
+
+def pedidos_aprovados():
+    return _q("SELECT id, channel_id FROM regear_pedidos WHERE status='aprovado' ORDER BY id",
+              fetch='all') or []
 
 
 def linhas_aprovadas():
@@ -1403,6 +1409,7 @@ class RegearCog(commands.Cog):
 
         self._tabelas_ok = False
         self._ja_logados = set()
+        self._editado_visto = None
 
     async def _garantir_tabelas(self):
         if self._tabelas_ok:
@@ -1430,6 +1437,7 @@ class RegearCog(commands.Cog):
         """Conclui no Discord o que foi marcado como pago no site, e tira da
         lista os pedidos cujo ticket foi fechado ou apagado."""
         await self._limpar_orfaos()
+        await self._editados_no_site()
         if self.pagos_no_site.current_loop % 30 == 0:     # a cada ~10 min
             await self._tickets_parados()
         if self.pagos_no_site.current_loop % 15 == 0:     # a cada ~5 min
@@ -1450,6 +1458,39 @@ class RegearCog(commands.Cog):
                 await avisar_pago(canal, canal.guild, pedido, (pedido['pago_por'] or 'site') + ' (site)')
             except Exception as e:
                 print(f'[regear] aviso do pedido #{pedido["id"]} pago no site: {e!r}')
+
+    async def _editados_no_site(self):
+        """Pedido editado no site (Gestão → Regear → Editar, 17/11): confere as
+        peças digitadas no catálogo, refaz a lista de compras e o pedido que o
+        player mandou no ticket. O site grava a hora da edição em EDITADO_KEY."""
+        try:
+            marca = await database.run_db(database.get_config, EDITADO_KEY)
+        except Exception as e:
+            print(f'[regear] edição no site: {e!r}')
+            return
+        visto = getattr(self, '_editado_visto', None)
+        primeira = visto is None
+        if marca == visto:
+            return
+        self._editado_visto = marca
+        if primeira:
+            return                      # no boot a lista já é refeita
+        try:
+            await database.run_db(resolver_digitados)
+        except Exception as e:
+            print(f'[regear] peças digitadas (edição no site): {e!r}')
+        for g in self.bot.guilds:
+            await atualizar_lista(g)
+        try:
+            abertos = await database.run_db(pedidos_aprovados)
+        except Exception as e:
+            print(f'[regear] pedidos aprovados (edição no site): {e!r}')
+            return
+        for pid, canal_id in abertos:
+            canal = self.bot.get_channel(int(canal_id)) if str(canal_id).isdigit() else None
+            if canal is not None:
+                await atualizar_carrinho(canal, pid)
+        print(f'[regear] edição no site: lista e {len(abertos)} pedido(s) atualizados')
 
     async def _resolver_digitados(self, forcar=False):
         """Peças digitadas de pedidos aprovados -> itens do catálogo.

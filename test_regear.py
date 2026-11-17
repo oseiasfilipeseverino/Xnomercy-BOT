@@ -519,6 +519,32 @@ async def rodar():
     await R.RegearCog.pagos_no_site.coro(cog)
     checar(not canal.msgs, 'nada pago no site: o laço não manda nada')
 
+    # Editado no site (17/11): confere digitados, refaz a lista e o pedido no ticket.
+    feitos = []
+    orig = (R.atualizar_lista, R.atualizar_carrinho, R.resolver_digitados)
+
+    async def lista_fake(g, logar=False):
+        feitos.append(('lista', g))
+
+    async def carrinho_fake(c, pid):
+        feitos.append(('carrinho', c, pid))
+    R.atualizar_lista, R.atualizar_carrinho = lista_fake, carrinho_fake
+    R.resolver_digitados = lambda: feitos.append(('resolver',)) or (0, [])
+    R.pedidos_aprovados = lambda: [(5, '9')]
+    cog.bot = types.SimpleNamespace(get_channel=lambda cid: canal if cid == 9 else None, guilds=['G'])
+    cog._editado_visto = None
+    estado['get_config'] = '2026-11-17 10:00'
+    await cog._editados_no_site()
+    checar(not feitos, 'edição no site: 1ª leitura (boot) só guarda a marca')
+    await cog._editados_no_site()
+    checar(not feitos, 'edição no site: sem edição nova, não mexe')
+    estado['get_config'] = '2026-11-17 10:05'
+    await cog._editados_no_site()
+    checar(('resolver',) in feitos and ('lista', 'G') in feitos and ('carrinho', canal, 5) in feitos,
+           f'edição no site: confere digitados, refaz a lista e o pedido no ticket ({feitos})')
+    R.atualizar_lista, R.atualizar_carrinho, R.resolver_digitados = orig
+    estado['get_config'] = ''
+
     # Ticket parado: lembra em 24h, fecha em 48h.
     R.pedidos_parados = fake('pedidos_parados')
     R.marcar_lembrete = fake('marcar_lembrete')

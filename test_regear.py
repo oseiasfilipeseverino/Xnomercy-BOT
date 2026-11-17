@@ -91,6 +91,33 @@ checar(desc.splitlines() == ['**5** Elmo de Soldado **6.1**', '**10** Quebra-Rei
        f'lista de compras só com quantidade, item e tier, em ordem de nome ({desc!r})')
 checar('Fulano' not in desc and '50.000' not in desc, 'sem nome de player e sem preço')
 
+desc = R.embed_lista(R.agregar([
+    (json.dumps([{'item_id': 'Q', 'nome': 'Quebra-Reinos', 'tier': '7.0', 'preco': 0, 'qtd': 1}]), 'Fulano'),
+    (json.dumps([{'item_id': '', 'nome': 'Quebra Reinos / Elmo de Cavaleiro, Casaco Inferial',
+                  'tier': '7.0', 'preco': 0, 'qtd': 1}]), '[NM] Ciclano'),
+])).description.splitlines()
+checar(desc[0] == '**1** Quebra-Reinos **7.0**' and desc[1] == '', 'itens do jogo primeiro')
+checar(desc[2:] == ['**📝 Digitados pelo player — conferir no ticket**',
+                    '**1× · 7.0** — [NM] Ciclano',
+                    '　• Quebra Reinos', '　• Elmo de Cavaleiro', '　• Casaco Inferial'],
+       f'build digitada em bloco à parte, uma peça por linha e de quem é ({desc[2:]})')
+
+ag = R.agregar([
+    (json.dumps([{'item_id': 'T6_SHOES_LEATHER_SET2@1', 'nome': 'Sapatos de Espreitador do Mestre',
+                  'tier': '6.1', 'preco': 0, 'qtd': 1}]), 'A'),
+    (json.dumps([{'item_id': 'T5_SHOES_LEATHER_SET2@2', 'nome': 'Sapatos de Espreitador do Perito',
+                  'tier': '5.2', 'preco': 0, 'qtd': 2}]), 'B'),
+    (json.dumps([{'item_id': 'T7_SHOES_LEATHER_SET2@1', 'nome': 'Sapatos de Espreitador do Grão-mestre',
+                  'tier': '7.1', 'preco': 0, 'qtd': 1}]), 'C'),
+])
+desc = R.embed_lista(ag).description.splitlines()
+checar(desc == ['**3** Sapatos de Espreitador **7.0 = 6.1 = 5.2 = 4.3**',
+                '**1** Sapatos de Espreitador **8.0 = 7.1 = 6.2 = 5.3 = 4.4**'],
+       f'equivalentes juntos numa linha, sem "do Perito/Mestre" ({desc})')
+checar(R.sem_tier_no_nome('Par de Galatinas do Adepto') == 'Par de Galatinas'
+       and R.sem_tier_no_nome('Bengala Maligna do Grão-mestre') == 'Bengala Maligna'
+       and R.sem_tier_no_nome('Arco longo') == 'Arco longo', 'tira o tier do nome e não mexe no resto')
+
 bs = [{'category': 'Clap Kite Comp + Golem'}, {'category': 'BRAWL Comp'}, {'category': 'Gank Solo'},
       {'category': 'Ava Raid'}]
 checar([b['category'] for b in R.so_comps_liberadas(bs, '')] == ['Clap Kite Comp + Golem', 'BRAWL Comp'],

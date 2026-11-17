@@ -168,12 +168,30 @@ def calcular_compra(item, precos, nomes):
     return compra
 
 
+_TIER_NO_NOME = re.compile(r'\s+d[oa]s?\s+(Iniciante|Novato|Aprendiz|Adepto|Perito|Mestre|'
+                           r'Grão-[Mm]estre|Ancião)\s*$')
+
+
+def sem_tier_no_nome(nome):
+    """'Sapatos de Espreitador do Perito' -> 'Sapatos de Espreitador'."""
+    return _TIER_NO_NOME.sub('', nome or '').strip() or nome
+
+
 def agregar(linhas):
     """[(compra_json, username)] -> itens somados, o que custa mais primeiro."""
     soma = {}
     for compra_json, quem in linhas:
         for c in json.loads(compra_json or '[]'):
-            chave = c['item_id'] or (c['nome'] + '|' + c['tier'])
+            p = partes(c['item_id']) if c['item_id'] else None
+            if p:
+                # Equivalentes juntos: 6.1 e 5.2 da mesma peça são o mesmo 7.0
+                # (liderança, 16/11). Chave = peça + poder; o nome perde o
+                # "do Mestre/Perito…", que muda com o tier.
+                chave = p[1] + '|' + str(p[0] + p[2])
+                c = dict(c, nome=sem_tier_no_nome(c['nome']),
+                         tier=' = '.join(fmt_tier(t, e) for t, e in equivalentes(p[0], p[2])))
+            else:
+                chave = c['nome'] + '|' + c['tier']
             a = soma.setdefault(chave, dict(c, qtd=0, quem=[]))
             a['qtd'] += c['qtd']
             if quem not in a['quem']:
@@ -519,6 +537,11 @@ async def atualizar_carrinho(channel, pid):
         print(f'[regear] carrinho #{pid} não atualizado: {e!r}')
 
 
+def pecas_digitadas(texto):
+    """'Quebra Reinos / Elmo, Casaco' -> ['Quebra Reinos', 'Elmo', 'Casaco']."""
+    return [p.strip() for p in re.split(r'[/,;\n]+', texto or '') if p.strip()] or [texto]
+
+
 def embed_lista(agregado):
     e = discord.Embed(title='🛒 Regear — para comprar (' + CIDADE + ')', color=cores.OURO)
     if not agregado:
@@ -526,8 +549,21 @@ def embed_lista(agregado):
         return e
     # Só o que comprar: quantidade, item e tier (pedido da liderança, 16/11).
     # Em ordem de nome, que é como se procura no mercado.
+    ordem = lambda a: (a['nome'].lower(), a['tier'])
     linhas = [f'**{a["qtd"]}** {a["nome"]} **{a["tier"]}**'
-              for a in sorted(agregado, key=lambda a: (a['nome'].lower(), a['tier']))]
+              for a in sorted((a for a in agregado if a['item_id']), key=ordem)]
+    # O que o player DIGITOU (build "Outra", trash fora do catálogo) não é item
+    # do jogo: vai num bloco à parte, peça por linha, com de quem é — a staff
+    # confere no ticket (às vezes vem capa, montaria, bolsa, que não entram).
+    digitados = sorted((a for a in agregado if not a['item_id']), key=ordem)
+    if digitados:
+        if linhas:
+            linhas.append('')
+        linhas.append('**📝 Digitados pelo player — conferir no ticket**')
+        for a in digitados:
+            linhas.append(f'**{a["qtd"]}× · {a["tier"]}** — {", ".join(a["quem"])}')
+            for peca in pecas_digitadas(a['nome']):
+                linhas.append('　• ' + peca)
     e.description = cortar('\n'.join(linhas), 4000)
     e.set_footer(text='Atualiza sozinha ao aprovar e ao pagar')
     return e

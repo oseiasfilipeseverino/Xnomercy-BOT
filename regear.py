@@ -79,7 +79,8 @@ def no_tier(item_id, tier, enc):
 
 
 def equivalentes(tier, enc):
-    """Combinações com o mesmo poder: 7.0 -> 7.0, 6.1, 5.2, 4.3."""
+    """Combinações com o mesmo poder (tier + encantamento):
+    7.0 = 6.1 = 5.2 = 4.3 · 8.0 = 7.1 = 6.2 = 5.3 = 4.4 (liderança, 16/11)."""
     poder = tier + enc
     return [(t, poder - t) for t in range(8, 3, -1) if 0 <= poder - t <= 4]
 
@@ -522,15 +523,12 @@ def embed_lista(agregado):
     if not agregado:
         e.description = '_Nada pendente._'
         return e
-    linhas, total = [], 0
-    for a in agregado:
-        preco = ' — ~' + fmt_prata(a['preco']) + ' cada' if a['preco'] else ' — sem preço (ver no mercado)'
-        linhas.append(f'**{a["qtd"]}×** {a["nome"]} **{a["tier"]}**{preco}\n'
-                      f'　↳ {", ".join(a["quem"])}')
-        total += (a['preco'] or 0) * a['qtd']
-    linhas.append('\n**Total estimado:** ~' + fmt_prata(total))
+    # Só o que comprar: quantidade, item e tier (pedido da liderança, 16/11).
+    # Em ordem de nome, que é como se procura no mercado.
+    linhas = [f'**{a["qtd"]}** {a["nome"]} **{a["tier"]}**'
+              for a in sorted(agregado, key=lambda a: (a['nome'].lower(), a['tier']))]
     e.description = cortar('\n'.join(linhas), 4000)
-    e.set_footer(text='Atualiza sozinha ao aprovar e ao pagar · equivalente mais barato')
+    e.set_footer(text='Atualiza sozinha ao aprovar e ao pagar')
     return e
 
 
@@ -548,6 +546,18 @@ async def atualizar_lista(guild):
         await msg.edit(embed=embed_lista(agregado))
     except Exception as e:
         print(f'[regear] lista de compras não atualizada: {e!r}')
+
+
+async def calcular_compras(itens):
+    """{id do item: lista de compra} com o equivalente mais barato de cada peça."""
+    ids = []
+    for it in itens:
+        for p in json.loads(it['itens_json'] or '[]'):
+            if p.get('item_id'):
+                ids += [no_tier(p['item_id'], t, e) for t, e in equivalentes(it['tier'], it['enc'])]
+    precos = await asyncio.to_thread(precos_lymhurst, ids)
+    nomes = await database.run_db(nomes_pt, ids)
+    return {it['id']: calcular_compra(it, precos, nomes) for it in itens}
 
 
 # ── Ganchos chamados pelo tickets.py ──────────────────────────────────────────
@@ -668,14 +678,7 @@ class RegearBotao(discord.ui.DynamicItem[discord.ui.Button],
     # staff ──────────────────────────────────────────────────────────────────
     async def _aprovar(self, deferida, pedido):
         itens = await database.run_db(get_itens, self.pid)
-        ids = []
-        for it in itens:
-            for p in json.loads(it['itens_json'] or '[]'):
-                if p.get('item_id'):
-                    ids += [no_tier(p['item_id'], t, e) for t, e in equivalentes(it['tier'], it['enc'])]
-        precos = await asyncio.to_thread(precos_lymhurst, ids)
-        nomes = await database.run_db(nomes_pt, ids)
-        compras = {it['id']: calcular_compra(it, precos, nomes) for it in itens}
+        compras = await calcular_compras(itens)
         if not await database.run_db(aprovar, self.pid, deferida.user.display_name, compras):
             await deferida.followup.send('ℹ️ Esse pedido já foi decidido por outra pessoa.', ephemeral=True)
             return

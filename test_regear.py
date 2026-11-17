@@ -33,6 +33,9 @@ checar(R.partes('T8_HEAD_PLATE_SET1') == (8, 'HEAD_PLATE_SET1', 0), 'sem @ é en
 checar(R.no_tier('T8_2H_CLAYMORE@3', 6, 1) == 'T6_2H_CLAYMORE@1', 'troca tier e encantamento')
 checar(R.no_tier('T8_2H_CLAYMORE@3', 7, 0) == 'T7_2H_CLAYMORE', '.0 não leva @0')
 checar(R.equivalentes(7, 0) == [(7, 0), (6, 1), (5, 2), (4, 3)], '7.0 = 6.1 = 5.2 = 4.3')
+checar(R.equivalentes(8, 0) == [(8, 0), (7, 1), (6, 2), (5, 3), (4, 4)], '8.0 = 7.1 = 6.2 = 5.3 = 4.4')
+checar(R.equivalentes(8, 1) == [(8, 1), (7, 2), (6, 3), (5, 4)], '8.1 = 7.2 = 6.3 = 5.4')
+checar(R.equivalentes(6, 0) == [(6, 0), (5, 1), (4, 2)], '6.0 = 5.1 = 4.2')
 checar(R.equivalentes(8, 4) == [(8, 4)], '8.4 só tem ele mesmo')
 checar(R.equivalentes(4, 0) == [(4, 0)], '4.0 só tem ele mesmo')
 checar(R.parse_tier('7.1') == (7, 1) and R.parse_tier('t6,2') == (6, 2) and R.parse_tier('8') == (8, 0),
@@ -79,6 +82,14 @@ ag = R.agregar([(json.dumps([{'item_id': 'A', 'nome': 'a', 'tier': '6.1', 'preco
                              {'item_id': 'B', 'nome': 'b', 'tier': '7.0', 'preco': 99, 'qtd': 1}]), 'Ciclano')])
 checar(ag[0]['item_id'] == 'B' and ag[1]['qtd'] == 3 and ag[1]['quem'] == ['Fulano', 'Ciclano'],
        'lista de compras soma itens iguais e guarda quem pediu')
+
+desc = R.embed_lista(R.agregar([
+    (json.dumps([{'item_id': 'Q', 'nome': 'Quebra-Reinos', 'tier': '7.0', 'preco': 50000, 'qtd': 10}]), 'Fulano'),
+    (json.dumps([{'item_id': 'E', 'nome': 'Elmo de Soldado', 'tier': '6.1', 'preco': 0, 'qtd': 5}]), 'Ciclano'),
+])).description
+checar(desc.splitlines() == ['**5** Elmo de Soldado **6.1**', '**10** Quebra-Reinos **7.0**'],
+       f'lista de compras só com quantidade, item e tier, em ordem de nome ({desc!r})')
+checar('Fulano' not in desc and '50.000' not in desc, 'sem nome de player e sem preço')
 
 bs = [{'category': 'Clap Kite Comp + Golem'}, {'category': 'BRAWL Comp'}, {'category': 'Gank Solo'},
       {'category': 'Ava Raid'}]

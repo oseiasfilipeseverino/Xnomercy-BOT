@@ -105,6 +105,12 @@ checar(R.botoes_do_status('montando') == R.DO_PLAYER and R.botoes_do_status('env
        'cada estado mostra só os botões dele')
 
 # ── botões ────────────────────────────────────────────────────────────────────
+import tickets
+for dn, un, esperado in [('[NM] GH0STY22', 'x', 'gh0sty22'), ('[Vice] Plodyzin 🏹', 'y', 'plodyzin'),
+                         ('🔥🔥', 'ketchup_99', 'ketchup_99')]:
+    nome = tickets.nome_do_canal(types.SimpleNamespace(display_name=dn, name=un))
+    checar(nome == esperado, f'canal do ticket usa o apelido do servidor: {dn!r} -> {nome!r}')
+
 print('botões')
 estado = {}
 chamadas = []
@@ -282,6 +288,35 @@ async def rodar():
     checar(sorted(map(int, vistos)) == list(range(1, 35)), f'as 34 builds aparecem ({len(vistos)})')
     checar('ant' in [o.value for o in pag.children[0].options] and '24–34 de 34' in pag.texto(),
            'última página tem "Anteriores" e mostra 24–34 de 34')
+
+    # Classe: depois da composição, escolhe Tank/Healer/DPS/Suporte e só vê as builds dela.
+    bc = [{'id': 1, 'name': 'A', 'category': 'Clap', 'funcao': 'dps'},
+          {'id': 2, 'name': 'B', 'category': 'Clap', 'funcao': 'tank'},
+          {'id': 3, 'name': 'C', 'category': 'Clap', 'funcao': 'dps'},
+          {'id': 4, 'name': 'D', 'category': 'Clap', 'funcao': ''}]
+    checar([c for c, _ in R.classes_presentes(bc)] == ['tank', 'dps', ''],
+           'classes na ordem Tank, Healer, DPS, Suporte e "Outras" pra build sem classe')
+    v = R.EscolherClasse(5, 'Clap', bc)
+    checar([o.label for o in v.children[0].options] == ['🛡️ Tank (1)', '⚔️ DPS (2)', '❔ Outras (1)'],
+           'seletor de classe mostra quantas builds tem cada uma')
+    i = inter(uid=111)
+    i.data = {'values': ['dps']}
+    vistas = {}
+    async def edit_message(content=None, view=None): vistas['v'] = view
+    i.response.edit_message = edit_message
+    await v._escolheu(i)
+    ops = [o.value for o in vistas['v'].children[0].options]
+    checar(ops == ['1', '3'], f'escolher DPS mostra só as builds DPS ({ops})')
+    i.data = {'values': ['-']}
+    await v._escolheu(i)
+    checar([o.value for o in vistas['v'].children[0].options] == ['4'], '"Outras" mostra as sem classe')
+    c = R.EscolherComp(5, bc)
+    i.data = {'values': ['0']}
+    await c._escolheu(i)
+    checar(isinstance(vistas['v'], R.EscolherClasse), 'composição com mais de uma classe pergunta a classe')
+    c = R.EscolherComp(5, [b for b in bc if b['funcao'] == 'dps'])
+    await c._escolheu(i)
+    checar(isinstance(vistas['v'], R.EscolherBuild), 'composição de uma classe só vai direto pras builds')
 
     # Tier de build: só 6.0, 7.0, 8.0 e 8.1.
     v = R.EscolherTier(5, 1)

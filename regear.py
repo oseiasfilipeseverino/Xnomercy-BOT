@@ -388,8 +388,9 @@ def linhas_aprovadas():
 
 
 def get_builds():
-    rows = _q('SELECT id, name, category FROM builds ORDER BY category, name', fetch='all')
-    return [{'id': r[0], 'name': r[1], 'category': r[2] or 'geral'} for r in rows]
+    rows = _q("SELECT id, name, category, COALESCE(funcao, '') FROM builds ORDER BY category, name",
+              fetch='all')
+    return [{'id': r[0], 'name': r[1], 'category': r[2] or 'geral', 'funcao': r[3] or ''} for r in rows]
 
 
 def get_build(build_id):
@@ -735,7 +736,53 @@ class EscolherComp(LoggedView):
             return
         comp = self.comps[int(interaction.data['values'][0])]
         daqui = [b for b in self.builds if b['category'] == comp]
+        if len(classes_presentes(daqui)) > 1:
+            await interaction.response.edit_message(content=f'**{comp}** — qual classe?',
+                                                    view=EscolherClasse(self.pid, comp, daqui))
+            return
         v = EscolherBuild(self.pid, comp, daqui)
+        await interaction.response.edit_message(content=v.texto(), view=v)
+
+
+# Mesma classificação do site (db.FUNCOES); build sem classe vai pra "Outras".
+CLASSES = (('tank', '🛡️ Tank'), ('healer', '💚 Healer'), ('dps', '⚔️ DPS'), ('suporte', '✨ Suporte'))
+SEM_CLASSE = ('', '❔ Outras')
+
+
+def classes_presentes(builds):
+    """[(chave, rótulo)] das classes que têm build, na ordem Tank, Healer, DPS, Suporte."""
+    tem = {b.get('funcao') or '' for b in builds}
+    conhecidas = {c for c, _ in CLASSES}
+    saida = [c for c in CLASSES if c[0] in tem]
+    if tem - conhecidas:
+        saida.append(SEM_CLASSE)
+    return saida
+
+
+class EscolherClasse(LoggedView):
+    def __init__(self, pid, comp, builds):
+        super().__init__(timeout=600)
+        self.pid, self.comp, self.builds = pid, comp, builds
+        conhecidas = {c for c, _ in CLASSES}
+        opts = []
+        for chave, rotulo in classes_presentes(builds):
+            n = sum(1 for b in builds if (b.get('funcao') in conhecidas and b['funcao'] == chave)
+                    or (chave == '' and b.get('funcao') not in conhecidas))
+            opts.append(discord.SelectOption(label=f'{rotulo} ({n})', value=chave or '-'))
+        sel = discord.ui.Select(placeholder='Classe', options=opts)
+        sel.callback = self._escolheu
+        self.add_item(sel)
+
+    async def _escolheu(self, interaction):
+        chave = interaction.data['values'][0]
+        conhecidas = {c for c, _ in CLASSES}
+        if chave == '-':
+            daqui = [b for b in self.builds if b.get('funcao') not in conhecidas]
+            rotulo = SEM_CLASSE[1]
+        else:
+            daqui = [b for b in self.builds if b.get('funcao') == chave]
+            rotulo = dict(CLASSES)[chave]
+        v = EscolherBuild(self.pid, f'{self.comp} · {rotulo}', daqui)
         await interaction.response.edit_message(content=v.texto(), view=v)
 
 

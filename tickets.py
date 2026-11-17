@@ -3,6 +3,8 @@
 tickets.py — Sistema de tickets com painéis separados por categoria
 """
  
+import re
+
 import cores
 import discord
 from discord import app_commands
@@ -64,6 +66,17 @@ async def categoria_com_espaco(guild, categoria, nome_base):
         if len(c.channels) < MAX_POR_CATEGORIA:
             return c
     return None
+
+
+def nome_do_canal(user) -> str:
+    """Apelido do servidor sem a tag de guild: '[NM] Fulano 🏹' -> 'fulano'.
+
+    Antes ia o nome de usuário do Discord ("ketchup_123"), que a staff não
+    reconhece — o apelido é o nick do Albion. Sem apelido aproveitável, volta
+    pro nome de usuário."""
+    apelido = re.sub(r'^\s*\[[^\]]*\]\s*', '', getattr(user, 'display_name', '') or '')
+    limpo = re.sub(r'[^a-z0-9_-]+', '-', apelido.lower()).strip('-')
+    return (limpo or user.name.lower())[:20]
 
 
 class ReopenTicketView(LoggedView):
@@ -348,7 +361,7 @@ class TicketButton(discord.ui.Button):
                     overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
             ch = await guild.create_text_channel(
-                name=f'🎫│{self.ticket_type}-{user.name[:15].lower()}',
+                name=f'🎫│{self.ticket_type}-{nome_do_canal(user)}',
                 overwrites=overwrites,
                 category=category,
                 topic=f'Ticket de {self.ticket_type} | {user.display_name}'

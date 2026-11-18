@@ -28,7 +28,7 @@ ARMAS = {
     'Danacao': ('danacao',),   # Cajado da Danação do Ancião
     'Adagas': ('adagas',),   # Par de Adagas do Ancião
     'Bilaminado': ('bilaminado', 'skip'),   # Cajado Bilaminado do Ancião
-    'PatasDeUrso': ('patas', 'patasdeurso'),   # Patas de Urso do Ancião
+    'PatasDeUrso': ('patas', 'patasdeurso', 'ursinas', 'ursine'),   # Patas de Urso do Ancião
     'Jurador': ('jurador',),   # Jurador do Ancião
     'Galatinas': ('galatinas', 'pardegalatinas'),   # Par de Galatinas do Ancião
     'EspadasDuplas': ('espadas', 'espadasduplas'),   # Espadas Duplas do Ancião
@@ -74,6 +74,12 @@ ARMAS = {
     'Crosta': ('crosta', 'crostaforjada'),   # Cajado de Crosta Forjada do Ancião
     'Dessangrador': ('dessangrador',),   # Dessangrador do Ancião
     'Petrea': ('petra', 'petrea'),   # Maça Pétrea do Ancião
+    # FULL PUSH (17/11/2026)
+    'Monarca': ('monarca', 'dreadstorm'),   # Monarca Tempestuoso do Ancião (T8_MAIN_MACE_CRYSTAL)
+    'Equilibrio': ('equilibrio',),   # Cajado do Equilíbrio do Ancião (T8_2H_ROCKSTAFF_KEEPER)
+    'Natureza': ('natureza',),   # Cajado da Natureza do Ancião (T8_MAIN_NATURESTAFF)
+    'PresaDemoniaca': ('presademoniaca', 'presa', 'demonfang'),   # Presa Demoníaca do Ancião (T8_MAIN_DAGGER_HELL)
+    'Bastiao': ('bastiao', 'carrinho'),   # Bastião Errante (montaria de batalha)
 }
 
 

@@ -50,6 +50,20 @@ for vaga, esperado in (('Árvore', '<:Enraizado:7>'), ('Postulento', '<:Pustulen
                        ('Finalizador/Looter', '<:Dessangrador:13>'), ('MAÇA PESADA', '<:MacaPesada:4>')):
     checar(E.com_emoji(vaga, servidor) == f'{esperado} {vaga}', f'{vaga!r} -> {E.com_emoji(vaga, servidor)}')
 
+print('\n-- FULL PUSH (17/11/2026): toda vaga com emoji')
+todos = {n: f'<:{n}:{i}>' for i, n in enumerate(E.ARMAS, 100)}
+FULL_PUSH = ['MAÇA (CALLER)', 'MARTELO 1H', 'MONARCA', 'CAJADO DO EQUILÍBRIO', 'QUEDA SANTA JUDICANTE',
+             'NATUREZA 1H REAL', 'MONGE NEGRO', 'DANAÇÃO', 'G.A', 'QUEBRA-REINO PLACA', 'URSINAS',
+             'GALATINAS', 'ÁGUIA', 'DESSANGRADOR', 'ARCO LONGO', 'BASTIÃO CARRINHO', 'MAÇA PESADA',
+             'GALATINAS / PRESA DEMONÍACA']
+sem = [v for v in FULL_PUSH if E.com_emoji(v, todos) == v]
+checar(not sem, f'nenhuma vaga sem emoji ({sem})')
+for vaga, arma in (('MONARCA', 'Monarca'), ('CAJADO DO EQUILÍBRIO', 'Equilibrio'), ('NATUREZA 1H REAL', 'Natureza'),
+                   ('BASTIÃO CARRINHO', 'Bastiao'), ('URSINAS', 'PatasDeUrso'), ('MAÇA (CALLER)', 'Maca'), ('MARTELO 1H', 'Martelo')):
+    checar(E.com_emoji(vaga, todos) == todos[arma] + ' ' + vaga, f'{vaga} -> {E.com_emoji(vaga, todos)}')
+checar(E.com_emoji('GALATINAS / PRESA DEMONÍACA', todos) == todos['Galatinas'] + todos['PresaDemoniaca']
+       + ' GALATINAS / PRESA DEMONÍACA', 'vaga com as duas: dois emojis')
+
 print('\n-- o ping de verdade')
 evento = {'id': 1, 'title': 'DG', 'scheduled_time': '2026-10-23T21:00:00',
           'slots': json.dumps([{'name': 'CALLER'}, {'name': 'QUEDA SANTA BEAM'}, {'name': 'MAÇA PESADA'}])}

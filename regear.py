@@ -312,7 +312,9 @@ def resolver_entrada(c, buscar):
 
 # Apelidos da guild -> nome do jogo, e palavras que o player escreve mas não
 # são parte do nome do item ("BUILD ARVORE: ARMA").
-APELIDOS = {'arvore': 'guarda-bosques', 'árvore': 'guarda-bosques',
+# 'árvore' = Cajado Enraizado (confirmado pela liderança em 19/11; antes apontava
+# pro Guarda-bosques e o emoji do ping já usava o Enraizado).
+APELIDOS = {'arvore': 'cajado enraizado', 'árvore': 'cajado enraizado',
             # Erros de digitação vistos nos tickets (17/11).
             'assasino': 'assassino', 'solsado': 'soldado'}
 PALAVRAS_SOLTAS = {'build', 'arma', 'armas', 'com', 'healer', 'tank', 'dps', 'suporte'}

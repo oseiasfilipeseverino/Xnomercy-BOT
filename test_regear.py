@@ -232,7 +232,7 @@ checar(R.variacoes_de_busca('Quebra Reinos') == ['Quebra Reinos', 'Quebra Reino'
        'tenta no singular: "Quebra Reinos" -> "Quebra Reino" (jogo: Quebra-reino)')
 checar(R.variacoes_de_busca('olhos dos segredos')[-1] == 'olho dos segredo',
        'singular nas palavras longas (acha "Olho dos Segredos")')
-checar(R.variacoes_de_busca('BUILD ARVORE: ARMA')[1] == 'guarda-bosques', 'apelido árvore e sem "build"/"arma"')
+checar(R.variacoes_de_busca('BUILD ARVORE: ARMA')[1] == 'cajado enraizado', 'apelido árvore = Cajado Enraizado, sem "build"/"arma"')
 
 bs = [{'category': 'Clap Kite Comp + Golem'}, {'category': 'BRAWL Comp'}, {'category': 'Gank Solo'},
       {'category': 'Ava Raid'}]

@@ -35,7 +35,7 @@ codigo = ("import database\n"
           "database.init_db()\n"          # a segunda vez, como em todo restart
           "c = database.get_connection(); k = c.cursor()\n"
           "k.execute(\"select count(*) from pg_indexes where indexname in "
-          "('idx_sched_thread','idx_slot_event','idx_tx_discord','idx_perm_name','tickets_um_aberto')\")\n"
+          "('idx_sched_thread','idx_slot_event','idx_tx_discord','idx_perm_name','tickets_um_aberto_v2')\")\n"
           "print('indices', k.fetchone()[0])\n"
           "k.execute('select count(*) from players, guild_config where false')\n"
           "database.release(c)\n")

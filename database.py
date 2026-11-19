@@ -203,13 +203,20 @@ def init_db():
         # antes desta correção, o CREATE falha, e ele NÃO pode derrubar o resto do
         # init_db nem impedir o bot de subir. Sem o índice, tickets seguem
         # funcionando — só sem a proteção contra duplo clique.
+        #
+        # Regear fica fora (18/11/2026): quem tem um pedido enviado/aprovado
+        # esperando pagamento precisa abrir outro ticket pra uma morte nova. A
+        # regra do regear mora em reservar_ticket; o duplo clique continua
+        # barrado pelo channel_id UNIQUE do marcador de reserva.
         try:
-            c.execute('''CREATE UNIQUE INDEX IF NOT EXISTS tickets_um_aberto
-                         ON tickets (discord_id, ticket_type) WHERE status='open' ''')
+            c.execute('''CREATE UNIQUE INDEX IF NOT EXISTS tickets_um_aberto_v2
+                         ON tickets (discord_id, ticket_type)
+                         WHERE status='open' AND ticket_type <> 'regear' ''')
+            c.execute('DROP INDEX IF EXISTS tickets_um_aberto')
             conn.commit()
         except Exception as e:
             conn.rollback()
-            print('[DB] indice tickets_um_aberto NAO criado: ' + repr(e))
+            print('[DB] indice tickets_um_aberto_v2 NAO criado: ' + repr(e))
             print('[DB] provavelmente ha tickets abertos duplicados. Consulta pra achar:')
             print("[DB]   SELECT discord_id, ticket_type, COUNT(*) FROM tickets "
                   "WHERE status='open' GROUP BY 1,2 HAVING COUNT(*) > 1;")
@@ -1186,11 +1193,30 @@ def get_open_ticket(discord_id, ticket_type):
     conn = get_connection()
     try:
         c = conn.cursor()
+        if ticket_type == 'regear':
+            # O que bloqueia o regear é o pedido ainda sendo montado, não qualquer aberto.
+            ch = regear_em_montagem(c, discord_id)
+            return {'channel_id': ch} if ch else None
         c.execute("SELECT channel_id FROM tickets WHERE discord_id=%s AND ticket_type=%s AND status='open'", (discord_id, ticket_type))
         row = c.fetchone()
         return {'channel_id': row[0]} if row else None
     finally:
         release(conn)
+
+
+_SQL_REGEAR_MONTANDO = (
+    "SELECT t.channel_id FROM tickets t LEFT JOIN regear_pedidos p ON p.channel_id = t.channel_id "
+    "WHERE t.discord_id = %s AND t.ticket_type = 'regear' AND t.status = 'open' "
+    # Reserva em andamento, ticket sem pedido ainda, ou pedido não enviado.
+    "AND (t.channel_id LIKE 'reservando:%%' OR p.id IS NULL OR p.status IN ('montando', 'recusado')) "
+    "ORDER BY t.id LIMIT 1")
+
+
+def regear_em_montagem(c, discord_id):
+    """channel_id do ticket de regear desta pessoa que ainda não foi enviado, ou None."""
+    c.execute(_SQL_REGEAR_MONTANDO, (str(discord_id),))
+    r = c.fetchone()
+    return r[0] if r else None
 
 
 def reservar_ticket(discord_id, username, ticket_type):
@@ -1208,6 +1234,10 @@ def reservar_ticket(discord_id, username, ticket_type):
     conn = get_connection()
     try:
         c = conn.cursor()
+        if ticket_type == 'regear' and regear_em_montagem(c, discord_id):
+            # Regear: pode ter vários abertos, mas só UM sendo montado. A morte
+            # nova entra no pedido que ainda não foi enviado (aceita várias builds).
+            return None
         # O índice único é criado no init_db, NÃO aqui. Se ele falhar (porque já
         # existem duplicados de antes da correção), tickets continuam funcionando
         # sem a proteção de corrida — degradado, não quebrado. Criar aqui faria

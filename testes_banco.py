@@ -27,7 +27,7 @@ AQUI = pathlib.Path(__file__).parent
 LOCAIS = {'127.0.0.1', 'localhost', '::1', 'postgres'}   # 'postgres': serviço do CI
 # Os feitos para banco real. Os outros usam contas e dados de mentira e estranham
 # um banco de verdade: eles rodam na rodar_testes.sh, sem banco.
-COM_BANCO = ['test_restaurar_real.py', 'test_banco_novo.py', 'test_sql_real.py', 'test_prices_hot.py', 'test_backup.py', 'test_eventos_boot.py', 'test_extrato_fuso.py', 'test_registro_fila_real.py']
+COM_BANCO = ['test_restaurar_real.py', 'test_ticket_regear_real.py', 'test_banco_novo.py', 'test_sql_real.py', 'test_prices_hot.py', 'test_backup.py', 'test_eventos_boot.py', 'test_extrato_fuso.py', 'test_registro_fila_real.py']
 # Tabelas do bot, e as duas do site que o backup do bot também lê.
 INICIO = """
 import database, price_updater

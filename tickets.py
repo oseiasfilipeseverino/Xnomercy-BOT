@@ -333,9 +333,14 @@ class TicketButton(discord.ui.Button):
             if existing and not existing['channel_id'].startswith(database.RESERVA_PREFIXO):
                 ch = guild.get_channel(int(existing['channel_id']))
                 mention = ch.mention if ch else 'canal não encontrado'
-            await interaction.followup.send(
-                f'❌ Você já tem um ticket aberto: {mention}', ephemeral=True
-            )
+            if self.ticket_type == 'regear':
+                # Regear aceita vários tickets abertos; só barra o que ainda não
+                # foi enviado (a morte nova entra nele, que aceita várias builds).
+                texto = (f'❌ Você já tem um pedido de regear sendo montado: {mention}\n'
+                         'Adicione a morte nova nele, ou envie esse pedido e depois abra outro.')
+            else:
+                texto = f'❌ Você já tem um ticket aberto: {mention}'
+            await interaction.followup.send(texto, ephemeral=True)
             return
 
         # Daqui até confirmar_ticket, QUALQUER falha solta a reserva. Antes só a

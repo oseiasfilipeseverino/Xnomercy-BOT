@@ -571,6 +571,73 @@ async def rodar():
 
 
 asyncio.run(rodar())
+
+print('\nconferência da morte na API (19/11)')
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+UTC = _tz.utc
+agora = _dt(2026, 11, 19, 20, 0, tzinfo=UTC)
+criado = _dt(2026, 11, 19, 18, 0)          # o banco devolve sem fuso
+
+
+def morte(eid, quando, arma, killer='Fulano'):
+    return {'EventId': eid, 'TimeStamp': quando, 'Killer': {'Name': killer},
+            'Victim': {'Equipment': {'MainHand': {'Type': arma}}}}
+
+
+checar(R.quando_da_morte({'TimeStamp': '2026-11-19T17:30:12.1234567Z'}) == _dt(2026, 11, 19, 17, 30, 12, tzinfo=UTC),
+       'lê a hora da API (7 casas decimais)')
+checar(R.arma_base('T8_2H_HAMMER@3') == '2H_HAMMER' and R.arma_base('T6_2H_HAMMER') == '2H_HAMMER',
+       'tier e encantamento não importam na arma')
+item = {'id': 1, 'tentativas': 0, 'criado': criado,
+        'itens_json': json.dumps([{'slot': 'main_hand', 'item_id': 'T7_2H_HAMMER', 'nome': 'Martelo'}])}
+mortes = [morte(10, '2026-11-19T17:00:00.0000000Z', 'T6_2H_HAMMER@1'),
+          morte(11, '2026-11-19T17:40:00.0000000Z', 'T8_MAIN_SWORD'),
+          morte(12, '2026-11-10T17:00:00.0000000Z', 'T7_2H_HAMMER')]
+r = R.conferir_um(item, mortes, 'ok', set(), agora)
+checar(r[0] == 'conferido' and r[1]['EventId'] == 10, f'acha a morte com a mesma arma, na janela ({r[0]})')
+r = R.conferir_um(item, mortes, 'ok', {10}, agora)
+checar(r == ('aguardando', R.RETENTAR_NAO_ACHOU, None, 1), f'morte já usada / não achou: tenta de novo em 12 h ({r})')
+r = R.conferir_um(dict(item, tentativas=1), mortes, 'ok', {10}, agora)
+checar(r[0] == 'nao_achou' and r[1] is None and r[2] == R.NAO_ACHOU_API, 'na 2ª vez sem achar: desiste e avisa a staff')
+r = R.conferir_um(item, [], 'api_fora', set(), agora)
+checar(r == ('api_fora', R.RETENTAR_API_FORA, None, 0), f'API fora: tenta de novo em minutos, sem gastar tentativa ({r})')
+r = R.conferir_um(dict(item, itens_json='[{"slot":"livre","item_id":"","nome":"x"}]'), mortes, 'ok', set(), agora)
+checar(r[0] == 'sem_arma', 'build digitada (sem arma cadastrada) fica só pelo print')
+checar(R.trocar_aviso(R.NAO_CONFERIDO + '\nbuild digitada', R.NAO_CONFERIDO, R.CONFERIDO)
+       == R.CONFERIDO + '\nbuild digitada', 'troca o aviso de não conferido e mantém os outros')
+
+
+async def laco():
+    gravado, carrinhos, buscas = [], [], []
+    orig = (R.itens_para_conferir, R.buscar_mortes, R.mortes_usadas, R.marcar_conferido,
+            R.marcar_conferencia, R.atualizar_carrinho)
+    R.itens_para_conferir = lambda n: [dict(item, id=1, pedido_id=7, discord_id='5', channel_id='9'),
+                                       dict(item, id=2, pedido_id=7, discord_id='5', channel_id='9')]
+    R.buscar_mortes = lambda nick: buscas.append(nick) or (mortes, 'ok')
+    R.mortes_usadas = lambda ids: set()
+    R.marcar_conferido = lambda i, eid, info: gravado.append(('ok', i, eid, info)) or (eid not in [g[2] for g in gravado[:-1]])
+    R.marcar_conferencia = lambda i, est, mins, tent, aviso: gravado.append((est, i, mins))
+    async def carrinho(canal, pid): carrinhos.append(pid)
+    R.atualizar_carrinho = carrinho
+    membro = types.SimpleNamespace(nick='[NM] Fulano', display_name='Fulano')
+    canal = object()
+    cog = R.RegearCog.__new__(R.RegearCog)
+    cog.bot = types.SimpleNamespace(guilds=[types.SimpleNamespace(get_member=lambda i: membro)],
+                                    get_channel=lambda i: canal)
+    await R.RegearCog.conferir_mortes.coro(cog)
+    (R.itens_para_conferir, R.buscar_mortes, R.mortes_usadas, R.marcar_conferido,
+     R.marcar_conferencia, R.atualizar_carrinho) = orig
+    return gravado, carrinhos, buscas
+
+
+gravado, carrinhos, buscas = asyncio.run(laco())
+checar(buscas == ['fulano'], f'busca o personagem pelo apelido, uma vez por player ({buscas})')
+checar(gravado[0][:3] == ('ok', 1, 10) and 'morto por Fulano' in gravado[0][3],
+       f'1ª build conferida com a morte certa ({gravado[0]})')
+checar(gravado[1] == ('aguardando', 2, R.RETENTAR_NAO_ACHOU),
+       f'2ª build: a única morte já foi pra 1ª, nem tenta de novo: volta em 12 h ({gravado[1:]})')
+checar(carrinhos == [7], 'atualiza o pedido no ticket')
+
 print()
 if falhas:
     print(f'{len(falhas)} FALHA(S)')

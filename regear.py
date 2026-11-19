@@ -23,6 +23,7 @@ Regras decididas com a liderança em 16/11/2026.
 import asyncio
 import json
 import re
+from datetime import datetime, timedelta, timezone
 
 import discord
 import requests
@@ -532,6 +533,17 @@ def init_tabelas():
                   "AND column_name='lembrete_em'")
         if not c.fetchone():
             c.execute('ALTER TABLE regear_pedidos ADD COLUMN IF NOT EXISTS lembrete_em TIMESTAMP')
+        # Conferência da morte na API depois que o player posta (19/11/2026).
+        c.execute("SELECT 1 FROM information_schema.columns WHERE table_name='regear_itens' "
+                  "AND column_name='conf_estado'")
+        if not c.fetchone():
+            c.execute("ALTER TABLE regear_itens ADD COLUMN IF NOT EXISTS conf_estado TEXT DEFAULT ''")
+            c.execute('ALTER TABLE regear_itens ADD COLUMN IF NOT EXISTS conf_proxima TIMESTAMP')
+            c.execute('ALTER TABLE regear_itens ADD COLUMN IF NOT EXISTS conf_tentativas INTEGER DEFAULT 0')
+            # Builds de pedidos abertos de antes disso também entram na conferência.
+            c.execute("UPDATE regear_itens i SET conf_estado='pendente' FROM regear_pedidos p "
+                      "WHERE p.id = i.pedido_id AND i.tipo = 'build' AND i.morte_id IS NULL "
+                      "AND p.status IN ('montando', 'recusado', 'enviado', 'aprovado')")
         for cargo in ('Líder', 'Vice Líder', 'Regear'):
             c.execute('INSERT INTO permissions (permission, role_name) VALUES (%s, %s) '
                       'ON CONFLICT DO NOTHING', ('regear', cargo))
@@ -639,9 +651,11 @@ def add_item(pid, tipo, titulo, tier, enc, qtd, morte_id, morte_info, avisos, it
             conn.rollback()
             return 'travado'
         c.execute('INSERT INTO regear_itens (pedido_id, tipo, titulo, tier, enc, qtd, morte_id, '
-                  'morte_info, avisos, itens_json) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id',
+                  'morte_info, avisos, itens_json, conf_estado) '
+                  'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id',
                   (pid, tipo, titulo, tier, enc, qtd, morte_id, morte_info,
-                   '\n'.join(avisos), json.dumps(itens, ensure_ascii=False)))
+                   '\n'.join(avisos), json.dumps(itens, ensure_ascii=False),
+                   'pendente' if tipo == 'build' and morte_id is None else ''))
         iid = c.fetchone()[0]
         conn.commit()
         return iid
@@ -1247,10 +1261,159 @@ class EscolherTier(LoggedView):
         await interaction.edit_original_response(content=texto)
 
 
-# Não consulta a API do Albion: ela fica lenta por minutos e o player ficava
-# preso em "Buscando suas mortes…" (16/11/2026). O item entra direto e a staff
-# vê o aviso abaixo — confere pelo print antes de aprovar.
+# Não consulta a API do Albion na hora: ela fica lenta por minutos e o player
+# ficava preso em "Buscando suas mortes…" (16/11/2026). O item entra direto com
+# o aviso abaixo e o bot confere depois, sozinho (ConferirMortes, 19/11): se a
+# API cair, tenta de novo em minutos; se a morte ainda não aparece (a API às
+# vezes atrasa), tenta de novo 12 h depois.
 NAO_CONFERIDO = 'Não conferido pela API — conferir pelo print'
+CONFERIDO = 'Conferido pela API ✅'
+NAO_ACHOU_API = 'Morte não achada na API (tentou de novo após 12 h) — conferir pelo print'
+GAMEINFO = 'https://gameinfo.albiononline.com/api/gameinfo'
+BRT = timezone(timedelta(hours=-3))
+RETENTAR_API_FORA = 10        # minutos
+RETENTAR_NAO_ACHOU = 12 * 60  # minutos
+JANELA_MORTE_DIAS = 4         # a morte tem que ser até 4 dias antes do pedido
+_ID_ITEM = re.compile(r'^T\d+_(.+?)(?:@\d+)?$')
+
+
+def arma_base(item_id):
+    """'T8_2H_HAMMER@3' -> '2H_HAMMER' (tier e encantamento não importam pra conferir)."""
+    m = _ID_ITEM.match(item_id or '')
+    return m.group(1) if m else ''
+
+
+def quando_da_morte(m):
+    """'2026-11-19T01:02:03.1234567Z' -> datetime UTC (a API manda 7 casas, que o Python não lê)."""
+    t = (m or {}).get('TimeStamp') or ''
+    try:
+        return datetime.strptime(t[:19], '%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def escolher_morte(mortes, arma, desde, ate, usadas):
+    """A morte mais recente, livre, dentro da janela e com a mesma arma da build."""
+    if not arma:
+        return None
+    boas = []
+    for m in mortes or []:
+        eid = m.get('EventId')
+        q = quando_da_morte(m)
+        tipo = (((m.get('Victim') or {}).get('Equipment') or {}).get('MainHand') or {}).get('Type') or ''
+        if eid and q and desde <= q <= ate and int(eid) not in usadas and arma_base(tipo) == arma:
+            boas.append((q, m))
+    return max(boas, key=lambda x: x[0])[1] if boas else None
+
+
+def trocar_aviso(avisos, sai, entra):
+    linhas = [a for a in (avisos or '').splitlines() if a and a != sai and a != entra]
+    return '\n'.join([entra] + linhas)
+
+
+def itens_para_conferir(limite=3):
+    rows = _q("SELECT i.id, i.pedido_id, p.discord_id, p.channel_id, i.itens_json, p.created_at, "
+              "i.conf_tentativas FROM regear_itens i JOIN regear_pedidos p ON p.id = i.pedido_id "
+              "WHERE i.tipo = 'build' AND i.morte_id IS NULL "
+              "AND i.conf_estado IN ('pendente', 'api_fora', 'aguardando') "
+              "AND COALESCE(i.conf_proxima, NOW()) <= NOW() "
+              "AND p.status IN ('montando', 'recusado', 'enviado', 'aprovado') "
+              "ORDER BY i.conf_proxima NULLS FIRST, i.id LIMIT %s", (limite,), fetch='all') or []
+    return [dict(zip(('id', 'pedido_id', 'discord_id', 'channel_id', 'itens_json', 'criado', 'tentativas'), r))
+            for r in rows]
+
+
+def marcar_conferencia(item_id, estado, minutos=None, tentativas=None, aviso=None):
+    """Grava o resultado de uma tentativa; aviso troca o NAO_CONFERIDO pelo texto final."""
+    conn = database.get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('SELECT avisos, conf_tentativas FROM regear_itens WHERE id=%s', (item_id,))
+        r = c.fetchone()
+        if not r:
+            return False
+        avisos = trocar_aviso(r[0], NAO_CONFERIDO, aviso) if aviso else r[0]
+        proxima = 'NULL' if minutos is None else "NOW() + make_interval(mins => %s::int)"
+        params = (estado, avisos, r[1] if tentativas is None else tentativas) + \
+            (() if minutos is None else (int(minutos),)) + (item_id,)
+        c.execute("UPDATE regear_itens SET conf_estado=%s, avisos=%s, conf_tentativas=%s, "
+                  "conf_proxima = " + proxima + " WHERE id=%s", params)
+        conn.commit()
+        return True
+    finally:
+        database.release(conn)
+
+
+def marcar_conferido(item_id, morte_id, info):
+    """Liga a morte ao item. False se outra pedido já usou essa morte."""
+    conn = database.get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('SELECT avisos FROM regear_itens WHERE id=%s', (item_id,))
+        r = c.fetchone()
+        if not r:
+            return False
+        c.execute("UPDATE regear_itens SET morte_id=%s, morte_info=%s, avisos=%s, conf_estado='conferido', "
+                  "conf_proxima=NULL WHERE id=%s AND morte_id IS NULL",
+                  (morte_id, info, trocar_aviso(r[0], NAO_CONFERIDO, CONFERIDO), item_id))
+        conn.commit()
+        return c.rowcount > 0
+    except Exception as e:
+        conn.rollback()
+        if database.violacao_de_unicidade(e):
+            return False
+        raise
+    finally:
+        database.release(conn)
+
+
+def mortes_usadas(ids):
+    ids = sorted({int(i) for i in ids if i})
+    if not ids:
+        return set()
+    return {r[0] for r in _q('SELECT morte_id FROM regear_itens WHERE morte_id IN ('
+                             + _lista_ph(len(ids)) + ')', tuple(ids), fetch='all') or []}
+
+
+def buscar_mortes(nick):
+    """(mortes, situação): situação é 'ok', 'api_fora' ou 'sem_jogador'."""
+    from albion_register import _search_player
+    if not nick:
+        return [], 'sem_jogador'
+    jogador = _search_player(nick)
+    if jogador is None:
+        return [], 'api_fora'
+    if jogador is False:
+        return [], 'sem_jogador'
+    mortes = _get_json(GAMEINFO + '/players/' + jogador['Id'] + '/deaths')
+    if mortes is None:
+        return [], 'api_fora'
+    return mortes, 'ok'
+
+
+def conferir_um(item, mortes, situacao, usadas, agora):
+    """Decide o que fazer com um item. Devolve ('conferido', morte) ou (estado, minutos, aviso, tentativas)."""
+    try:
+        pecas = json.loads(item['itens_json'] or '[]')
+    except ValueError:
+        pecas = []
+    arma = next((arma_base(p.get('item_id')) for p in pecas
+                 if p.get('slot') == 'main_hand' and p.get('item_id')), '')
+    if not arma:
+        return ('sem_arma', None, None, item['tentativas'])          # build digitada: só pelo print
+    if situacao == 'api_fora':
+        return ('api_fora', RETENTAR_API_FORA, None, item['tentativas'])
+    if situacao == 'sem_jogador':
+        return ('sem_jogador', None, None, item['tentativas'])
+    criado = item['criado']
+    criado = criado if criado.tzinfo else criado.replace(tzinfo=timezone.utc)
+    morte = escolher_morte(mortes, arma, criado - timedelta(days=JANELA_MORTE_DIAS),
+                           max(agora, criado), usadas)
+    if morte:
+        return ('conferido', morte)
+    if (item['tentativas'] or 0) < 1:
+        return ('aguardando', RETENTAR_NAO_ACHOU, None, 1)            # a API às vezes atrasa: 12 h
+    return ('nao_achou', None, NAO_ACHOU_API, (item['tentativas'] or 0) + 1)
 
 
 async def adicionar_build(deferida, pid, tier, enc, build_id=None, livre=None):
@@ -1430,9 +1593,70 @@ class RegearCog(commands.Cog):
         except Exception as e:
             print(f'[regear] conferência de slots falhou: {e!r}')
         self.pagos_no_site.start()
+        self.conferir_mortes.start()
 
     async def cog_unload(self):
         self.pagos_no_site.cancel()
+        self.conferir_mortes.cancel()
+
+    def _nick_albion(self, discord_id):
+        from albion_register import _nome_albion_do_apelido
+        for g in self.bot.guilds:
+            m = g.get_member(int(discord_id)) if str(discord_id).isdigit() else None
+            if m:
+                return _nome_albion_do_apelido(m.nick or m.display_name)
+        return ''
+
+    @tasks.loop(minutes=2)
+    async def conferir_mortes(self):
+        """Confere na API do Albion a morte de cada build postada (19/11/2026).
+
+        Laço separado do pagos_no_site: a API pode levar minutos e não pode
+        atrasar o "pago no site". API fora -> tenta de novo em 10 min; morte
+        ainda não aparece -> tenta de novo em 12 h; depois disso fica o aviso
+        pra staff conferir pelo print."""
+        try:
+            itens = await database.run_db(itens_para_conferir, 3)
+        except Exception as e:
+            print(f'[regear] conferência de mortes: {e!r}')
+            return
+        cache, mexidos, usadas_agora = {}, set(), set()
+        for item in itens:
+            nick = self._nick_albion(item['discord_id'])
+            if nick not in cache:
+                cache[nick] = await asyncio.to_thread(buscar_mortes, nick)
+            mortes, situacao = cache[nick]
+            usadas = await database.run_db(mortes_usadas, [m.get('EventId') for m in mortes])
+            r = conferir_um(item, mortes, situacao, usadas | usadas_agora, datetime.now(timezone.utc))
+            try:
+                if r[0] == 'conferido':
+                    m = r[1]
+                    q = quando_da_morte(m)
+                    killer = (m.get('Killer') or {}).get('Name') or '?'
+                    info = f"morte {q.astimezone(BRT).strftime('%d/%m %H:%M')} · morto por {killer}"
+                    if await database.run_db(marcar_conferido, item['id'], int(m['EventId']), info):
+                        usadas_agora.add(int(m['EventId']))
+                    else:
+                        # Outra build já usou essa morte: conta como não achada.
+                        await database.run_db(marcar_conferencia, item['id'], 'aguardando',
+                                              RETENTAR_NAO_ACHOU, None, 1)
+                        r = ('aguardando',)
+                else:
+                    estado, minutos, aviso, tent = r
+                    await database.run_db(marcar_conferencia, item['id'], estado, minutos, tent, aviso)
+                print(f"[regear] conferência item {item['id']} ({nick or 'sem nick'}): {r[0]}")
+                if r[0] in ('conferido', 'nao_achou'):
+                    mexidos.add((item['channel_id'], item['pedido_id']))
+            except Exception as e:
+                print(f"[regear] conferência item {item['id']}: {e!r}")
+        for canal_id, pid in mexidos:
+            canal = self.bot.get_channel(int(canal_id)) if str(canal_id).isdigit() else None
+            if canal is not None:
+                await atualizar_carrinho(canal, pid)
+
+    @conferir_mortes.before_loop
+    async def _esperar_bot_conferir(self):
+        await self.bot.wait_until_ready()
 
     @tasks.loop(seconds=20)
     async def pagos_no_site(self):

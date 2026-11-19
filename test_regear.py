@@ -603,6 +603,16 @@ r = R.conferir_um(item, [], 'api_fora', set(), agora)
 checar(r == ('api_fora', R.RETENTAR_API_FORA, None, 0), f'API fora: tenta de novo em minutos, sem gastar tentativa ({r})')
 r = R.conferir_um(dict(item, itens_json='[{"slot":"livre","item_id":"","nome":"x"}]'), mortes, 'ok', set(), agora)
 checar(r[0] == 'sem_arma', 'build digitada (sem arma cadastrada) fica só pelo print')
+CAT = {'quebra reino': 'T8_2H_AXE_AVALON', 'elmo de cavaleiro': 'T8_HEAD_PLATE_SET2',
+       'casaco inferial': 'T8_ARMOR_LEATHER_HELL', 'martelo': 'T8_MAIN_HAMMER'}
+buscar = lambda t: CAT.get(t.lower())
+checar(R.arma_digitada('elmo de cavaleiro 7.0 / Quebra Reino 7.0, casaco inferial', buscar) == '2H_AXE_AVALON',
+       'digitada: acha a arma no meio das peças (não pega o elmo)')
+checar(R.arma_digitada('elmo de cavaleiro / casaco inferial', buscar) == '', 'digitada sem arma: nenhuma')
+dig = dict(item, itens_json=json.dumps([{'slot': 'livre', 'item_id': '', 'nome': 'Martelo / Elmo'}]))
+checar(R.texto_digitado(dig) == 'Martelo / Elmo' and R.texto_digitado(item) == '', 'separa build digitada da do site')
+r = R.conferir_um(dig, mortes, 'ok', set(), agora, arma='2H_HAMMER')
+checar(r[0] == 'conferido' and r[1]['EventId'] == 10, 'digitada confere pela arma escrita, igual à do site')
 checar(R.trocar_aviso(R.NAO_CONFERIDO + '\nbuild digitada', R.NAO_CONFERIDO, R.CONFERIDO)
        == R.CONFERIDO + '\nbuild digitada', 'troca o aviso de não conferido e mantém os outros')
 

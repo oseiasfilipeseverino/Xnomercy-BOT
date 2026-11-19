@@ -544,6 +544,10 @@ def init_tabelas():
             c.execute("UPDATE regear_itens i SET conf_estado='pendente' FROM regear_pedidos p "
                       "WHERE p.id = i.pedido_id AND i.tipo = 'build' AND i.morte_id IS NULL "
                       "AND p.status IN ('montando', 'recusado', 'enviado', 'aprovado')")
+        # Digitadas que ficaram sem conferir antes de 19/11 à noite (só a build do
+        # site era conferida): agora a arma digitada também vale.
+        c.execute("UPDATE regear_itens SET conf_estado='pendente' WHERE conf_estado='sem_arma' "
+                  "AND itens_json LIKE %s", ('%"livre"%',))
         for cargo in ('Líder', 'Vice Líder', 'Regear'):
             c.execute('INSERT INTO permissions (permission, role_name) VALUES (%s, %s) '
                       'ON CONFLICT DO NOTHING', ('regear', cargo))
@@ -1391,16 +1395,44 @@ def buscar_mortes(nick):
     return mortes, 'ok'
 
 
-def conferir_um(item, mortes, situacao, usadas, agora):
-    """Decide o que fazer com um item. Devolve ('conferido', morte) ou (estado, minutos, aviso, tentativas)."""
+_TIPO_ARMA = ('MAIN_', '2H_')
+
+
+def texto_digitado(item):
+    """Texto da build digitada pelo player, ou '' se a build é do site."""
     try:
         pecas = json.loads(item['itens_json'] or '[]')
     except ValueError:
-        pecas = []
-    arma = next((arma_base(p.get('item_id')) for p in pecas
-                 if p.get('slot') == 'main_hand' and p.get('item_id')), '')
+        return ''
+    return ' / '.join(p.get('nome') or '' for p in pecas if p.get('slot') == 'livre')
+
+
+def arma_digitada(texto, buscar=None):
+    """Arma no meio do que o player escreveu ('quebra reino / elmo de cavaleiro') -> base, ou ''."""
+    buscar = buscar or _buscar_no_catalogo
+    for bruto in pecas_digitadas(texto):
+        peca, _, _ = peca_e_tier(bruto, 7, 0)
+        uid = buscar(peca) if len(peca) >= 3 else None
+        base = arma_base(uid)
+        if base.startswith(_TIPO_ARMA):
+            return base
+    return ''
+
+
+def conferir_um(item, mortes, situacao, usadas, agora, arma=None):
+    """Decide o que fazer com um item. Devolve ('conferido', morte) ou (estado, minutos, aviso, tentativas).
+
+    Confere só pela arma (19/11): da build do site, ou a que o player digitou
+    (quem chama passa `arma` já procurada no catálogo)."""
+    if arma is None:
+        try:
+            pecas = json.loads(item['itens_json'] or '[]')
+        except ValueError:
+            pecas = []
+        arma = next((arma_base(p.get('item_id')) for p in pecas
+                     if p.get('slot') == 'main_hand' and p.get('item_id')), '')
     if not arma:
-        return ('sem_arma', None, None, item['tentativas'])          # build digitada: só pelo print
+        return ('sem_arma', None, None, item['tentativas'])          # nenhuma arma pra comparar: só pelo print
     if situacao == 'api_fora':
         return ('api_fora', RETENTAR_API_FORA, None, item['tentativas'])
     if situacao == 'sem_jogador':
@@ -1627,7 +1659,12 @@ class RegearCog(commands.Cog):
                 cache[nick] = await asyncio.to_thread(buscar_mortes, nick)
             mortes, situacao = cache[nick]
             usadas = await database.run_db(mortes_usadas, [m.get('EventId') for m in mortes])
-            r = conferir_um(item, mortes, situacao, usadas | usadas_agora, datetime.now(timezone.utc))
+            # Build digitada: acha a arma no texto (catálogo); build do site: a arma dela.
+            texto = texto_digitado(item)
+            arma = await database.run_db(arma_digitada, texto) if texto else None
+            r = conferir_um(item, mortes, situacao, usadas | usadas_agora, datetime.now(timezone.utc), arma)
+            if texto and r[0] == 'sem_arma':
+                r = ('sem_arma_dig',) + r[1:]   # final: o boot não põe de volta na fila
             try:
                 if r[0] == 'conferido':
                     m = r[1]

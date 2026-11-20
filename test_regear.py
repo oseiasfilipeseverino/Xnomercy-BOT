@@ -490,10 +490,10 @@ async def rodar():
     await c._escolheu(i)
     checar(isinstance(vistas['v'], R.EscolherBuild), 'composição de uma classe só vai direto pras builds')
 
-    # Tier de build: só 6.0, 7.0, 8.0 e 8.1.
+    # Tier de build: 6.0, 7.0, 8.0, 8.1 e o "8.0 + upgrade" (20/11).
     v = R.EscolherTier(5, 1)
-    checar([o.value for o in v.children[0].options] == ['6.0', '7.0', '8.0', '8.1'],
-           'build só oferece os tiers 6.0, 7.0, 8.0 e 8.1')
+    checar([o.value for o in v.children[0].options] == ['6.0', '7.0', '8.0', '8.1', R.UPGRADE],
+           'build oferece 6.0, 7.0, 8.0, 8.1 e 8.0 + upgrade')
     i = inter(uid=111)
     m = R.BuildLivreModal(5)
     m.build._value, m.tier._value = 'Martelo', '7.1'
@@ -571,6 +571,62 @@ async def rodar():
 
 
 asyncio.run(rodar())
+
+print('\n8.0 + upgrade (20/11)')
+base = R.itens_da_build(json.dumps({
+    'main_hand': {'item_id': 'T8_MAIN_HAMMER', 'name': 'Martelo'},
+    'off_hand': {'item_id': 'T8_OFF_JESTERCANE_HELL', 'name': 'Bengala'},
+    'armor': {'item_id': 'T8_ARMOR_PLATE_SET3', 'name': 'Guardião'}}), 8, 0)
+tank, rot = R.aplicar_upgrade(base, 'tank')
+ids = {i['slot']: i['item_id'] for i in tank}
+checar(ids == {'main_hand': 'T8_MAIN_HAMMER', 'off_hand': 'T8_OFF_JESTERCANE_HELL', 'armor': 'T8_ARMOR_PLATE_SET3@1'}
+       and rot == 'armadura 8.1', f'tank: só a armadura vai pra 8.1 ({ids})')
+checar(R.aplicar_upgrade(base, 'suporte')[1] == 'armadura 8.1', 'suporte: armadura 8.1')
+dps, rot = R.aplicar_upgrade(base, 'dps')
+checar({i['slot']: i['item_id'] for i in dps}['main_hand'] == 'T8_MAIN_HAMMER@1' and rot == 'arma 8.1',
+       'dps: só a arma vai pra 8.1')
+checar(R.aplicar_upgrade(base, 'healer')[1] == 'arma 8.1' and R.aplicar_upgrade(base, '')[1] == 'arma 8.1',
+       'healer e sem classe: arma 8.1')
+checar(base[2]['item_id'] == 'T8_ARMOR_PLATE_SET3', 'não mexe na lista original')
+precos_up = {'T8_ARMOR_PLATE_SET3@1': 500, 'T7_ARMOR_PLATE_SET3@2': 300, 'T8_ARMOR_PLATE_SET3': 100,
+             'T8_MAIN_HAMMER': 50, 'T7_MAIN_HAMMER@1': 40}
+compra = R.calcular_compra({'tier': 8, 'enc': 0, 'qtd': 1, 'itens_json': json.dumps(tank)}, precos_up, {})
+por = {c['item_id'][:8] + ('peito' if 'ARMOR' in c['item_id'] else 'arma' if 'HAMMER' in c['item_id'] else 'off'): c
+       for c in compra}
+arm = next(c for c in compra if 'ARMOR' in c['item_id'])
+arma = next(c for c in compra if 'HAMMER' in c['item_id'])
+checar(arm['item_id'] == 'T7_ARMOR_PLATE_SET3@2' and arm['tier'] == '7.2',
+       f"compra: a armadura 8.1 usa os equivalentes de 8.1 (7.2), não os de 8.0 ({arm['item_id']})")
+checar(arma['item_id'] == 'T7_MAIN_HAMMER@1', f"compra: a arma 8.0 continua nos equivalentes de 8.0 ({arma['item_id']})")
+
+
+async def menu_upgrade():
+    chamadas_up = []
+    orig = R.adicionar_build
+
+    async def falso(inter, pid, tier, enc, build_id=None, livre=None, upgrade=False):
+        chamadas_up.append((tier, enc, upgrade))
+        return 'ok'
+    R.adicionar_build = falso
+    v = R.EscolherTier(1, 2)
+    sel = v.children[0]
+
+    class Resp:
+        async def defer(self, **k): pass
+
+    class Inter:
+        data = {'values': [R.UPGRADE]}
+        response = Resp()
+        async def edit_original_response(self, **k): pass
+    await v._escolheu(Inter())
+    R.adicionar_build = orig
+    return sel, chamadas_up
+
+
+sel, chamadas_up = asyncio.run(menu_upgrade())
+checar([o.value for o in sel.options][-1] == R.UPGRADE and '8.0 + upgrade' in sel.options[-1].label,
+       'opção "8.0 + upgrade" no menu de tier')
+checar(chamadas_up == [(8, 0, True)], f'escolher "8.0 + upgrade" monta a build 8.0 com upgrade ({chamadas_up})')
 
 print('\nconferência da morte na API (19/11)')
 from datetime import datetime as _dt, timedelta as _td, timezone as _tz

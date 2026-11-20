@@ -55,6 +55,9 @@ COMPS_KEY = 'regear_composicoes'
 
 # Tiers de build com regear (liderança, 16/11/2026). Trash continua livre.
 TIERS_BUILD = ((6, 0), (7, 0), (8, 0), (8, 1))
+# 8.0 com uma peça em 8.1 (20/11/2026): tank e suporte sobem a armadura, o resto
+# (dps, healer, sem classe) sobe a arma.
+UPGRADE = '8.0+'
 TIERS_BUILD_TXT = '6.0, 7.0, 8.0 ou 8.1'
 COMPS_PADRAO = ('clap', 'brawl')
 
@@ -411,7 +414,9 @@ def calcular_compra(item, precos, nomes):
             compra.append({'item_id': '', 'nome': it['nome'], 'tier': fmt_tier(item['tier'], item['enc']),
                            'preco': 0, 'qtd': qtd})
             continue
-        achou = mais_barato(it['item_id'], item['tier'], item['enc'], precos)
+        # Tier da própria peça (no "8.0 + upgrade" uma delas é 8.1).
+        pt = partes(it['item_id'])
+        achou = mais_barato(it['item_id'], pt[0] if pt else item['tier'], pt[2] if pt else item['enc'], precos)
         iid, preco = achou if achou else (it['item_id'], 0)
         t, _, e = partes(iid)
         compra.append({'item_id': iid, 'nome': nomes.get(iid) or it['nome'],
@@ -751,8 +756,20 @@ def get_builds():
 
 
 def get_build(build_id):
-    r = _q('SELECT id, name, items_json FROM builds WHERE id=%s', (build_id,), fetch='one')
-    return {'id': r[0], 'name': r[1], 'items_json': r[2]} if r else None
+    r = _q("SELECT id, name, items_json, COALESCE(funcao, '') FROM builds WHERE id=%s", (build_id,), fetch='one')
+    return {'id': r[0], 'name': r[1], 'items_json': r[2], 'funcao': r[3]} if r else None
+
+
+def aplicar_upgrade(itens, funcao):
+    """Build 8.0 -> a peça da classe vai pra 8.1. Devolve (itens, rótulo) ou (itens, '') se não tem a peça."""
+    slot, rotulo = ('armor', 'armadura 8.1') if funcao in ('tank', 'suporte') else ('main_hand', 'arma 8.1')
+    saida, mudou = [], False
+    for i in itens:
+        if i.get('slot') == slot and i.get('item_id'):
+            i = dict(i, item_id=no_tier(i['item_id'], 8, 1))
+            mudou = True
+        saida.append(i)
+    return saida, (rotulo if mudou else '')
 
 
 def nomes_pt(ids):
@@ -1253,15 +1270,19 @@ class EscolherTier(LoggedView):
         super().__init__(timeout=600)
         self.pid, self.build_id = pid, build_id
         opts = [discord.SelectOption(label=fmt_tier(t, e), value=fmt_tier(t, e)) for t, e in TIERS_BUILD]
+        opts.append(discord.SelectOption(label='8.0 + upgrade', value=UPGRADE,
+                                         description='Tank/suporte: armadura 8.1 · DPS/healer: arma 8.1'))
         sel = discord.ui.Select(placeholder='Tier da build', options=opts)
         sel.callback = self._escolheu
         self.add_item(sel)
 
     async def _escolheu(self, interaction):
-        tier, enc = (int(x) for x in interaction.data['values'][0].split('.'))
+        valor = interaction.data['values'][0]
+        upgrade = valor == UPGRADE
+        tier, enc = (8, 0) if upgrade else (int(x) for x in valor.split('.'))
         await interaction.response.defer()
         await interaction.edit_original_response(content='⏳ Adicionando…', view=None)
-        texto = await adicionar_build(interaction, self.pid, tier, enc, build_id=self.build_id)
+        texto = await adicionar_build(interaction, self.pid, tier, enc, build_id=self.build_id, upgrade=upgrade)
         await interaction.edit_original_response(content=texto)
 
 
@@ -1448,7 +1469,7 @@ def conferir_um(item, mortes, situacao, usadas, agora, arma=None):
     return ('nao_achou', None, NAO_ACHOU_API, (item['tentativas'] or 0) + 1)
 
 
-async def adicionar_build(deferida, pid, tier, enc, build_id=None, livre=None):
+async def adicionar_build(deferida, pid, tier, enc, build_id=None, livre=None, upgrade=False):
     """Põe a build no pedido (quem chama já deferiu). Devolve o texto pra mostrar a quem pediu."""
     avisos = [NAO_CONFERIDO]
     if livre:
@@ -1464,6 +1485,10 @@ async def adicionar_build(deferida, pid, tier, enc, build_id=None, livre=None):
         itens = itens_da_build(build['items_json'], tier, enc)
         if not itens:
             return '❌ Essa build não tem arma, off-hand, elmo, peito nem bota cadastrados no site.'
+        if upgrade:
+            itens, extra = aplicar_upgrade(itens, build.get('funcao', ''))
+            if extra:
+                nome += ' (' + extra + ')'
         nomes = await database.run_db(nomes_pt, [i['item_id'] for i in itens])
         for i in itens:
             i['nome'] = nomes.get(i['item_id']) or i['nome']
